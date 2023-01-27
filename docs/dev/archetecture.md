@@ -26,3 +26,11 @@ file, and managing edit buffers.
 This implements data types and functions that store and manipulate text.
 Also included are undo/redo stacks and file I/O.
 
+
+## Design
+
+These sections provide more detailed design decisions and questions.
+
+### edit_buffer
+
+### lned
