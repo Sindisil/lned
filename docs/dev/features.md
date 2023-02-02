@@ -45,12 +45,30 @@ Two special shortcuts for common ranges exist:
 
 ## Commands
 
-* <line>a      Append after specified line
-  - '.' alone as first character on a line terminates input
-* <line>d      Delete specified line range
-* <line>n      Print specified line range prefixed with their line numbers
-* q!           quits lned unconditionally, discarding unwritten changes
-* w            W buffer to current file path
-  - Show error if no current file path, or if error occurs writing file.
-* f _file_     set current file path
-  - If the file path isn't specified, the current file path is printed
+Commands are listed with the default address or address range
+(in parentheses) used if none is given. Possible arguements are shown
+as applicable.
+
+* (.)a            Appends text entered in input mode after the specified
+                  line, setting current address to the last line entered.
+* (.,.)d          Delete specified line range
+* (.,.)n          Print specified line range prefixed with their line
+                  numbers
+* q               quits lned
+* q!              quits lned unconditionally, discarding unwritten
+                  changes
+* (1,$)w _file_   Write the specified lines to __file__, overwriting
+                  previous contents without warning. If there is no
+                  default filename, it is set to __file_, otherwise it
+                  is unchanged. If __file__ is not given, the default
+                  filename is used.
+                  The current address is not changed.
+* f _file_        Set default filename to _file_. If no _file_ is given,
+                  prints the default filename.
+
+## Input Mode
+
+When an input command like *a* (append) is given, lned enters input mode.
+When in input mode, commands are not availabile -- standard input is
+instead collected until input mode is terminated by a single period ('.')
+on a line. Lines are terminated by CR or CRLF.

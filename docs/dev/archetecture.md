@@ -46,19 +46,19 @@ to try a simple String for the text buffer. That may end up being
 based editor, at least until and unless I want to be able to handle
 very long text files.
 
-Note that, were I building this only for the end product
+If that ends up being a bad choice (because of ease of development,
+performance, or some other reason), I'll choose another way to manage
+the text buffer (e.g., Vec of lines, gap buffer, piece table, or some
+combination).
+
+If I was building this only for the end product
 (as opposed to a combination of utility and an excuse to exercise 
-the rust programming language), I would likely use a pre-built crate
+the rust programming language), I might use a pre-built crate
 for this, such as ropey. That isn't to say that I won't be using
 various crates for elements that are either way too complex to take
 on given my goals (e.g., file watching: notify, string slice indexing:
 str_indicies, small vector optimaization:smallvec).
 
-I may also need a line cache (i.e., an index of line start offsets
-in the buffer) - searching for line starts as needed will probably
-be too slow. OTOH, that raises the issue of keeping the line index
-up to date as inserts and deletes are done, as well as when
-undo/redo occurs.
 #### File modification detection
 
 Initially plan to not do active file watching, only indicating when
