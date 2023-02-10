@@ -2,6 +2,12 @@ pub struct EditBuffer {
     text: String,
 }
 
+impl Default for EditBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EditBuffer {
     /// Creates a new empty `EditBuffer`.
     ///
