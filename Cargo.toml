@@ -1,5 +1,6 @@
 [package]
 name = "lned"
+description = "A line oriented text editor"
 version = "0.1.0"
 edition = "2021"
 

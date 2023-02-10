@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-const APP_NAME: &str = "lned";
+const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const APP_DESCRIPTION: &str = "Line oriented text editor";
+const APP_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 const APP_HELP: &str = "
 Usage: lned [OPTIONS] [file ...]
 
@@ -53,7 +53,11 @@ fn parse_args() -> Result<CmdArgs, lexopt::Error> {
     while let Some(arg) = parser.next()? {
         match arg {
             Short('h') | Long("help") => {
-                println!("{APP_NAME} - {APP_DESCRIPTION}");
+                if APP_DESCRIPTION.trim().is_empty() {
+                    println!("{APP_NAME}");
+                } else {
+                    println!("{APP_NAME} - {APP_DESCRIPTION}");
+                }
                 println!("Version {APP_VERSION}");
                 print!("{APP_HELP}");
                 std::process::exit(0);
