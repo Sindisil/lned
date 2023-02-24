@@ -1,7 +1,4 @@
-use once_cell::unsync::Lazy as LazyCell;
 use std::io::{self, prelude::*};
-
-use regex::Regex;
 
 // Read lines of text input until a line with a single . is entered
 // Clears previous content of buffer, but doesn't shrink capacity.
@@ -11,13 +8,12 @@ fn read_lines<R>(mut reader: R, buf: &mut Vec<String>) -> Result<usize, io::Erro
 where
     R: BufRead,
 {
-    let just_a_dot = LazyCell::new(|| Regex::new(r"^\.\r?\n$").unwrap());
     let mut line = String::new(); // single line input buffer
     buf.clear(); // get rid of any old input
 
     loop {
         reader.read_line(&mut line)?;
-        if just_a_dot.is_match(&line) {
+        if line == ".\n" || line == ".\r\n" {
             return Ok(buf.len());
         }
         buf.push(line);

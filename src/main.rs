@@ -1,4 +1,5 @@
 mod cli;
+mod main_loop;
 
 fn main() {
     let args = match cli::parse_args() {
