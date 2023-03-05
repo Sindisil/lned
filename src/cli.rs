@@ -1,3 +1,8 @@
+use lexopt::prelude::*;
+use std::ffi::OsString;
+use std::fmt;
+use std::io::Write;
+use std::iter::IntoIterator;
 use std::path::PathBuf;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
@@ -22,6 +27,14 @@ The first edit buffer will initially be the active buffer.
 ";
 
 #[derive(Debug)]
+pub enum Error {
+    ParsingFilename(lexopt::Error), // Error parsing filename from cmd line
+    WroteMessage,                   // Wrote message to ouput and should exit with no error
+    NextArg(lexopt::Error),         // Error reading next argument
+    UnexpectedArg(lexopt::Error),   // Unexpected cmd line argument
+}
+
+#[derive(Debug)]
 pub struct CmdArgs {
     /// Indicates if diagnostic messages should be suppressed
     quiet: bool,
@@ -41,39 +54,46 @@ pub struct CmdArgs {
     files: Vec<PathBuf>,
 }
 
-pub(crate) fn parse_args() -> Result<CmdArgs, lexopt::Error> {
-    use lexopt::prelude::*;
-
+pub(crate) fn parse_args<W, I>(mut output: W, args: I) -> Result<CmdArgs, Error>
+where
+    W: Write,
+    I: IntoIterator,
+    I::Item: Into<OsString>,
+{
     let mut quiet = false;
     let mut no_prompt = false;
     let mut files = Vec::new();
     let mut line_numbers: bool = false;
 
-    let mut parser = lexopt::Parser::from_iter(wild::args_os());
-    while let Some(arg) = parser.next()? {
+    let mut parser = lexopt::Parser::from_iter(args);
+    while let Some(arg) = parser.next().map_err(Error::NextArg)? {
         match arg {
             Short('h') | Long("help") => {
-                if APP_DESCRIPTION.trim().is_empty() {
-                    println!("{APP_NAME}");
-                } else {
-                    println!("{APP_NAME} - {APP_DESCRIPTION}");
-                }
-                println!("Version {APP_VERSION}");
-                print!("{APP_HELP}");
-                std::process::exit(0);
+                writeln!(&mut output, "{APP_NAME} - {APP_DESCRIPTION}")
+                    .expect("Writing to stdout shouldn't fail");
+                writeln!(&mut output, "Version {APP_VERSION}")
+                    .expect("writing to stdout shouldn't fail");
+                write!(&mut output, "{APP_HELP}").expect("writing to stdout shouldn't fail");
+                return Err(Error::WroteMessage);
             }
             Short('p') | Long("no-prompt") => no_prompt = true,
             Short('s') | Long("silent") | Long("quiet") => quiet = true,
             Short('n') | Long("line-numbers") => line_numbers = true,
             Short('V') | Long("version") => {
-                println!("{APP_NAME} version {APP_VERSION}");
-                std::process::exit(0);
+                writeln!(&mut output, "{APP_NAME} version {APP_VERSION}")
+                    .expect("writing to stdout shouldn't fail");
+                return Err(Error::WroteMessage);
             }
             Value(val) => {
                 files.push(PathBuf::from(val));
-                files.extend(parser.raw_args()?.map(PathBuf::from));
+                files.extend(
+                    parser
+                        .raw_args()
+                        .map_err(Error::ParsingFilename)?
+                        .map(PathBuf::from),
+                );
             }
-            _ => return Err(arg.unexpected()),
+            _ => return Err(Error::UnexpectedArg(arg.unexpected())),
         }
     }
     Ok(CmdArgs {
@@ -82,4 +102,41 @@ pub(crate) fn parse_args() -> Result<CmdArgs, lexopt::Error> {
         line_numbers,
         files,
     })
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::WroteMessage => write!(f, "message output, no error"),
+            Error::ParsingFilename(_) => write!(f, "error parsing filame from command line"),
+            Error::NextArg(_) => write!(f, "Error parsing next command line argument"),
+            Error::UnexpectedArg(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_options_output_help_message() {
+        let expected = format!("{APP_NAME} - {APP_DESCRIPTION}\nVersion {APP_VERSION}\n{APP_HELP}");
+        let mut output = Vec::new();
+        let args = &["test", "-h"];
+        let res = parse_args(&mut output, args);
+        assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
+        output.clear();
+        let args = &["test", "--help"];
+        let res = parse_args(&mut output, args);
+        assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
+    }
+
+    // test -V & --version print appropriate version string
+
+    // test that unexpected options give appropriate error
+
+    // test that options are parsed as expected
 }
