@@ -30,9 +30,9 @@ _n_      The _n_th line in the buffer, in the range [0,$]
 0        Before the first line.
 
 An address range is a closed range, represented by two line
-addresses separated by a comma. The value of the first address must not
-exceed the value  of the second. If only one address is given
-where a range is expected, it is treated as if the specified
+addresses separated by a comma or semicolon. The value of the first
+address must not exceed the value  of the second. If only one address
+is given where a range is expected, it is treated as if the specified
 line was given as both the beginning and end of the range.
 If a line range is given where a command expects a single line
 address, the last line specified by the range is used.
@@ -49,14 +49,27 @@ Commands are listed with the default address or address range
 (in parentheses) used if none is given. Possible arguements are shown
 as applicable.
 
+There are two main types of commands understood by lned: edit commands,
+which may be undone, and immediate commands, which may not. Immediate
+commands which will have destructive side effects will not take effect
+the first time they are given, and instead warning text explaining the
+potential data loss will be written to stdout. Issuing the same
+immediate command a second time with no other commands intervening will
+actually execute the command. This will also be documented for each
+such command.
+
+### Edit Commands
 * (.)a            Appends text entered in input mode after the specified
                   line, setting current address to the last line entered.
 * (.,.)d          Delete specified line range
 * (.,.)n          Print specified line range prefixed with their line
                   numbers
-* q               quits lned
-* q!              quits lned unconditionally, discarding unwritten
-                  changes
+
+### Immediate Commands
+* q               Quits lned. If there are unwritten changes, a warning
+                  to that effect will be written to stdout. Repeating
+                  the command will exit unconditionally, discarding
+                  unwritten changes.
 * (1,$)w _file_   Write the specified lines to __file__, overwriting
                   previous contents without warning. If there is no
                   default filename, it is set to __file_, otherwise it
@@ -68,7 +81,11 @@ as applicable.
 
 ## Input Mode
 
-When an input command like *a* (append) is given, lned enters input mode.
-When in input mode, commands are not availabile -- standard input is
-instead collected until input mode is terminated by a single period ('.')
-on a line. Lines are terminated by CR or CRLF.
+When edit commands that take user input (such as *a*) are given,
+lned enters Input Mode. When in Input Mode, commands are not
+available -- standard input is instead collected until input mode is
+terminated by a single period alone on a line. Lines of input are
+terminated by CR or CRLF.
+
+The interrupt signal (usually CTRL-c) will also exit Input Mode, but
+will discard the input text.

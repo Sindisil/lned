@@ -22,6 +22,10 @@ Editing is done modally, with two modes: _command_ and _input_. When first
 run, lned is in command mode. In command mode, commands are read from
 standard input and executed to modify the current edit buffer.
 
+There are two major types of commands: editing commands, which may be
+undone, and immediate commands, which may not.
+
+
 When an input command is given (e.g., a(ppend) or i(nsert)), lned enters
 input mode. In this mode, standard input is written into the active edit
 buffer. Lines consist of text up to and including a line terminator, which
