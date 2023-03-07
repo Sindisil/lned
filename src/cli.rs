@@ -14,8 +14,6 @@ Usage: lned [OPTIONS] [file ...]
 Options:
   -h, --help               print this help text and exit
   -V, --version            print version information and exit
-  -s, --quiet, --silent    suppress diagnostic messages
-  -p, --no-prompt          suppress display of prompts
 
 Arugments:
   [file ...]  optional list of files to read into buffers
@@ -37,10 +35,7 @@ pub enum Error {
 #[derive(Debug)]
 pub struct CmdArgs {
     /// Indicates if diagnostic messages should be suppressed
-    quiet: bool,
 
-    /// Indicates if prompts should be suppressed
-    no_prompt: bool,
 
     /// Indicates that default print operation should be n, rather than
     /// p (i.e., print line numbers by default). Explicit use of n or p
@@ -60,8 +55,6 @@ where
     I: IntoIterator,
     I::Item: Into<OsString>,
 {
-    let mut quiet = false;
-    let mut no_prompt = false;
     let mut files = Vec::new();
     let mut line_numbers: bool = false;
 
@@ -76,8 +69,6 @@ where
                 write!(&mut output, "{APP_HELP}").expect("writing to stdout shouldn't fail");
                 return Err(Error::WroteMessage);
             }
-            Short('p') | Long("no-prompt") => no_prompt = true,
-            Short('s') | Long("silent") | Long("quiet") => quiet = true,
             Short('n') | Long("line-numbers") => line_numbers = true,
             Short('V') | Long("version") => {
                 writeln!(&mut output, "{APP_NAME} version {APP_VERSION}")
@@ -97,8 +88,6 @@ where
         }
     }
     Ok(CmdArgs {
-        quiet,
-        no_prompt,
         line_numbers,
         files,
     })
