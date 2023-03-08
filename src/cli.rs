@@ -135,7 +135,12 @@ mod tests {
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
     }
 
-    // test that unexpected options give appropriate error
-
-    // test that options are parsed as expected
+    #[test]
+    fn unexpected_option_gives_error() {
+        //let expected = Error::UnexpectedArg(arg.unexpected());
+        let mut output = Vec::new();
+        let args = &["test", "--unexpected-arg"];
+        let res = parse_args(&mut output, args);
+        assert!(matches!(res, Err(Error::UnexpectedArg(_))));
+    }
 }
