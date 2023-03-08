@@ -36,7 +36,6 @@ pub enum Error {
 pub struct CmdArgs {
     /// Indicates if diagnostic messages should be suppressed
 
-
     /// Indicates that default print operation should be n, rather than
     /// p (i.e., print line numbers by default). Explicit use of n or p
     /// commands work normally -- this affects other display commands,
@@ -123,7 +122,18 @@ mod tests {
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
     }
 
-    // test -V & --version print appropriate version string
+    #[test]
+    fn version_options_output_version_message() {
+        let expected = format!("{APP_NAME} version {APP_VERSION}\n");
+        let mut output = Vec::new();
+        let args = &["test", "-V"];
+        let res = parse_args(&mut output, args);
+        assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
+        output.clear();
+        let args = &["test", "--version"];
+        let res = parse_args(&mut output, args);
+        assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
+    }
 
     // test that unexpected options give appropriate error
 
