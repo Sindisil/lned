@@ -1,4 +1,45 @@
+use crate::cli;
+use std::fmt;
 use std::io::{self, prelude::*};
+
+#[derive(Debug)]
+pub enum Error {
+    GeneralError(String),
+    CommandInput,
+}
+
+impl std::error::Error for Error {}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::CommandInput => write!(f, "Error reading command"),
+            Error::GeneralError(s) => write!(f, "General error: {s}"),
+        }
+    }
+}
+
+pub(crate) fn run<R, W>(mut input: R, mut output: W, args: &cli::CmdArgs) -> Result<(), Error>
+where
+    R: BufRead,
+    W: Write,
+{
+    loop {
+        let cmd = read_command(":", &mut input, &mut output)?;
+        return Err(Error::GeneralError("Nothing implemented yet".to_string()));
+    }
+    Err(Error::GeneralError("Nothing implemented yet".to_string()))
+}
+
+fn read_command<R, W>(prompt: &str, mut input: R, mut output: W) -> Result<String, Error>
+where
+    R: BufRead,
+    W: Write,
+{
+    Err(Error::GeneralError(
+        "read_command not implemented yet".to_string(),
+    ))
+}
 
 // Read lines of text input until a line with a single . is entered
 // Clears previous content of buffer, but doesn't shrink capacity.
