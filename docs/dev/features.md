@@ -89,3 +89,44 @@ terminated by CR or CRLF.
 
 The interrupt signal (usually CTRL-c) will also exit Input Mode, but
 will discard the input text.
+
+# Planned features & commands
+
+There are several features and commands planned for lned that will
+differ from the basic __ed__ functionality which serves as the
+inspiration for lned.
+
+* Auto-indent in input mode
+* Multi-buffer support
+  - __b__ command to list & navigate buffers
+    - b alone lists current buffer name (also probaby shown in prompt?)
+    - b <regex> switches to buffer specifed by regex, if it's unique,
+        otherwise lists buffers matching the regex.
+    - b __n__ switches to buffer #n
+    - b __name__ switches to buffer matching __name__, or shows error
+  - __B__ <compiler> works similarly to __e__ !command, but opens in
+    error buffer and contents is parsed as error/warning messages from
+    the configured compiler error parser associated with the specified
+    compiler name. Initially support only "cargo" as comiler.
+* Error buffer
+  A special read-only buffer that supports display of compiler output,
+  parsing of the errors & warnings, and navigation to the location of
+  those errors and warnings.
+
+  - E<n> Navigate to the file and line indicated in the error on line <n>
+    of the error buffer. If the error indicates other line locations
+    (eg. the context information shown by cargo/rustc), specifiying
+    a line containing that context will instead navigate to that file &
+    line (if that is feasible). If there is already a buffer associated
+    with that file, lned will switch to that buffer and change the buffer's
+    current line to the error line. If that buffer is dirty, the command will
+    instead show a warning. Repeating the command will re-read the file
+    and set the current line to the error line. If the buffer & file have
+    changed, the line address may no longer be valid. If there is no
+    buffer associated with the file containing the specified error, a new
+    buffer will be created, the file read into the buffer, and the buffer's
+    current line set to the error line.
+  - E+ (or just E) will navigate to the next error in the error buffer, as
+    described above.
+  - E- will navigate to the previous error in the error buffer, as described
+    above.
