@@ -33,10 +33,19 @@ struct EditBuffer {
 args = parse_command_line()
 initialize_buffers(&buffers, &args.files)
 current_buffer = &buffers[0]
+cmd_input: String
 Loop {
-  Show_Prompt(current_buffer)
-  Accept_Command
-  Parse_Command
+  show_prompt(stdout.lock(), current_buffer)
+  accept_command(stdin.lock(), &cmd_input)
+  cmd = parse_command(&cmd_input)?
+  match &cmd {
+    Cmd::Quit => {
+      // clean up and exit
+    },
+    _ => {
+      // unsupported command
+    }
+  }
   Execute_Command
 }
 
@@ -47,4 +56,17 @@ initialize_buffers(buffers, files) {
   if buffers.is_empty() {
     buffers.add(create_buffer(None))
   }
+}
+
+show_prompt(writer, bufferuffer) {
+  // will eventually test for changed buffer
+  write(writer, ':')
+}
+
+accept_command(reader, cmd_input) {
+  cmd_input.clear()
+  read_str(reader, &cmd_input)
+}
+parse_command(cmd_input) -> Result<Cmd> {
+  // parse the comman string
 }
