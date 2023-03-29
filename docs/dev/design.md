@@ -17,6 +17,38 @@ should be the overarching design focus for lned.
 This document is intended to flesh out the design of lned using pseudocode,
 as well as provide a space to hash out design alternatives.
 
+## Design thoughts
+
+Easiest option would be to clone ed and add some functionality to make it more
+productive (e.g., better join command, auto indent in input mode, some sort of
+wrap and/or justify, multiple buffers, useful prompt).
+
+Another option would be to try to make a non-modal line editor. The idea being
+that just typing would append text, and other commands would be accessed similarly
+to non-modal screen editors. Would therefor need to take input in raw mode or
+use a crate to do something similar so that hotkeys can be accepted.
+
+Common commands would have their own hotkeys, less common commands might need to
+be accessed at a command promp (sometimes called a command pallette). Examples
+might be:
+
+ctrl+HOME = navigate to 0th line to allow input before first line.
+ctrl+END = navigate to last line and display it
+PgUp = equivalant of .-<WinSz>zn in ed (i.e., "scroll" WinSz lines, starting
+       back WinSz lines, leaving current_line as last line displayed
+ctrl+g = prompt for line number, set current_line to the specified line, display
+         it if it's not line 0.
+ctrl+shift+p = prompt for command
+Delete = delete current line
+DownArrow = if current_line isn't already last line, increment current_line and
+            display it.
+
+Upside: no modal input
+Downside: need raw mode, not amenable to scripting, possibly less discoverable
+          if modal editor has decent help & error messages (somewhat offset by
+          using CUA & other common key bindings, maybe).
+
+
 ## Data Types
 
 struct CmdArgs {
