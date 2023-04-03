@@ -74,23 +74,29 @@ enum Cmd {
 
 ## Design
 
-args = parse_command_line()
-initialize_buffers(&buffers, &args.files)
-current_buffer = &buffers[0]
-cmd_input: String
-Loop {
-  show_prompt(stdout.lock(), current_buffer)
-  accept_command(stdin.lock(), &cmd_input)
-  cmd = parse_command(&cmd_input)?
-  match &cmd {
-    Cmd::Quit => {
-      // clean up and exit
-    },
-    _ => {
-      // unsupported command
+main() {
+  args = parse_command_line()
+  main_loop(&args)
+}
+
+main_loop(args) {
+  initialize_buffers(&buffers, &args.files)
+  current_buffer = &buffers[0]
+  cmd_input: String
+  Loop {
+    show_prompt(stdout.lock(), current_buffer)
+    accept_command(stdin.lock(), &cmd_input)
+    cmd = parse_command(&cmd_input)?
+    match &cmd {
+      Cmd::Quit => {
+        // clean up and exit
+      },
+      _ => {
+        // unsupported command
+      }
     }
+    Execute_Command
   }
-  Execute_Command
 }
 
 initialize_buffers(buffers, files) {
