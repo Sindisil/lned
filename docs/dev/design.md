@@ -48,6 +48,11 @@ Downside: need raw mode, not amenable to scripting, possibly less discoverable
           if modal editor has decent help & error messages (somewhat offset by
           using CUA & other common key bindings, maybe).
 
+**Decision: continue with modal 'ed' clone with extensions, for two reasons:
+  1. Will continue to be useful for scripted editing once scrned is completed
+  2. Simpler to implement. Since lned is inteded as an experiment, not necessarily
+     a long term tool, that is the overriding consideration.
+
 
 ## Data Types
 
@@ -107,5 +112,5 @@ accept_command(reader, cmd_input) {
 }
 
 parse_command(cmd_input) -> Result<Cmd> {
-  // parse the comman string
+  // parse the command string
 }
