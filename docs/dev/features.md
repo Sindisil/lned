@@ -147,6 +147,25 @@ inspiration for lned.
     error buffer and contents is parsed as error/warning messages from
     the configured compiler error parser associated with the specified
     compiler name. Initially support only "cargo" as comiler.
+* Improved j (join) command.
+  - Adds optional arguments to the command to provide better control
+    of the results.
+  - (.,+1)j[<separator>]
+    Joins the specified lines using the given separator string, eliding
+    leading whitespace for each line beyond the first. If no separator string
+    is given, a single space (" ") is used by default.
+  - (.,+1)j"<separator>"
+    Joins the specified lines using the given separator string. Lines
+    to be joined are used unchanged.
+
+* Wrap command.
+
+# Possible future additions
+
+There are features and commands which might be nice additions, but
+of which I'm not yet certain. They may or may not make sense within
+this projecet's goals.
+
 * Error buffer
   A special read-only buffer that supports display of compiler output,
   parsing of the errors & warnings, and navigation to the location of
