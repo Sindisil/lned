@@ -34,18 +34,16 @@ pub enum Error {
 
 #[derive(Debug)]
 pub struct CmdArgs {
-    /// Indicates if diagnostic messages should be suppressed
-
     /// Indicates that default print operation should be n, rather than
     /// p (i.e., print line numbers by default). Explicit use of n or p
     /// commands work normally -- this affects other display commands,
     /// such as z, as well as cases where display occurs as a part of
     /// another operation (such as a bare line address, or the p suffix
     /// to the s command.
-    line_numbers: bool,
+    pub line_numbers: bool,
 
     /// Specifies the names of files to read
-    files: Vec<PathBuf>,
+    pub files: Vec<PathBuf>,
 }
 
 pub(crate) fn parse_args<W, I>(mut output: W, args: I) -> Result<CmdArgs, Error>
