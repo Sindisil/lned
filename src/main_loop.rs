@@ -126,8 +126,8 @@ mod tests {
     #[test]
     fn initialize_buffers_no_files_gives_single_empty_buffer() {
         let args = cli::CmdArgs {
-            line_numbers: true,
             files: Vec::new(),
+            ..cli::CmdArgs::default()
         };
         let buffers = initialize_buffers(&args).unwrap();
         assert_eq!(1, buffers.len());
