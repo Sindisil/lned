@@ -1,5 +1,4 @@
 use std::fmt;
-use std::io::{self, prelude::*};
 use std::path::Path;
 
 pub struct EditBuffer {
@@ -74,6 +73,11 @@ impl EditBuffer {
     pub fn capacity(&self) -> usize {
         self.text.capacity()
     }
+
+    /// Returns this `EditBuffer`'s length, in lines.
+    pub fn len(&self) -> usize {
+        self.text.len()
+    }
 }
 
 #[cfg(test)]
@@ -91,5 +95,13 @@ mod tests {
         const INIT_CAPACITY: usize = 1024;
         let buffer = EditBuffer::with_capacity(INIT_CAPACITY);
         assert_eq!(buffer.capacity(), INIT_CAPACITY);
+    }
+
+    #[test]
+    fn empty_buffer_returns_zero_len() {
+        let buffer = EditBuffer::new();
+        assert_eq!(0, buffer.len());
+        let buffer = EditBuffer::with_capacity(1024);
+        assert_eq!(0, buffer.len());
     }
 }
