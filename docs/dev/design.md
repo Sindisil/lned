@@ -95,7 +95,6 @@ main_loop(args) {
         // unsupported command
       }
     }
-    Execute_Command
   }
 }
 
