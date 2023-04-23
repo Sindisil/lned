@@ -1,4 +1,5 @@
 use std::fmt;
+use std::str;
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
@@ -6,23 +7,25 @@ pub enum Cmd {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Error {
+pub enum ParseError {
     Unknown(String),
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for ParseError {}
 
-impl fmt::Display for Error {
+impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::Unknown(s) => write!(f, "Unknown command '{s}'"),
+            ParseError::Unknown(s) => write!(f, "Unknown command '{s}'"),
         }
     }
 }
 
-impl Cmd {
-    pub fn parse(input: &str) -> Result<Cmd, Error> {
-        Err(Error::Unknown(input.to_string()))
+impl str::FromStr for Cmd {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Err(ParseError::Unknown(s.to_string()))
     }
 }
 
@@ -33,7 +36,7 @@ mod tests {
     #[test]
     fn parse_unknown_command_gives_error() {
         let input = "o";
-        let res = Cmd::parse(&input);
-        assert_eq!(res, Err(Error::Unknown(input.to_string())));
+        let res = input.parse::<Cmd>();
+        assert_eq!(res, Err(ParseError::Unknown(input.to_string())));
     }
 }
