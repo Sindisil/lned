@@ -24,13 +24,13 @@ impl fmt::Display for Error {
             Error::ReadCommand(e) => write!(f, "Error reading command: {e}"),
             Error::WritePrompt(e) => write!(f, "Error writing prompt: {e}"),
             Error::ReadLines(e) => write!(f, "Error reading input lines: {e}"),
-            Error::ParseCmd(e) => write!(f, "Error parseing command input: {e}"),
+            Error::ParseCmd(e) => write!(f, "Error parsing command input: {e}"),
             Error::Other(s) => write!(f, "Error: {s}"),
         }
     }
 }
 
-pub(crate) fn run<R, W>(mut input: R, output: W, args: &cli::CmdArgs) -> Result<(), Error>
+pub(crate) fn run<R, W>(mut input: R, mut output: W, args: &cli::CmdArgs) -> Result<(), Error>
 where
     R: BufRead,
     W: Write,
@@ -45,21 +45,27 @@ where
     // Accept and process commands until fatal error or exit
     loop {
         // write prompt
-        write_prompt(output)?;
+        write_prompt(&mut output)?;
 
         // read command
         cmd_buf.clear();
         read_command(&mut input, &mut cmd_buf)?;
 
         // parse command
-        let _cmd = cmd_buf.parse::<Cmd>().map_err(Error::ParseCmd)?;
+        let cmd = cmd_buf.parse::<Cmd>().map_err(Error::ParseCmd);
 
         // execute command
-        return Err(Error::Other("Nothing implemented yet".to_string()));
+        match cmd {
+            Err(e) => {
+                eprintln!("{e}");
+                continue;
+            }
+            Ok(Cmd::Quit) => return Ok(()),
+        }
     }
 }
 
-fn write_prompt<W>(mut output: W) -> Result<(), Error>
+fn write_prompt<W>(output: &mut W) -> Result<(), Error>
 where
     W: Write,
 {
@@ -140,8 +146,8 @@ mod tests {
 
     #[test]
     fn write_prompt_io_error_gives_correct_error() {
-        let output = BadWriter {};
-        let _res = write_prompt(output);
+        let mut output = BadWriter {};
+        let _res = write_prompt(&mut output);
         assert!(matches!(Err::<Error, _>(Error::WritePrompt), _res));
     }
 
