@@ -36,11 +36,12 @@ where
     W: Write,
 {
     // Initialize Buffers
-    let _buffers = initialize_buffers(args)?;
+    let buffers = initialize_buffers(args)?;
 
     // Initialize context (e.g., current buffer)
     let mut _current_buffer = 0;
     let mut cmd_buf = String::new();
+    let mut prev_command: Option<Cmd> = None;
 
     // Accept and process commands until fatal error or exit
     loop {
@@ -60,9 +61,25 @@ where
                 eprintln!("{e}");
                 continue;
             }
-            Ok(Cmd::Quit) => return Ok(()),
+            Ok(Cmd::Quit) => {
+                if ok_to_exit(&mut prev_command, &buffers) {
+                    return Ok(());
+                }
+            }
         }
     }
+}
+
+fn ok_to_exit(prev_command: &mut Option<Cmd>, buffers: &Vec<EditBuffer>) -> bool {
+    let ok = match prev_command {
+        Some(Cmd::Quit) => true,
+        _ => !buffers.iter().any(|buf| buf.needs_write()),
+    };
+    if !ok {
+        eprintln!("Unwritten changes - a second quit will exit w/o saving.");
+        *prev_command = Some(Cmd::Quit);
+    }
+    ok
 }
 
 fn write_prompt<W>(output: &mut W) -> Result<(), Error>
@@ -229,5 +246,24 @@ mod tests {
         let buffers = initialize_buffers(&args).unwrap();
         assert_eq!(1, buffers.len());
         assert_eq!(0, buffers[0].len());
+    }
+
+    ////
+    // ok_to_exit() tests
+
+    #[test]
+    fn ok_to_exit_if_prev_cmd_was_quit() {
+        let mut prev_cmd = Some(Cmd::Quit);
+        let buffers = vec![EditBuffer::new()];
+        let safe = ok_to_exit(&mut prev_cmd, &buffers);
+        assert!(safe);
+    }
+
+    #[test]
+    fn ok_to_exit_if_buffer_unchanged() {
+        let mut prev_cmd = None;
+        let buffers = vec![EditBuffer::new()];
+        let safe = ok_to_exit(&mut prev_cmd, &buffers);
+        assert!(safe);
     }
 }

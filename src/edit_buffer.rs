@@ -1,5 +1,6 @@
 pub struct EditBuffer {
     text: String,
+    needs_write: bool,
 }
 
 impl Default for EditBuffer {
@@ -22,6 +23,7 @@ impl EditBuffer {
     pub fn new() -> EditBuffer {
         EditBuffer {
             text: String::new(),
+            needs_write: false,
         }
     }
 
@@ -42,6 +44,7 @@ impl EditBuffer {
     pub fn with_capacity(capacity: usize) -> EditBuffer {
         EditBuffer {
             text: String::with_capacity(capacity),
+            ..EditBuffer::default()
         }
     }
 
@@ -53,6 +56,11 @@ impl EditBuffer {
     /// Returns this `EditBuffer`'s length, in lines.
     pub fn len(&self) -> usize {
         self.text.len()
+    }
+
+    /// Returns true if buffer has been changed since last write.
+    pub fn needs_write(&self) -> bool {
+        self.needs_write
     }
 }
 
