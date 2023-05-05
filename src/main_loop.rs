@@ -99,9 +99,16 @@ where
 }
 
 fn initialize_buffers(args: &cli::CmdArgs) -> Result<Vec<EditBuffer>, Error> {
-    let mut buffers = Vec::with_capacity(args.files.len());
+    let mut buffers = Vec::new();
 
-    if !buffers.is_empty() {
+    // TODO
+    // loop through file names
+    // for each name, try to create an EditBuffer from that file
+    //   on sucess, push to buffer list
+    //   on error, print error message
+    // if buffer list is empty, push new empty buffer onto buffer list
+
+    if !args.files.is_empty() {
         return Err(Error::Other(
             "Reading files not yet implemented".to_string(),
         ));
@@ -109,7 +116,9 @@ fn initialize_buffers(args: &cli::CmdArgs) -> Result<Vec<EditBuffer>, Error> {
 
     // No files passed in, or none read successfully, so
     // we must allocate an empty buffer to use instead
-    buffers.push(EditBuffer::new());
+    if buffers.is_empty() {
+        buffers.push(EditBuffer::new());
+    }
 
     Ok(buffers)
 }

@@ -61,9 +61,9 @@ struct CmdArgs {
 }
 
 struct EditBuffer {
-  text: TextBuffer;
-  filename: Option(PathBuf);
-  current_line: isize;
+  lines: Vec<String>;
+  filename: Option<PathBuf>;
+  current_line: usize;
 }
 
 enum Cmd {
