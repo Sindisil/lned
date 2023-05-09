@@ -150,14 +150,19 @@ mod tests {
     ////
     // read() tests
 
+    fn new_input_buf(content: &Vec<&str>) -> Vec<u8> {
+        let mut input = Vec::new();
+        for line in content {
+            input.extend(line.bytes());
+        }
+        input
+    }
+
     #[test]
     fn read_to_empty_buffer() {
         let mut buffer = EditBuffer::new();
         let content = vec!["Line1\n", "Line2\n", "Line3\n", "Line4\n"];
-        let mut input = Vec::new();
-        for line in &content {
-            input.extend(line.bytes());
-        }
+        let input = new_input_buf(&content);
         let last_line_read = buffer
             .read(buffer.len(), &input[..])
             .expect("Error reading content");
@@ -170,10 +175,7 @@ mod tests {
     fn read_to_empty_buffer_no_trailing_eol() {
         let mut buffer = EditBuffer::new();
         let content = vec!["Line1\n", "Line2\n", "Line3\n", "Line4"];
-        let mut input = Vec::new();
-        for line in &content {
-            input.extend(line.bytes());
-        }
+        let input = new_input_buf(&content);
         let last_line_read = buffer
             .read(buffer.len(), &input[..])
             .expect("Error reading content");
@@ -196,15 +198,9 @@ mod tests {
     fn read_with_bad_index() {
         let mut buffer = EditBuffer::new();
         let content = vec!["Line1]n"];
-        let mut input = Vec::new();
-        for line in &content {
-            input.extend(line.bytes());
-        }
+        let input = new_input_buf(&content);
         let _res = buffer.read(999, &input[..]);
-        assert!(matches!(
-            Err::<Error, _>(Error::ReadBadIndex),
-            _res
-        ));
+        assert!(matches!(Err::<Error, _>(Error::ReadBadIndex), _res));
     }
 
     #[test]
