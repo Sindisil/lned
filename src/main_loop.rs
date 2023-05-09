@@ -55,13 +55,15 @@ where
         // parse command
         let cmd = cmd_buf.parse::<Cmd>().map_err(Error::ParseCmd);
 
+        // handle possible parse error
+        if let Err(e) = cmd {
+            eprintln!("{e}");
+            continue;
+        }
+
         // execute command
-        match cmd {
-            Err(e) => {
-                eprintln!("{e}");
-                continue;
-            }
-            Ok(Cmd::Quit) => {
+        match cmd.unwrap() {
+            Cmd::Quit => {
                 if ok_to_exit(&mut prev_command, &buffers) {
                     return Ok(());
                 }
