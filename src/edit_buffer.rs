@@ -160,27 +160,30 @@ impl EditBuffer {
     }
 }
 
+// TODO - decide if this can return &str or &'static str
 fn find_default_eol(lines: &[String]) -> String {
-    let mut eols = vec![("\r\n", 0), ("\n", 0)];
+    let native_eol = if std::env::consts::FAMILY == "windows" {
+        "\r\n".to_string()
+    } else {
+        "\n".to_string()
+    };
+    let mut crlf = 0;
+    let mut lf = 0;
 
     for line in lines {
-        for eol in &mut eols {
-            if line.ends_with(eol.0) {
-                eol.1 += 1;
-                break;
-            }
+        if line.ends_with("\r\n") {
+            crlf += 1;
+        } else if line.ends_with("\n") {
+            lf += 1;
         }
     }
 
-    eols.sort_by(|(_, a), (_, b)| b.cmp(a));
-    if eols[0].1 > 0 {
-        eols[0].0.to_string()
+    if crlf > lf {
+        "\r\n".to_string()
+    } else if lf > crlf {
+        "\n".to_string()
     } else {
-        if std::env::consts::FAMILY == "windows" {
-            "\r\n".to_string()
-        } else {
-            "\n".to_string()
-        }
+        native_eol
     }
 }
 
