@@ -229,6 +229,33 @@ mod tests {
         input
     }
 
+    enum EolDistribution {
+        AllCrLf,
+        MostCrLf,
+        EqualBoth,
+        MostLf,
+        AllLf,
+    }
+
+    enum LastLineEol {
+        Present,
+        Missing,
+    }
+
+    fn build_line_sample(
+        buf: &mut Vec<&str>,
+        template: &str,
+        eol_dist: EolDisribution,
+        last_eol: LastLineEol,
+    ) {
+// figure out how many lines with EOLs we'll need
+// clear buffer and reserve enough room for all lines, including
+//    any unterminated last line
+// fill lines with all/most EOL type, or LF if both.
+// fill lines with other EOL type, if any
+// add unterminated line, if any
+    }
+
     #[test]
     fn read_to_empty_buffer() {
         let mut buffer = EditBuffer::new();
@@ -252,6 +279,34 @@ mod tests {
             .expect("Error reading content");
         assert_eq!(content, buffer.text);
         assert_eq!(3, last_line_read);
+        assert_eq!(Some("\n"), buffer.default_eol);
+    }
+
+    #[test]
+    fn read_append() {
+        let mut buffer = EditBuffer::new();
+
+        // iterate all combinations of:
+        // buff: all crlf, all lf, more crlf, more lf, no trailing EOL
+        // new: all crlf, all lf, more crlf, more lf
+        let more_crlf_with_final = vec!["Line 1\r\n", "Line 2\r\n", "Line 3\n", "Line 4\r\n"];
+        let input = new_input_buf(&initial_content[..]);
+        let _last_read = buffer
+            .read(0, &input[..])
+            .expect("Error reading initial_content");
+
+        let new_content = vec!["New1\n", "New2\n", "New3\n"];
+        let input = new_input_buf(&new_content[..]);
+        let index = buffer.len();
+        let last_read = buffer
+            .read(index, &input[..])
+            .expect("Error reading new_content");
+
+        let final_content = vec![
+            "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
+        ];
+        assert_eq!(final_content, buffer.text);
+        assert_eq!(index + new_content.len() - 1, last_read);
         assert_eq!(Some("\n"), buffer.default_eol);
     }
 
