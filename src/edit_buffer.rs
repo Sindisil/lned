@@ -229,13 +229,15 @@ mod tests {
         input
     }
 
+    #[derive(Debug, PartialEq)]
     enum EolDistribution {
         AllCrLf,
         MostCrLf,
-        EqualBoth,
+        Equal,
         MostLf,
         AllLf,
     }
+    #[derive(Debug, PartialEq)]
 
     enum LastLineEol {
         Present,
@@ -243,17 +245,212 @@ mod tests {
     }
 
     fn build_line_sample(
-        buf: &mut Vec<&str>,
+        buf: &mut Vec<String>,
+        eol_line_count: usize,
         template: &str,
-        eol_dist: EolDisribution,
+        eol_dist: EolDistribution,
         last_eol: LastLineEol,
     ) {
-// figure out how many lines with EOLs we'll need
-// clear buffer and reserve enough room for all lines, including
-//    any unterminated last line
-// fill lines with all/most EOL type, or LF if both.
-// fill lines with other EOL type, if any
-// add unterminated line, if any
+        assert_eq!(0, eol_line_count % 2); // Must be an even number of lines with EOL
+        let majority_count = (eol_line_count as f64 * 0.8).floor() as usize;
+        let minority_count = eol_line_count - majority_count;
+
+        buf.clear();
+        buf.reserve(if let LastLineEol::Present = last_eol {
+            eol_line_count
+        } else {
+            eol_line_count + 1
+        });
+
+        use EolDistribution::*;
+
+        let (m, n, eol) = match eol_dist {
+            AllCrLf => (1, eol_line_count, "\r\n"),
+            AllLf => (1, eol_line_count, "\n"),
+            MostCrLf => (1, majority_count - 1, "\r\n"),
+            MostLf => (1, majority_count - 1, "\n"),
+            Equal => (1, eol_line_count / 2 - 1, "\n"),
+        };
+        for i in m..=n {
+            buf.push(format!("{template} {i}{eol}"));
+        }
+
+        let (m, n, eol) = match eol_dist {
+            AllCrLf | AllLf => (n + 1, 0, ""),
+            MostCrLf => (n + 1, n + minority_count, "\n"),
+            MostLf => (n + 1, n + minority_count, "\r\n"),
+            Equal => (n + 1, n + eol_line_count / 2, "\r\n"),
+        };
+        for i in m..=n {
+            buf.push(format!("{template} {i}{eol}"));
+        }
+
+        let (m, n, eol) = match eol_dist {
+            AllCrLf | AllLf => (m, 0, ""),
+            MostCrLf => (n + 1, n + 1, "\r\n"),
+            MostLf | Equal => (n + 1, n + 1, "\n"),
+        };
+        for i in m..=n {
+            buf.push(format!("{template} {i}{eol}"));
+        }
+
+        if let LastLineEol::Missing = last_eol {
+            let m = match eol_dist {
+                AllCrLf | AllLf => m,
+                _ => m + 1,
+            };
+            buf.push(format!("{template} {m}"));
+        }
+    }
+
+    #[test]
+    fn build_line_sample_all_lf() {
+        let mut buf: Vec<String> = Vec::new();
+
+        let content = vec![
+            "TestLine 1\n",
+            "TestLine 2\n",
+            "TestLine 3\n",
+            "TestLine 4\n",
+            "TestLine 5",
+        ];
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::AllLf,
+            LastLineEol::Present,
+        );
+        assert_eq!(content[0..4], buf);
+
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::AllLf,
+            LastLineEol::Missing,
+        );
+        assert_eq!(content, buf);
+    }
+
+    #[test]
+    fn build_line_sample_all_crlf() {
+        let mut buf: Vec<String> = Vec::new();
+
+        let content = vec![
+            "TestLine 1\r\n",
+            "TestLine 2\r\n",
+            "TestLine 3\r\n",
+            "TestLine 4\r\n",
+            "TestLine 5",
+        ];
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::AllCrLf,
+            LastLineEol::Present,
+        );
+        assert_eq!(content[0..4], buf);
+
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::AllCrLf,
+            LastLineEol::Missing,
+        );
+        assert_eq!(content, buf);
+    }
+
+    #[test]
+    fn build_line_sample_most_lf() {
+        let mut buf: Vec<String> = Vec::new();
+
+        let content = vec![
+            "TestLine 1\n",
+            "TestLine 2\n",
+            "TestLine 3\r\n",
+            "TestLine 4\n",
+            "TestLine 5",
+        ];
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::MostLf,
+            LastLineEol::Present,
+        );
+        assert_eq!(content[0..4], buf);
+
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::MostLf,
+            LastLineEol::Missing,
+        );
+        assert_eq!(content, buf);
+    }
+
+    #[test]
+    fn build_line_sample_most_crlf() {
+        let mut buf: Vec<String> = Vec::new();
+
+        let content = vec![
+            "TestLine 1\r\n",
+            "TestLine 2\r\n",
+            "TestLine 3\n",
+            "TestLine 4\r\n",
+            "TestLine 5",
+        ];
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::MostCrLf,
+            LastLineEol::Present,
+        );
+        assert_eq!(content[0..4], buf);
+
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::MostCrLf,
+            LastLineEol::Missing,
+        );
+        assert_eq!(content, buf);
+    }
+
+    #[test]
+    fn build_line_sample_equal() {
+        let mut buf: Vec<String> = Vec::new();
+
+        let content = vec![
+            "TestLine 1\n",
+            "TestLine 2\r\n",
+            "TestLine 3\r\n",
+            "TestLine 4\n",
+            "TestLine 5",
+        ];
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::Equal,
+            LastLineEol::Present,
+        );
+        assert_eq!(content[0..4], buf);
+
+        build_line_sample(
+            &mut buf,
+            4,
+            "TestLine",
+            EolDistribution::Equal,
+            LastLineEol::Missing,
+        );
+        assert_eq!(content, buf);
     }
 
     #[test]
@@ -279,34 +476,6 @@ mod tests {
             .expect("Error reading content");
         assert_eq!(content, buffer.text);
         assert_eq!(3, last_line_read);
-        assert_eq!(Some("\n"), buffer.default_eol);
-    }
-
-    #[test]
-    fn read_append() {
-        let mut buffer = EditBuffer::new();
-
-        // iterate all combinations of:
-        // buff: all crlf, all lf, more crlf, more lf, no trailing EOL
-        // new: all crlf, all lf, more crlf, more lf
-        let more_crlf_with_final = vec!["Line 1\r\n", "Line 2\r\n", "Line 3\n", "Line 4\r\n"];
-        let input = new_input_buf(&initial_content[..]);
-        let _last_read = buffer
-            .read(0, &input[..])
-            .expect("Error reading initial_content");
-
-        let new_content = vec!["New1\n", "New2\n", "New3\n"];
-        let input = new_input_buf(&new_content[..]);
-        let index = buffer.len();
-        let last_read = buffer
-            .read(index, &input[..])
-            .expect("Error reading new_content");
-
-        let final_content = vec![
-            "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
-        ];
-        assert_eq!(final_content, buffer.text);
-        assert_eq!(index + new_content.len() - 1, last_read);
         assert_eq!(Some("\n"), buffer.default_eol);
     }
 
