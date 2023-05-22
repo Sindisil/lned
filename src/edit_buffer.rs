@@ -2,6 +2,7 @@ use regex::Regex;
 use std::cmp::Ordering;
 use std::fmt;
 use std::io::{self, prelude::*};
+use std::ops::Deref;
 use std::path;
 
 pub struct EditBuffer {
@@ -133,7 +134,7 @@ impl EditBuffer {
 
         // set default_eol if neccessary
         if self.default_eol.is_none() {
-            self.default_eol = Some(find_default_eol(&lines[..]));
+            self.default_eol = Some(compute_default_eol(&lines[..]));
         }
 
         // Add in missing eol as needed
@@ -161,7 +162,18 @@ impl EditBuffer {
     }
 }
 
-fn find_default_eol(lines: &[String]) -> &'static str {
+fn compute_native_eol() -> &'static str {
+    if std::env::consts::FAMILY == "windows" {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+    fn compute_default_eol<S>(lines: &[S]) -> &'static str
+    where
+    S: Deref<Target = str>,
+    {
     let native_eol = if std::env::consts::FAMILY == "windows" {
         "\r\n"
     } else {
@@ -188,7 +200,6 @@ fn find_default_eol(lines: &[String]) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ops::Deref;
 
     struct BadReader {}
 
@@ -198,26 +209,79 @@ mod tests {
         }
     }
 
+    ////
+    // EditBuffer creation tests
+
     #[test]
-    fn create_empty_buffer() {
+    fn new_buffer_has_zero_capacity() {
         let buffer = EditBuffer::new();
         assert_eq!(buffer.capacity(), 0);
     }
 
     #[test]
-    fn create_buffer_with_capacity() {
+    fn new_buffer_has_0_len() {
+        let buffer = EditBuffer::new();
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn buffer_with_capacity_has_correct_capacity() {
         const INIT_CAPACITY: usize = 1024;
         let buffer = EditBuffer::with_capacity(INIT_CAPACITY);
         assert_eq!(buffer.capacity(), INIT_CAPACITY);
     }
 
     #[test]
-    fn empty_buffer_returns_zero_len() {
-        let buffer = EditBuffer::new();
-        assert_eq!(0, buffer.len());
+    fn buffer_with_capacity_has_zero_len() {
         let buffer = EditBuffer::with_capacity(1024);
         assert_eq!(0, buffer.len());
     }
+
+    ////
+    // compute_default_eol() tests
+
+    #[test]
+    fn default_eol_when_all_crlf() {
+        let lines = vec!["L1\r\n", "L2\r\n", "L3\r\n",];
+        assert_eq!("\r\n", compute_default_eol(&lines));
+    }
+
+    #[test]
+    fn default_eol_when_all_lf() {
+        let lines = vec!["L1\n", "L2\n", "L3\n",];
+        assert_eq!("\n", compute_default_eol(&lines));
+    }
+
+    #[test]
+    fn default_eol_when_most_crlf() {
+        let lines = vec!["L1\r\n", "L2\n", "L3\r\n",];
+        assert_eq!("\r\n", compute_default_eol(&lines));
+    }
+
+    #[test]
+    fn default_eol_when_most_lf() {
+        let lines = vec!["L1\n", "L2\n", "L3\r\n",];
+        assert_eq!("\n", compute_default_eol(&lines));
+    }
+
+    #[test]
+    fn default_eol_when_equal_lf_crlf() {
+        let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n",];
+        assert_eq!(compute_native_eol(), compute_default_eol(&lines));
+    }
+
+    // define macro to generate test cases with input lines & expected answer
+    // something like:
+    // read_test {
+    //    name: insert_nonterminated,
+    //    initial: vec!["Line 1\n", "Line 2\r\n", "Line 3\n"],
+    //    added: vec!["Added 1\r\n", "Added 2\r\n", "Added 3"],
+    //    position: 1,
+    //    expected: vec![
+    //        "Line 1\n", "Added 1\r\n", "Added 2\r\n", "Added 3\n"],
+    //        "Line 2\r\n", "Line 3\n",
+    //    ],
+    // }
 
     ////
     // read() tests
@@ -306,6 +370,9 @@ mod tests {
             buf.push(format!("{template} {m}"));
         }
     }
+
+    ////
+    // build_line_sample() tests
 
     #[test]
     fn build_line_sample_all_lf() {
@@ -529,14 +596,6 @@ mod tests {
         assert_eq!(final_content, buffer.text);
         assert_eq!(index + new_content.len() - 1, last_read);
         assert_eq!(Some("\n"), buffer.default_eol);
-    }
-
-    #[test]
-    fn read_append_eol_detect_and_correct() {
-        // Buffer EOL: \n, \n no final, \r\n, \r\n no final, mixed, mixed no final,
-        //             mixed even, mixed even no final
-        // NewText EOL: \n, \r\n, mixed, mixed even
-        assert!(false);
     }
 
     #[test]
