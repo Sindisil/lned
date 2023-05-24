@@ -39,6 +39,15 @@ impl Default for EditBuffer {
     }
 }
 
+impl From<Vec<&str>> for EditBuffer {
+    fn from(value: Vec<&str>) -> Self {
+        let mut buf = EditBuffer::with_capacity(value.len());
+        let mut value = value.iter().map(|v| v.to_string()).collect::<Vec<String>>();
+        buf.text.append(&mut value);
+        buf
+    }
+}
+
 impl EditBuffer {
     /// Creates a new empty `EditBuffer`.
     ///
@@ -293,15 +302,8 @@ mod tests {
         last line read: $last_read:expr$(,)? } => {
             #[test]
             fn $name() {
-                let mut buffer = EditBuffer::new();
                 let initial = $initial;
-                if initial.len() > 0 {
-                    let input = new_input_buf(&initial[..]);
-                    let _last_read = buffer
-                        .read(0, &input[..])
-                        .expect("Error reading initial content");
-                }
-
+                let mut buffer = EditBuffer::from(initial);
                 let added = $added;
                 let input = new_input_buf(&added[..]);
                 let last_read = buffer
@@ -389,14 +391,8 @@ mod tests {
 
     #[test]
     fn read_append_equal_eol_no_final() {
-        let mut buffer = EditBuffer::new();
         let initial = vec!["Line1\n", "Line2\r\n", "Line3"];
-        if initial.len() > 0 {
-            let input = new_input_buf(&initial[..]);
-            let _last_read = buffer
-                .read(0, &input[..])
-                .expect("Error reading initial content");
-        }
+        let mut buffer = EditBuffer::from(initial);
 
         let at = 3;
         let added = vec!["New1\n", "New2\r\n", "New3"];
@@ -500,14 +496,8 @@ mod tests {
 
     #[test]
     fn read_insert_equal_eol_no_final() {
-        let mut buffer = EditBuffer::new();
         let initial = vec!["Line1\r\n", "Line2\n", "Line3\n", "Line4\r\n"];
-        if initial.len() > 0 {
-            let input = new_input_buf(&initial[..]);
-            let _last_read = buffer
-                .read(0, &input[..])
-                .expect("Error reading initial content");
-        }
+        let mut buffer = EditBuffer::from(initial);
 
         let at = 2;
         let added = vec!["New1\r\n", "New2\r\n", "New3"];
