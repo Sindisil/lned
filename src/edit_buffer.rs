@@ -167,6 +167,7 @@ impl EditBuffer {
 
         // actually add new lines to buffer
         self.text.splice(at_line..at_line, lines.into_iter());
+        self.needs_write = true;
         Ok(at_line + lines_added - 1)
     }
 }
@@ -312,6 +313,7 @@ mod tests {
 
                 assert_eq!($expect, buffer.text);
                 assert_eq!($last_read, last_read);
+                    assert_eq!(true, buffer.needs_write());
             }
         };
     }
@@ -413,6 +415,7 @@ mod tests {
         ];
         assert_eq!(expect, buffer.text);
         assert_eq!(5, last_read);
+        assert_eq!(true, buffer.needs_write());
     }
 
     read_test! {
@@ -519,6 +522,7 @@ mod tests {
         ];
         assert_eq!(expect, buffer.text);
         assert_eq!(4, last_read);
+        assert_eq!(true, buffer.needs_write());
     }
 
     #[test]
