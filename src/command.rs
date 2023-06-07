@@ -1,3 +1,4 @@
+use std::cmp;
 use std::fmt;
 use std::iter;
 use std::str;
@@ -32,6 +33,10 @@ pub enum AddrSeparator {
 pub enum ParseError {
     Unknown(String),
     UnexpectedAddress,
+    EarlyEnd,
+    OffsetTooLarge,
+    OffsetTooSmall,
+    BadLineNumber(String),
 }
 
 impl std::error::Error for ParseError {}
@@ -40,7 +45,11 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ParseError::UnexpectedAddress => write!(f, "Command takes no line address."),
+            ParseError::EarlyEnd => write!(f, "Unexpected early end of command line"),
             ParseError::Unknown(s) => write!(f, "Unknown command '{s}'"),
+            ParseError::OffsetTooLarge => write!(f, "Offset too large"),
+            ParseError::OffsetTooSmall => write!(f, "Offset too small"),
+            ParseError::BadLineNumber(s) => write!(f, "Bad line number: '{s}'"),
         }
     }
 }
@@ -55,9 +64,10 @@ impl str::FromStr for Cmd {
 }
 
 fn parse_cmd(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<Cmd, ParseError> {
-    let address = parse_addr_chain(cmd_chars)?;
+    let mut addr_chain: Option<AddrChain> = None;
+    parse_addr_chain(cmd_chars, &mut addr_chain)?;
     match cmd_chars.peek() {
-        Some('q') => address.map_or(Ok(Cmd::Quit), |_| {
+        Some('q') => addr_chain.map_or(Ok(Cmd::Quit), |_| {
             Err(ParseError::Unknown(cmd_chars.collect()))
         }),
         _ => Err(ParseError::Unknown(cmd_chars.collect())),
@@ -66,28 +76,175 @@ fn parse_cmd(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<Cmd, ParseErr
 
 fn parse_addr_chain(
     cmd_chars: &mut iter::Peekable<str::Chars>,
+    chain: &mut Option<AddrChain>,
 ) -> Result<Option<AddrChain>, ParseError> {
+    // Try to parse first address
+    let left_addr = parse_line_addr(cmd_chars)?;
+    // Try to parse separator.
+    // If no separator, add parsed left addr (if any), and return chain
+    // Recursively call parse_addr_chain()
     Ok(None)
+}
+
+fn parse_line_addr(
+    cmd_chars: &mut iter::Peekable<str::Chars>,
+) -> Result<Option<LineAddr>, ParseError> {
+    let _ = cmd_chars.by_ref().skip_while(|c| c.is_whitespace());
+    if let Some(c) = cmd_chars.peek() {
+        match c {
+            '.' => {
+                cmd_chars.next();
+                let offsets = parse_addr_offsets(cmd_chars)?;
+                Ok(Some(LineAddr::Dot(offsets)))
+            }
+            '$' => {
+                cmd_chars.next();
+                let offsets = parse_addr_offsets(cmd_chars)?;
+                Ok(Some(LineAddr::Dollar(offsets)))
+            }
+            '/' => {
+                cmd_chars.next();
+                let re = cmd_chars.by_ref().take_while(|c| *c != '/').collect();
+                let offsets = parse_addr_offsets(cmd_chars)?;
+                Ok(Some(LineAddr::Regex(re, offsets)))
+            }
+            '?' => {
+                cmd_chars.next();
+                let re = cmd_chars.by_ref().take_while(|c| *c != '?').collect();
+                let offsets = parse_addr_offsets(cmd_chars)?;
+                Ok(Some(LineAddr::RevRegex(re, offsets)))
+            }
+            '0'..='9' => {
+                let num: String = cmd_chars
+                    .by_ref()
+                    .take_while(|c| matches!('0'..='9', c))
+                    .collect();
+                let num = num.parse().map_err(|_| ParseError::BadLineNumber(num))?;
+                let offsets = parse_addr_offsets(cmd_chars)?;
+                Ok(Some(LineAddr::Num(num, offsets)))
+            }
+            _ => Ok(None),
+        }
+    } else {
+        Err(ParseError::EarlyEnd)
+    }
+}
+
+fn parse_addr_offsets(
+    cmd_chars: &mut iter::Peekable<str::Chars>,
+) -> Result<Vec<isize>, ParseError> {
+    let mut offsets = Vec::new();
+    loop {
+        let _ = cmd_chars.by_ref().skip_while(|c| c.is_ascii_whitespace());
+        if let Some(c) = cmd_chars.peek() {
+            match c {
+                '0'..='9' => {
+                    let offset = cmd_chars
+                        .by_ref()
+                        .take_while(|c| c.is_ascii_digit())
+                        .try_fold(0isize, |acc, c| {
+                            c.to_digit(10).and_then(|d| {
+                                acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
+                            })
+                        })
+                        .ok_or(ParseError::OffsetTooLarge)?;
+                    offsets.push(offset);
+                }
+                '+' => {
+                    let offset = cmd_chars
+                        .by_ref()
+                        .skip(1)
+                        .take_while(|c| c.is_ascii_digit())
+                        .try_fold(0isize, |acc, c| {
+                            c.to_digit(10).and_then(|d| {
+                                acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
+                            })
+                        })
+                        .ok_or(ParseError::OffsetTooLarge)?;
+                    offsets.push(cmp::min(1, offset));
+                }
+                '-' => {
+                    let offset = cmd_chars
+                        .by_ref()
+                        .skip(1)
+                        .take_while(|c| c.is_ascii_digit())
+                        .try_fold(0isize, |acc, c| {
+                            c.to_digit(10).and_then(|d| {
+                                acc.checked_mul(10).and_then(|n| n.checked_sub(d as isize))
+                            })
+                        })
+                        .ok_or(ParseError::OffsetTooSmall)?;
+                    offsets.push(cmp::max(-1, offset));
+                }
+                _ => break,
+            }
+        } else {
+            break;
+        }
+    }
+    Ok(offsets)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_unknown_command_gives_error() {
-        let input = "o";
-        let res = input
-            .parse::<Cmd>()
-            .err()
-            .expect("should always be an error");
-        assert!(matches!(res, ParseError::Unknown(_)));
-    }
+    mod parse_cmd {
+        use super::*;
 
-    #[test]
-    fn parse_quit() {
-        let input = "q";
-        let res = input.parse::<Cmd>().expect("should always parse ok");
-        assert!(matches!(res, Cmd::Quit));
+        #[test]
+        fn unknown_command_gives_error() {
+            let input = "o";
+            let res = input
+                .parse::<Cmd>()
+                .err()
+                .expect("should always be an error");
+            assert!(matches!(res, ParseError::Unknown(_)));
+        }
+
+        #[test]
+        fn quit() {
+            let input = "q";
+            let res = input.parse::<Cmd>().expect("should always parse ok");
+            assert!(matches!(res, Cmd::Quit));
+        }
+
+        #[test]
+        fn quit_with_illegal_addr() {
+            let input = ".q";
+            let res = input.parse::<Cmd>().err().expect("should be an error");
+            assert!(matches!(res, ParseError::UnexpectedAddress));
+        }
+
+        #[test]
+        fn single_addr_offset() {
+            let mut input = "2".chars().peekable();
+            let _res = parse_addr_offsets(&mut input);
+            assert!(matches!(Some(vec![2,]), _res));
+        }
+
+        #[test]
+        fn single_plus_addr_offset() {
+            let mut input = "+3".chars().peekable();
+            let res = parse_addr_offsets(&mut input);
+            assert!(matches!(Some(vec![3,]), _res));
+        }
+
+        #[test]
+        fn single_negagive_addr_offset() {
+            let mut input = "-4".chars().peekable();
+            let _res = parse_addr_offsets(&mut input);
+            assert!(matches!(Some(vec![-4,]), _res));
+        }
+
+        #[test]
+        fn combined_addr_offsets() {
+            let mut input = "+4++ 5-6 -7 +8---".chars().peekable();
+            let _res = parse_addr_offsets(&mut input);
+            assert!(matches!(
+                Some(vec![4, 1, 1, 5, -6, -7, 8, -1, -1, -1,]),
+                _res
+            ));
+        }
     }
 }
