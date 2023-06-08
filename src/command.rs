@@ -54,13 +54,20 @@ pub enum Cmd {
     Quit,
 }
 
-#[derive(Debug)]
-pub enum AddrChain {
-    Address(LineAddr),
-    Chain(Option<LineAddr>, AddrSeparator, Option<Box<AddrChain>>),
+//#[derive(Debug, PartialEq, Clone)]
+//pub enum AddrChain {
+//    Address(LineAddr),
+//    Chain(Option<LineAddr>, AddrSeparator, Option<Box<AddrChain>>),
+//}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct AddrChain {
+    left: Option<LineAddr>,
+    separator: Option<AddrSeparator>,
+    right: Option<Box<Option<AddrChain>>>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LineAddr {
     Dot(Vec<isize>),
     Dollar(Vec<isize>),
@@ -69,7 +76,7 @@ pub enum LineAddr {
     RevRegex(String, Vec<isize>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum AddrSeparator {
     Comma,
     Semicolon,
@@ -110,26 +117,58 @@ impl str::FromStr for Cmd {
 }
 
 fn parse_cmd(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<Cmd, ParseError> {
-    let mut addr_chain: Option<AddrChain> = None;
-    parse_addr_chain(cmd_chars, &mut addr_chain)?;
+    let addr_chain: Option<AddrChain> = parse_addr_chain(cmd_chars)?;
     match cmd_chars.peek() {
-        Some('q') => addr_chain.map_or(Ok(Cmd::Quit), |_| {
-            Err(ParseError::Unknown(cmd_chars.collect()))
-        }),
+        Some('q') => addr_chain.map_or(Ok(Cmd::Quit), |_| Err(ParseError::UnexpectedAddress)),
         _ => Err(ParseError::Unknown(cmd_chars.collect())),
     }
 }
 
 fn parse_addr_chain(
     cmd_chars: &mut iter::Peekable<str::Chars>,
-    chain: &mut Option<AddrChain>,
 ) -> Result<Option<AddrChain>, ParseError> {
-    // Try to parse first address
-    let left_addr = parse_line_addr(cmd_chars)?;
-    // Try to parse separator.
-    // If no separator, add parsed left addr (if any), and return chain
-    // Recursively call parse_addr_chain()
-    Ok(None)
+    let left = parse_line_addr(cmd_chars)?;
+    let separator = parse_addr_separator(cmd_chars)?;
+    if separator.is_none() {
+        if left.is_none() {
+            Ok(None)
+        } else {
+            Ok(Some(AddrChain {
+                left,
+                separator,
+                right: None,
+            }))
+        }
+    } else {
+        let right = parse_addr_chain(cmd_chars)?;
+        let right = right.map(|r| Box::new(Some(r)));
+        Ok(Some(AddrChain {
+            left,
+            separator,
+            right,
+        }))
+    }
+}
+
+fn parse_addr_separator(
+    cmd_chars: &mut iter::Peekable<str::Chars>,
+) -> Result<Option<AddrSeparator>, ParseError> {
+    cmd_chars.peeking_take_while(|c| c.is_blank());
+    if let Some(c) = cmd_chars.peek() {
+        match c {
+            ',' => {
+                cmd_chars.next();
+                Ok(Some(AddrSeparator::Comma))
+            }
+            ';' => {
+                cmd_chars.next();
+                Ok(Some(AddrSeparator::Semicolon))
+            }
+            _ => Ok(None),
+        }
+    } else {
+        Err(ParseError::EarlyEnd)
+    }
 }
 
 fn parse_line_addr(
@@ -441,6 +480,37 @@ mod tests {
             let mut input = "2++5-n".chars().peekable();
             let _res = parse_line_addr(&mut input);
             assert_eq!(Ok(Some(LineAddr::Num(2, vec![1, 5, -1,]))), _res);
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn comma_addr_separator() {
+            let mut input = ",n".chars().peekable();
+            let _res = parse_addr_separator(&mut input);
+            assert_eq!(Ok(Some(AddrSeparator::Comma)), _res);
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn empty_addr_chain() {
+            let mut input = "n".chars().peekable();
+            let _res = parse_addr_chain(&mut input);
+            assert_eq!(Ok(None), _res);
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn comma_addr_chain() {
+            let mut input = ",n".chars().peekable();
+            let _res = parse_addr_chain(&mut input);
+            assert_eq!(
+                Ok(Some(AddrChain {
+                    left: None,
+                    separator: Some(AddrSeparator::Comma),
+                    right: None
+                })),
+                _res
+            );
             assert_eq!("n", input.collect::<String>());
         }
     }
