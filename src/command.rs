@@ -143,53 +143,58 @@ fn parse_line_addr(
 fn parse_addr_offsets(
     cmd_chars: &mut iter::Peekable<str::Chars>,
 ) -> Result<Vec<isize>, ParseError> {
+    let mut offset_chars = String::new();
+    while let Some(c) = cmd_chars
+        .by_ref()
+        .next_if(|c| c.is_blank() || c.is_ascii_digit() || *c == '+' || *c == '-')
+    {
+        offset_chars.push(c);
+    }
+    let mut offset_chars = offset_chars.chars().peekable();
     let mut offsets = Vec::new();
-    loop {
-        let _ = cmd_chars.by_ref().skip_while(|c| c.is_ascii_whitespace());
-        if let Some(c) = cmd_chars.peek() {
-            match c {
-                '0'..='9' => {
-                    let offset = cmd_chars
-                        .by_ref()
-                        .take_while(|c| c.is_ascii_digit())
-                        .try_fold(0isize, |acc, c| {
-                            c.to_digit(10).and_then(|d| {
-                                acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
-                            })
+    while let Some(c) = offset_chars.peek() {
+        match c {
+            '0'..='9' => {
+                let offset = offset_chars
+                    .by_ref()
+                    .take_while(|c| c.is_ascii_digit())
+                    .try_fold(0isize, |acc, c| {
+                        c.to_digit(10).and_then(|d| {
+                            acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
                         })
-                        .ok_or(ParseError::OffsetTooLarge)?;
-                    offsets.push(offset);
-                }
-                '+' => {
-                    let offset = cmd_chars
-                        .by_ref()
-                        .skip(1)
-                        .take_while(|c| c.is_ascii_digit())
-                        .try_fold(0isize, |acc, c| {
-                            c.to_digit(10).and_then(|d| {
-                                acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
-                            })
-                        })
-                        .ok_or(ParseError::OffsetTooLarge)?;
-                    offsets.push(cmp::min(1, offset));
-                }
-                '-' => {
-                    let offset = cmd_chars
-                        .by_ref()
-                        .skip(1)
-                        .take_while(|c| c.is_ascii_digit())
-                        .try_fold(0isize, |acc, c| {
-                            c.to_digit(10).and_then(|d| {
-                                acc.checked_mul(10).and_then(|n| n.checked_sub(d as isize))
-                            })
-                        })
-                        .ok_or(ParseError::OffsetTooSmall)?;
-                    offsets.push(cmp::max(-1, offset));
-                }
-                _ => break,
+                    })
+                    .ok_or(ParseError::OffsetTooLarge)?;
+                offsets.push(offset);
             }
-        } else {
-            break;
+            '+' => {
+                let offset = offset_chars
+                    .by_ref()
+                    .skip(1)
+                    .take_while(|c| c.is_ascii_digit())
+                    .try_fold(0isize, |acc, c| {
+                        c.to_digit(10).and_then(|d| {
+                            acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
+                        })
+                    })
+                    .ok_or(ParseError::OffsetTooLarge)?;
+                offsets.push(cmp::min(1, offset));
+            }
+            '-' => {
+                let offset = offset_chars
+                    .by_ref()
+                    .skip(1)
+                    .take_while(|c| c.is_ascii_digit())
+                    .try_fold(0isize, |acc, c| {
+                        c.to_digit(10).and_then(|d| {
+                            acc.checked_mul(10).and_then(|n| n.checked_sub(d as isize))
+                        })
+                    })
+                    .ok_or(ParseError::OffsetTooSmall)?;
+                offsets.push(cmp::max(-1, offset));
+            }
+            _ => {
+                offset_chars.next();
+            }
         }
     }
     Ok(offsets)
@@ -252,7 +257,7 @@ mod tests {
 
         #[test]
         fn combined_addr_offsets() {
-            let mut input = "+4++ 5-6 -7 +8---n".chars().peekable();
+            let mut input = " +4++ 5-6   -7 +8---n".chars().peekable();
             let _res = parse_addr_offsets(&mut input);
             assert!(matches!(
                 Some(vec![4, 1, 1, 5, -6, -7, 8, -1, -1, -1,]),
