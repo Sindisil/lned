@@ -3,6 +3,16 @@ use std::fmt;
 use std::iter;
 use std::str;
 
+trait CharUtils {
+    fn is_blank(&self) -> bool;
+}
+
+impl CharUtils for char {
+    fn is_blank(&self) -> bool {
+        *self == ' ' || *self == '\t'
+    }
+}
+
 #[derive(Debug)]
 pub enum Cmd {
     Quit,
@@ -218,33 +228,53 @@ mod tests {
 
         #[test]
         fn single_addr_offset() {
-            let mut input = "2".chars().peekable();
+            let mut input = "2n".chars().peekable();
             let _res = parse_addr_offsets(&mut input);
             assert!(matches!(Some(vec![2,]), _res));
+            assert_eq!("n", input.collect::<String>());
         }
 
         #[test]
         fn single_plus_addr_offset() {
-            let mut input = "+3".chars().peekable();
-            let res = parse_addr_offsets(&mut input);
+            let mut input = "+3n".chars().peekable();
+            let _res = parse_addr_offsets(&mut input);
             assert!(matches!(Some(vec![3,]), _res));
+            assert_eq!("n", input.collect::<String>());
         }
 
         #[test]
         fn single_negagive_addr_offset() {
-            let mut input = "-4".chars().peekable();
+            let mut input = "-4n".chars().peekable();
             let _res = parse_addr_offsets(&mut input);
             assert!(matches!(Some(vec![-4,]), _res));
+            assert_eq!("n", input.collect::<String>());
         }
 
         #[test]
         fn combined_addr_offsets() {
-            let mut input = "+4++ 5-6 -7 +8---".chars().peekable();
+            let mut input = "+4++ 5-6 -7 +8---n".chars().peekable();
             let _res = parse_addr_offsets(&mut input);
             assert!(matches!(
                 Some(vec![4, 1, 1, 5, -6, -7, 8, -1, -1, -1,]),
                 _res
             ));
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn dot_line_addr() {
+            let mut input = ".n".chars().peekable();
+            let _res = parse_line_addr(&mut input);
+            assert!(matches!(Some(LineAddr::Dot(Vec::new())), _res));
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn dot_line_addr_with_offset() {
+            let mut input = ".+2n".chars().peekable();
+            let _res = parse_line_addr(&mut input);
+            assert!(matches!(Some(LineAddr::Dot(vec![2,])), _res));
+            assert_eq!("n", input.collect::<String>());
         }
     }
 }
