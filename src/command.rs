@@ -168,6 +168,10 @@ fn parse_line_addr(
                 let offsets = parse_addr_offsets(cmd_chars)?;
                 Ok(Some(LineAddr::Num(num, offsets)))
             }
+            '+' | '-' => {
+                let offsets = parse_addr_offsets(cmd_chars)?;
+                Ok(Some(LineAddr::Dot(offsets)))
+            }
             _ => Ok(None),
         }
     } else {
@@ -362,6 +366,46 @@ mod tests {
                 Ok(Some(LineAddr::RevRegex("fn name".to_string(), vec![12,]))),
                 _res
             );
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn plus_line_addr() {
+            let mut input = "+n".chars().peekable();
+            let _res = parse_line_addr(&mut input);
+            assert_eq!(Ok(Some(LineAddr::Dot(vec![1,]))), _res);
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn plus_num_line_addr() {
+            let mut input = "+2n".chars().peekable();
+            let _res = parse_line_addr(&mut input);
+            assert_eq!(Ok(Some(LineAddr::Dot(vec![2,]))), _res);
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn minus_line_addr() {
+            let mut input = "-n".chars().peekable();
+            let _res = parse_line_addr(&mut input);
+            assert_eq!(Ok(Some(LineAddr::Dot(vec![-1,]))), _res);
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn minus_num_line_addr() {
+            let mut input = "-2n".chars().peekable();
+            let _res = parse_line_addr(&mut input);
+            assert_eq!(Ok(Some(LineAddr::Dot(vec![-2,]))), _res);
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn num_line_addr() {
+            let mut input = "2n".chars().peekable();
+            let _res = parse_line_addr(&mut input);
+            assert_eq!(Ok(Some(LineAddr::Num(2, Vec::new()))), _res);
             assert_eq!("n", input.collect::<String>());
         }
     }
