@@ -661,5 +661,22 @@ mod tests {
             );
             assert_eq!("n", input.collect::<String>());
         }
+
+        #[test]
+        fn offset_too_large() {
+            let mut input = "999999999999999999999999999".chars().peekable();
+            let _res = parse_addr_offsets(&mut input)
+                .err()
+                .expect("should be an error");
+        }
+
+        #[test]
+        fn offset_too_small() {
+            let mut input = "-999999999999999999999999999".chars().peekable();
+            let _res = parse_addr_offsets(&mut input)
+                .err()
+                .expect("should be an error");
+            assert_eq!(ParseError::OffsetTooSmall, _res);
+        }
     }
 }
