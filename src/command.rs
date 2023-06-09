@@ -64,7 +64,7 @@ pub enum Cmd {
 pub struct AddrChain {
     left: Option<LineAddr>,
     separator: Option<AddrSeparator>,
-    right: Option<Box<Option<AddrChain>>>,
+    right: Option<Box<AddrChain>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,7 +141,7 @@ fn parse_addr_chain(
         }
     } else {
         let right = parse_addr_chain(cmd_chars)?;
-        let right = right.map(|r| Box::new(Some(r)));
+        let right = right.map(|r| Box::new(r));
         Ok(Some(AddrChain {
             left,
             separator,
@@ -492,6 +492,14 @@ mod tests {
         }
 
         #[test]
+        fn semicolon_addr_separator() {
+            let mut input = ";n".chars().peekable();
+            let _res = parse_addr_separator(&mut input);
+            assert_eq!(Ok(Some(AddrSeparator::Semicolon)), _res);
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
         fn empty_addr_chain() {
             let mut input = "n".chars().peekable();
             let _res = parse_addr_chain(&mut input);
@@ -508,6 +516,55 @@ mod tests {
                     left: None,
                     separator: Some(AddrSeparator::Comma),
                     right: None
+                })),
+                _res
+            );
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn comma_left_addr_chain() {
+            let mut input = "10,n".chars().peekable();
+            let _res = parse_addr_chain(&mut input);
+            assert_eq!(
+                Ok(Some(AddrChain {
+                    left: Some(LineAddr::Num(10, Vec::new())),
+                    separator: Some(AddrSeparator::Comma),
+                    right: None
+                })),
+                _res
+            );
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn comma_right_addr_chain() {
+            let mut input = ",10n".chars().peekable();
+            let _res = parse_addr_chain(&mut input);
+            assert_eq!(
+                Ok(Some(AddrChain {
+                    left: None,
+                    separator: Some(AddrSeparator::Comma),
+                    right: Some(Box::new(AddrChain {
+                        left: Some(LineAddr::Num(10, Vec::new())),
+                        separator: None,
+                        right: None,
+                    })),
+                })),
+                _res
+            );
+            assert_eq!("n", input.collect::<String>());
+        }
+
+        #[test]
+        fn semicolon_addr_chain() {
+            let mut input = ";n".chars().peekable();
+            let _res = parse_addr_chain(&mut input);
+            assert_eq!(
+                Ok(Some(AddrChain {
+                    left: None,
+                    separator: Some(AddrSeparator::Semicolon),
+                    right: None,
                 })),
                 _res
             );
