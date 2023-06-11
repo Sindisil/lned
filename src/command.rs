@@ -678,5 +678,15 @@ mod tests {
                 .expect("should be an error");
             assert_eq!(ParseError::OffsetTooSmall, _res);
         }
+
+        #[test]
+        fn early_end_parsing_line_addr() {
+            let mut input = "".chars().peekable();
+            let _res = parse_line_addr(&mut input)
+                .err()
+                .expect("should be an error");
+            assert_eq!(ParseError::EarlyEnd, _res);
+        }
+        // parse_line_addr - propagate offset parsing error
     }
 }
