@@ -49,18 +49,13 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Cmd {
     Quit,
+    Print(Option<AddrChain>),
 }
 
-//#[derive(Debug, PartialEq, Clone)]
-//pub enum AddrChain {
-//    Address(LineAddr),
-//    Chain(Option<LineAddr>, AddrSeparator, Option<Box<AddrChain>>),
-//}
-
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct AddrChain {
     left: Option<LineAddr>,
     separator: Option<AddrSeparator>,
@@ -86,7 +81,6 @@ pub enum AddrSeparator {
 pub enum ParseError {
     Unknown(String),
     UnexpectedAddress,
-    EarlyEnd,
     OffsetTooLarge,
     OffsetTooSmall,
     LineNumberTooLarge,
@@ -98,7 +92,6 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ParseError::UnexpectedAddress => write!(f, "Command takes no line address."),
-            ParseError::EarlyEnd => write!(f, "Unexpected early end of command line"),
             ParseError::Unknown(s) => write!(f, "Unknown command '{s}'"),
             ParseError::OffsetTooLarge => write!(f, "Offset too large"),
             ParseError::OffsetTooSmall => write!(f, "Offset too small"),
@@ -119,6 +112,10 @@ impl str::FromStr for Cmd {
 fn parse_cmd(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<Cmd, ParseError> {
     let addr_chain: Option<AddrChain> = parse_addr_chain(cmd_chars)?;
     match cmd_chars.peek() {
+        None => Ok(Cmd::Print(addr_chain.or(Some(AddrChain {
+            left: Some(LineAddr::Dot(vec![1])),
+            ..Default::default()
+        })))),
         Some('q') => addr_chain.map_or(Ok(Cmd::Quit), |_| Err(ParseError::UnexpectedAddress)),
         _ => Err(ParseError::Unknown(cmd_chars.collect())),
     }
@@ -141,7 +138,7 @@ fn parse_addr_chain(
         }
     } else {
         let right = parse_addr_chain(cmd_chars)?;
-        let right = right.map(|r| Box::new(r));
+        let right = right.map(Box::new);
         Ok(Some(AddrChain {
             left,
             separator,
@@ -153,72 +150,75 @@ fn parse_addr_chain(
 fn parse_addr_separator(
     cmd_chars: &mut iter::Peekable<str::Chars>,
 ) -> Result<Option<AddrSeparator>, ParseError> {
-    cmd_chars.peeking_take_while(|c| c.is_blank());
-    if let Some(c) = cmd_chars.peek() {
-        match c {
-            ',' => {
-                cmd_chars.next();
-                Ok(Some(AddrSeparator::Comma))
-            }
-            ';' => {
-                cmd_chars.next();
-                Ok(Some(AddrSeparator::Semicolon))
-            }
-            _ => Ok(None),
+    while let Some(c) = cmd_chars.peek() {
+        if c.is_blank() {
+            cmd_chars.next();
+        } else {
+            break;
         }
-    } else {
-        Err(ParseError::EarlyEnd)
+    }
+    match cmd_chars.peek() {
+        Some(',') => {
+            cmd_chars.next();
+            Ok(Some(AddrSeparator::Comma))
+        }
+        Some(';') => {
+            cmd_chars.next();
+            Ok(Some(AddrSeparator::Semicolon))
+        }
+        _ => Ok(None),
     }
 }
 
 fn parse_line_addr(
     cmd_chars: &mut iter::Peekable<str::Chars>,
 ) -> Result<Option<LineAddr>, ParseError> {
-    cmd_chars.peeking_take_while(|c| c.is_blank());
-    if let Some(c) = cmd_chars.peek() {
-        match c {
-            '.' => {
-                cmd_chars.next();
-                let offsets = parse_addr_offsets(cmd_chars)?;
-                Ok(Some(LineAddr::Dot(offsets)))
-            }
-            '$' => {
-                cmd_chars.next();
-                let offsets = parse_addr_offsets(cmd_chars)?;
-                Ok(Some(LineAddr::Dollar(offsets)))
-            }
-            '/' => {
-                cmd_chars.next();
-                let re = cmd_chars.by_ref().take_while(|c| *c != '/').collect();
-                let offsets = parse_addr_offsets(cmd_chars)?;
-                Ok(Some(LineAddr::Regex(re, offsets)))
-            }
-            '?' => {
-                cmd_chars.next();
-                let re = cmd_chars.by_ref().take_while(|c| *c != '?').collect();
-                let offsets = parse_addr_offsets(cmd_chars)?;
-                Ok(Some(LineAddr::RevRegex(re, offsets)))
-            }
-            '0'..='9' => {
-                let num = cmd_chars
-                    .peeking_take_while(|c| c.is_ascii_digit())
-                    .try_fold(0usize, |acc, c| {
-                        c.to_digit(10).and_then(|d| {
-                            acc.checked_mul(10).and_then(|n| n.checked_add(d as usize))
-                        })
-                    })
-                    .ok_or(ParseError::LineNumberTooLarge)?;
-                let offsets = parse_addr_offsets(cmd_chars)?;
-                Ok(Some(LineAddr::Num(num, offsets)))
-            }
-            '+' | '-' => {
-                let offsets = parse_addr_offsets(cmd_chars)?;
-                Ok(Some(LineAddr::Dot(offsets)))
-            }
-            _ => Ok(None),
+    while let Some(c) = cmd_chars.peek() {
+        if c.is_blank() {
+            cmd_chars.next();
+        } else {
+            break;
         }
-    } else {
-        Err(ParseError::EarlyEnd)
+    }
+    match cmd_chars.peek() {
+        Some('.') => {
+            cmd_chars.next();
+            let offsets = parse_addr_offsets(cmd_chars)?;
+            Ok(Some(LineAddr::Dot(offsets)))
+        }
+        Some('$') => {
+            cmd_chars.next();
+            let offsets = parse_addr_offsets(cmd_chars)?;
+            Ok(Some(LineAddr::Dollar(offsets)))
+        }
+        Some('/') => {
+            cmd_chars.next();
+            let re = cmd_chars.by_ref().take_while(|c| *c != '/').collect();
+            let offsets = parse_addr_offsets(cmd_chars)?;
+            Ok(Some(LineAddr::Regex(re, offsets)))
+        }
+        Some('?') => {
+            cmd_chars.next();
+            let re = cmd_chars.by_ref().take_while(|c| *c != '?').collect();
+            let offsets = parse_addr_offsets(cmd_chars)?;
+            Ok(Some(LineAddr::RevRegex(re, offsets)))
+        }
+        Some('0'..='9') => {
+            let num = cmd_chars
+                .peeking_take_while(|c| c.is_ascii_digit())
+                .try_fold(0usize, |acc, c| {
+                    c.to_digit(10)
+                        .and_then(|d| acc.checked_mul(10).and_then(|n| n.checked_add(d as usize)))
+                })
+                .ok_or(ParseError::LineNumberTooLarge)?;
+            let offsets = parse_addr_offsets(cmd_chars)?;
+            Ok(Some(LineAddr::Num(num, offsets)))
+        }
+        Some('+' | '-') => {
+            let offsets = parse_addr_offsets(cmd_chars)?;
+            Ok(Some(LineAddr::Dot(offsets)))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -290,10 +290,32 @@ mod tests {
         }
 
         #[test]
+        fn blank_cmd_line() {
+            let input = "";
+            let res = input.parse::<Cmd>().expect("successful parse");
+            let expected = Cmd::Print(Some(AddrChain {
+                left: Some(LineAddr::Dot(vec![1])),
+                ..Default::default()
+            }));
+            assert_eq!(expected, res);
+        }
+
+        #[test]
+        fn offset_only_cmd() {
+            let input = "-";
+            let res = input.parse::<Cmd>().expect("successful parse");
+            let expected = Cmd::Print(Some(AddrChain {
+                left: Some(LineAddr::Dot(vec![-1])),
+                ..Default::default()
+            }));
+            assert_eq!(expected, res);
+        }
+
+        #[test]
         fn quit() {
             let input = "q";
-            let res = input.parse::<Cmd>().expect("should always parse ok");
-            assert!(matches!(res, Cmd::Quit));
+            let _res = input.parse::<Cmd>().expect("should always parse ok");
+            assert!(matches!(Cmd::Quit, _res));
         }
 
         #[test]
@@ -677,15 +699,6 @@ mod tests {
                 .err()
                 .expect("should be an error");
             assert_eq!(ParseError::OffsetTooSmall, _res);
-        }
-
-        #[test]
-        fn early_end_parsing_line_addr() {
-            let mut input = "".chars().peekable();
-            let _res = parse_line_addr(&mut input)
-                .err()
-                .expect("should be an error");
-            assert_eq!(ParseError::EarlyEnd, _res);
         }
 
         #[test]

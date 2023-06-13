@@ -68,6 +68,7 @@ where
                     return Ok(());
                 }
             }
+            Cmd::Print(_addr_chain) => todo!(),
         }
     }
 }
