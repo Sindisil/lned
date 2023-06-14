@@ -19,40 +19,49 @@ as well as provide a space to hash out design alternatives.
 
 ## Design thoughts
 
-Easiest option would be to clone ed and add some functionality to make it more
-productive (e.g., better join command, auto indent in input mode, some sort of
-wrap and/or justify, multiple buffers, useful prompt).
+### Dirty buffer
 
-Another option would be to try to make a non-modal line editor. The idea being
-that just typing would append text, and other commands would be accessed similarly
-to non-modal screen editors. Would therefor need to take input in raw mode or
-use a crate to do something similar so that hotkeys can be accepted.
+A buffer is dirty if:
+  * Changes have been made since last write
 
-Common commands would have their own hotkeys, less common commands might need to
-be accessed at a command promp (sometimes called a command pallette). Examples
-might be:
+What counts as a change?
+  * Insertions of text not undone
+  * Deletions of text not undone
+  * Substituions of text not undone
 
-ctrl+HOME = navigate to 0th line to allow input before first line.
-ctrl+END = navigate to last line and display it
-PgUp = equivalant of .-<WinSz>zn in ed (i.e., "scroll" WinSz lines, starting
-       back WinSz lines, leaving current_line as last line displayed
-ctrl+g = prompt for line number, set current_line to the specified line, display
-         it if it's not line 0.
-ctrl+shift+p = prompt for command
-Delete = delete current line
-DownArrow = if current_line isn't already last line, increment current_line and
-            display it.
+Does an insert followed by a delete of the same lines count? I don't think so, as that's
+equivalent to an undo, but how to tell?
 
-Upside: no modal input
-Downside: need raw mode, not amenable to scripting, possibly less discoverable
-          if modal editor has decent help & error messages (somewhat offset by
-          using CUA & other common key bindings, maybe).
+We'll create a hash at the start of a buffer session (new empty buffer or after initial
+read of file content), as well as a current_hash (initially the same as the initial_hash,
+obviously). When a command is executed that might cause the buffer to become dirty, the
+current_hash is recalculated. buffer.is_dirty() is then just:
 
-**Decision: continue with modal 'ed' clone with extensions, for two reasons:
-  1. Will continue to be useful for scripted editing once scrned is completed
-  2. Simpler to implement. Since lned is inteded as an experiment, not necessarily
-     a long term tool, that is the overriding consideration.
+impl EditBuffer {
+  fn is_dirty() -> bool {
+    initial_hash != current_hash
+  }
+}
 
+If we eventually add support for file watching, activity on the file could trigger
+recalculation of initial_hash from new file content.
+
+When a "file" command is executed, a new initial_hash should be calculated from
+the contents of the new file, if it exists.
+
+Variables considered:
+  * char count
+  * line count
+  * hash of content
+
+New buffer:
+  * char_count = 0;
+  * line_count = 0;
+  * hash = hash of empty line vec
+
+In case of no file on disk, *any* content beyond empty means dirty.
+
+"File on disk" is determined by default_file_name of buffer, so read from file,
 
 ## Data Types
 
