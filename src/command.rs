@@ -38,7 +38,7 @@ where
         PeekingTakeWhile { iter, pred }
     }
 
-    fn peek(&mut self) -> Option<&<I as Iterator>::Item> {
+    fn peek(&mut self) -> Option<&I::Item> {
         self.iter.peek()
     }
 }
@@ -78,13 +78,20 @@ struct PeekingSkipWhile<I, P> {
     done_skipping: bool,
 }
 
-impl<I, P> PeekingSkipWhile<I, P> {
+impl<I, P> PeekingSkipWhile<&mut iter::Peekable<I>, P>
+where
+    I: Iterator,
+{
     pub fn new(iter: I, pred: P) -> PeekingSkipWhile<I, P> {
         PeekingSkipWhile {
             iter,
             pred,
             done_skipping: false,
         }
+    }
+
+    pub fn peek(&mut self) -> Option<&I::Item> {
+        self.iter.peek()
     }
 }
 
