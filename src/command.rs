@@ -237,14 +237,7 @@ fn parse_addr_chain(
 fn parse_addr_separator(
     cmd_chars: &mut iter::Peekable<str::Chars>,
 ) -> Result<Option<AddrSeparator>, ParseError> {
-    while let Some(c) = cmd_chars.peek() {
-        if c.is_blank() {
-            cmd_chars.next();
-        } else {
-            break;
-        }
-    }
-    match cmd_chars.peek() {
+    match cmd_chars.peeking_skip_while(|c| c.is_blank()).peek() {
         Some(',') => {
             cmd_chars.next();
             Ok(Some(AddrSeparator::Comma))
@@ -260,14 +253,7 @@ fn parse_addr_separator(
 fn parse_line_addr(
     cmd_chars: &mut iter::Peekable<str::Chars>,
 ) -> Result<Option<LineAddr>, ParseError> {
-    while let Some(c) = cmd_chars.peek() {
-        if c.is_blank() {
-            cmd_chars.next();
-        } else {
-            break;
-        }
-    }
-    match cmd_chars.peek() {
+    match cmd_chars.peeking_skip_while(|c| c.is_blank()).peek() {
         Some('.') => {
             cmd_chars.next();
             let offsets = parse_addr_offsets(cmd_chars)?;
