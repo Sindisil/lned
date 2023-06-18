@@ -784,9 +784,18 @@ mod tests {
         }
 
         #[test]
-        fn parse_line_error_propegates_errors() {
+        fn parse_line_addr_propegates_errors() {
             let mut input = ".+9999999999999999999999999999n".chars().peekable();
             let _res = parse_line_addr(&mut input)
+                .err()
+                .expect("should be an error");
+            assert_eq!(ParseError::OffsetTooLarge, _res);
+        }
+
+        #[test]
+        fn parse_addr_chain_propegates_errors() {
+            let mut input = ".+9999999999999999999999999999n".chars().peekable();
+            let _res = parse_addr_chain(&mut input)
                 .err()
                 .expect("should be an error");
             assert_eq!(ParseError::OffsetTooLarge, _res);
