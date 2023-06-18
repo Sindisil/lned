@@ -212,7 +212,7 @@ fn parse_addr_chain(
     cmd_chars: &mut iter::Peekable<str::Chars>,
 ) -> Result<Option<AddrChain>, ParseError> {
     let left = parse_line_addr(cmd_chars)?;
-    let separator = parse_addr_separator(cmd_chars)?;
+    let separator = parse_addr_separator(cmd_chars);
     if separator.is_none() {
         if left.is_none() {
             Ok(None)
@@ -234,19 +234,17 @@ fn parse_addr_chain(
     }
 }
 
-fn parse_addr_separator(
-    cmd_chars: &mut iter::Peekable<str::Chars>,
-) -> Result<Option<AddrSeparator>, ParseError> {
+fn parse_addr_separator(cmd_chars: &mut iter::Peekable<str::Chars>) -> Option<AddrSeparator> {
     match cmd_chars.peeking_skip_while(|c| c.is_blank()).peek() {
         Some(',') => {
             cmd_chars.next();
-            Ok(Some(AddrSeparator::Comma))
+            Some(AddrSeparator::Comma)
         }
         Some(';') => {
             cmd_chars.next();
-            Ok(Some(AddrSeparator::Semicolon))
+            Some(AddrSeparator::Semicolon)
         }
-        _ => Ok(None),
+        _ => None,
     }
 }
 
@@ -593,7 +591,7 @@ mod tests {
         fn comma_addr_separator() {
             let mut input = ",n".chars().peekable();
             let _res = parse_addr_separator(&mut input);
-            assert_eq!(Ok(Some(AddrSeparator::Comma)), _res);
+            assert_eq!(Some(AddrSeparator::Comma), _res);
             assert_eq!("n", input.collect::<String>());
         }
 
@@ -601,7 +599,7 @@ mod tests {
         fn semicolon_addr_separator() {
             let mut input = ";n".chars().peekable();
             let _res = parse_addr_separator(&mut input);
-            assert_eq!(Ok(Some(AddrSeparator::Semicolon)), _res);
+            assert_eq!(Some(AddrSeparator::Semicolon), _res);
             assert_eq!("n", input.collect::<String>());
         }
 
