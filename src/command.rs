@@ -361,6 +361,23 @@ mod tests {
         }
 
         #[test]
+        fn parse_cmd_propegates_errors() {
+            let mut input = ".+9999999999999999999999999999n".chars().peekable();
+            let _res = parse_cmd(&mut input).err().expect("should be an error");
+            assert_eq!(ParseError::OffsetTooLarge, _res);
+        }
+
+        #[test]
+        fn parse_propegates_errors() {
+            let input = ".+9999999999999999999999999999n";
+            let res = input
+                .parse::<Cmd>()
+                .err()
+                .expect("should always be an error");
+            assert_eq!(ParseError::OffsetTooLarge, res);
+        }
+
+        #[test]
         fn blank_cmd_line() {
             let input = "\n";
             let res = input.parse::<Cmd>().expect("successful parse");
