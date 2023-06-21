@@ -2,6 +2,8 @@ use regex::Regex;
 use std::cmp::Ordering;
 use std::fmt;
 use std::io::{self, prelude::*};
+use std::ops;
+use std::slice;
 use std::ops::Deref;
 use std::path;
 
@@ -45,6 +47,17 @@ impl From<Vec<&str>> for EditBuffer {
         let mut value = value.iter().map(|v| v.to_string()).collect::<Vec<String>>();
         buf.text.append(&mut value);
         buf
+    }
+}
+
+impl<I> ops::Index<I> for EditBuffer
+where
+    I: slice::SliceIndex<[String]>,
+{
+    type Output = <I as slice::SliceIndex<[String]>>::Output;
+
+    fn index(&self, index: I) -> &Self::Output {
+        &self.text.index(index)
     }
 }
 
@@ -245,6 +258,17 @@ mod tests {
     fn buffer_with_capacity_has_zero_len() {
         let buffer = EditBuffer::with_capacity(1024);
         assert_eq!(0, buffer.len());
+    }
+
+    ////
+    // Index tests
+
+    #[test]
+    fn index_returns_expected_slice() {
+        let buf = EditBuffer::from(vec!["line 1", "line 2", "line 3"]);
+        assert_eq!("line 1", buf[0]);
+        assert_eq!("line 3", buf[2]);
+        assert_eq!(vec!["line 2", "line 3"], buf[1..]);
     }
 
     ////
