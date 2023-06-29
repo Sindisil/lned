@@ -12,7 +12,7 @@ pub enum Error {
     ReadCommand(io::Error),
     /// I/O Error reading input lines
     ReadLines(io::Error),
-    ParseCmd(command::ParseError),
+    ParseCmd(command::Error),
     Other(String),
 }
 
@@ -36,10 +36,10 @@ where
     W: Write,
 {
     // Initialize Buffers
-    let buffers = initialize_buffers(args)?;
+    let mut buffers = initialize_buffers(args)?;
 
     // Initialize context (e.g., current buffer)
-    let mut _current_buffer = 0;
+    let current_buffer = 0;
     let mut cmd_buf = String::new();
     let mut prev_command: Option<Cmd> = None;
 
@@ -52,8 +52,19 @@ where
         cmd_buf.clear();
         read_command(&mut input, &mut cmd_buf)?;
 
+        // eval address
+        let mut cmd_iter = cmd_buf.chars().peekable();
+        let address = command::eval_address(&mut cmd_iter, &mut buffers[current_buffer]);
+
+        // handle possible error
+        if let Err(e) = address {
+            eprintln!("{e}");
+            continue;
+        }
+        let address = address.unwrap(); // just checked that it's not an Err
+
         // parse command
-        let cmd = cmd_buf.parse::<Cmd>().map_err(Error::ParseCmd);
+        let cmd = Cmd::parse(&mut cmd_iter, &buffers[current_buffer], address);
 
         // handle possible parse error
         if let Err(e) = cmd {

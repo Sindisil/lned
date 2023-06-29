@@ -1,7 +1,9 @@
+mod char_utils;
 mod cli;
 mod command;
 mod edit_buffer;
 mod main_loop;
+mod peeking;
 
 use std::io;
 

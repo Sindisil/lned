@@ -1,11 +1,11 @@
 use regex::Regex;
 use std::cmp::Ordering;
 use std::fmt;
-use std::io::{self, prelude::*};
+use std::io;
 use std::ops;
-use std::slice;
 use std::ops::Deref;
 use std::path;
+use std::slice;
 
 pub struct EditBuffer {
     text: Vec<String>,
@@ -226,7 +226,7 @@ mod tests {
 
     struct BadReader {}
 
-    impl Read for BadReader {
+    impl io::Read for BadReader {
         fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
             Err(io::Error::from(io::ErrorKind::Other))
         }
