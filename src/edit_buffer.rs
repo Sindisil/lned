@@ -7,10 +7,11 @@ use std::ops::Deref;
 use std::path;
 use std::slice;
 
+#[derive(Debug, PartialEq)]
 pub struct EditBuffer {
     text: Vec<String>,
     needs_write: bool,
-    cur_line: usize,
+    current_line: usize,
     default_filename: Option<path::PathBuf>,
     default_eol: Option<&'static str>,
 }
@@ -46,6 +47,7 @@ impl From<Vec<&str>> for EditBuffer {
         let mut buf = EditBuffer::with_capacity(value.len());
         let mut value = value.iter().map(|v| v.to_string()).collect::<Vec<String>>();
         buf.text.append(&mut value);
+        buf.current_line = buf.text.len().saturating_sub(1);
         buf
     }
 }
@@ -57,7 +59,7 @@ where
     type Output = <I as slice::SliceIndex<[String]>>::Output;
 
     fn index(&self, index: I) -> &Self::Output {
-        &self.text.index(index)
+        self.text.index(index)
     }
 }
 
@@ -73,7 +75,7 @@ impl EditBuffer {
         EditBuffer {
             text: Vec::new(),
             needs_write: false,
-            cur_line: 0,
+            current_line: 0,
             default_filename: None,
             default_eol: None,
         }
@@ -100,6 +102,13 @@ impl EditBuffer {
         }
     }
 
+    /// Builder for constructing an EditBuffer, to allow for more complex and
+    /// specific configuration.
+    #[must_use]
+    pub fn builder<'a>() -> EditBufferBuilder<'a> {
+        EditBufferBuilder::default()
+    }
+
     /// Returns this `EditBuffer`'s capacity, in bytes.
     pub fn capacity(&self) -> usize {
         self.text.capacity()
@@ -117,6 +126,10 @@ impl EditBuffer {
     /// Returns true if buffer has been changed since last write.
     pub fn needs_write(&self) -> bool {
         self.needs_write
+    }
+
+    pub fn current_line(&self) -> usize {
+        self.current_line
     }
 
     /// Reads lines from reader into the buffer at the specified line.
@@ -181,7 +194,8 @@ impl EditBuffer {
         // actually add new lines to buffer
         self.text.splice(at_line..at_line, lines.into_iter());
         self.needs_write = true;
-        Ok(at_line + lines_added - 1)
+        self.current_line = at_line + lines_added - 1;
+        Ok(self.current_line)
     }
 }
 
@@ -217,6 +231,50 @@ where
         Ordering::Greater => "\r\n",
         Ordering::Less => "\n",
         _ => native_eol,
+    }
+}
+
+#[derive(Default)]
+pub struct EditBufferBuilder<'a> {
+    text: Vec<&'a str>,
+    current_line: Option<usize>,
+    capacity: Option<usize>,
+}
+
+impl<'a> EditBufferBuilder<'a> {
+    pub fn new() -> EditBufferBuilder<'a> {
+        EditBufferBuilder::default()
+    }
+
+    pub fn capacity(&'a mut self, capacity: usize) -> &mut EditBufferBuilder<'a> {
+        self.capacity = Some(capacity);
+        self
+    }
+
+    pub fn current_line(&'a mut self, current_line: usize) -> &mut EditBufferBuilder<'a> {
+        self.current_line = Some(current_line);
+        self
+    }
+
+    pub fn text(&'a mut self, text: Vec<&'a str>) -> &mut EditBufferBuilder<'a> {
+        self.text = text;
+        self
+    }
+
+    pub fn build(&self) -> EditBuffer {
+        let mut buffer = if let Some(capacity) = self.capacity {
+            EditBuffer::with_capacity(capacity)
+        } else if !self.text.is_empty() {
+            EditBuffer::from(self.text.to_owned())
+        } else {
+            EditBuffer::new()
+        };
+
+        if let Some(current_line) = self.current_line {
+            buffer.current_line = current_line;
+        }
+
+        buffer
     }
 }
 
@@ -258,6 +316,16 @@ mod tests {
     fn buffer_with_capacity_has_zero_len() {
         let buffer = EditBuffer::with_capacity(1024);
         assert_eq!(0, buffer.len());
+    }
+
+    ////
+    // Builder tests
+
+    #[test]
+    fn bare_builder_same_as_default() {
+        let expected = EditBuffer::new();
+        let res = EditBuffer::builder().build();
+        assert_eq!(expected, res);
     }
 
     ////

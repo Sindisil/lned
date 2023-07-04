@@ -73,6 +73,9 @@ where
         }
 
         // execute command
+        //   Commands that act on text in buffers or on an individual buffer state are
+        //   passed on to the current buffer to execute. Commands that act on editor state
+        //   (e.g., quit, edit, buffer) are executed directly here.
         match cmd.unwrap() {
             Cmd::Quit => {
                 if ok_to_exit(&mut prev_command, &buffers) {
