@@ -1,11 +1,14 @@
+// EditBuffer keeps track of everything specific to a single buffer in the
+// editor. All public interface uses one based indexing, and any such function
+// is responsible for translating into the 0 based indexing of the Vec<String>
+// containing the lines of text.
+
 use regex::Regex;
 use std::cmp::Ordering;
 use std::fmt;
 use std::io;
-use std::ops;
 use std::ops::Deref;
 use std::path;
-use std::slice;
 
 #[derive(Debug, PartialEq)]
 pub struct EditBuffer {
@@ -20,6 +23,7 @@ pub struct EditBuffer {
 pub enum Error {
     Read(io::Error),
     ReadBadIndex(usize, usize),
+    InvalidIndex,
 }
 
 impl std::error::Error for Error {}
@@ -32,6 +36,7 @@ impl fmt::Display for Error {
                 f,
                 "error reading lines: location {i} beyond end of buffer {sz}"
             ),
+            Error::InvalidIndex => write!(f, "invalid index"),
         }
     }
 }
@@ -47,19 +52,8 @@ impl From<Vec<&str>> for EditBuffer {
         let mut buf = EditBuffer::with_capacity(value.len());
         let mut value = value.iter().map(|v| v.to_string()).collect::<Vec<String>>();
         buf.text.append(&mut value);
-        buf.current_line = buf.text.len().saturating_sub(1);
+        buf.current_line = buf.text.len();
         buf
-    }
-}
-
-impl<I> ops::Index<I> for EditBuffer
-where
-    I: slice::SliceIndex<[String]>,
-{
-    type Output = <I as slice::SliceIndex<[String]>>::Output;
-
-    fn index(&self, index: I) -> &Self::Output {
-        self.text.index(index)
     }
 }
 
@@ -102,13 +96,7 @@ impl EditBuffer {
         }
     }
 
-    /// Builder for constructing an EditBuffer, to allow for more complex and
-    /// specific configuration.
     #[must_use]
-    pub fn builder<'a>() -> EditBufferBuilder<'a> {
-        EditBufferBuilder::default()
-    }
-
     /// Returns this `EditBuffer`'s capacity, in bytes.
     pub fn capacity(&self) -> usize {
         self.text.capacity()
@@ -130,6 +118,15 @@ impl EditBuffer {
 
     pub fn current_line(&self) -> usize {
         self.current_line
+    }
+
+    pub fn set_current_line(&mut self, line: usize) -> Result<(), Error> {
+        if line == 0 || line > self.text.len() {
+            Err(Error::InvalidIndex)
+        } else {
+            self.current_line = line;
+            Ok(())
+        }
     }
 
     /// Reads lines from reader into the buffer at the specified line.
@@ -194,7 +191,7 @@ impl EditBuffer {
         // actually add new lines to buffer
         self.text.splice(at_line..at_line, lines.into_iter());
         self.needs_write = true;
-        self.current_line = at_line + lines_added - 1;
+        self.current_line = at_line + lines_added;
         Ok(self.current_line)
     }
 }
@@ -231,50 +228,6 @@ where
         Ordering::Greater => "\r\n",
         Ordering::Less => "\n",
         _ => native_eol,
-    }
-}
-
-#[derive(Default)]
-pub struct EditBufferBuilder<'a> {
-    text: Vec<&'a str>,
-    current_line: Option<usize>,
-    capacity: Option<usize>,
-}
-
-impl<'a> EditBufferBuilder<'a> {
-    pub fn new() -> EditBufferBuilder<'a> {
-        EditBufferBuilder::default()
-    }
-
-    pub fn capacity(&'a mut self, capacity: usize) -> &mut EditBufferBuilder<'a> {
-        self.capacity = Some(capacity);
-        self
-    }
-
-    pub fn current_line(&'a mut self, current_line: usize) -> &mut EditBufferBuilder<'a> {
-        self.current_line = Some(current_line);
-        self
-    }
-
-    pub fn text(&'a mut self, text: Vec<&'a str>) -> &mut EditBufferBuilder<'a> {
-        self.text = text;
-        self
-    }
-
-    pub fn build(&self) -> EditBuffer {
-        let mut buffer = if let Some(capacity) = self.capacity {
-            EditBuffer::with_capacity(capacity)
-        } else if !self.text.is_empty() {
-            EditBuffer::from(self.text.to_owned())
-        } else {
-            EditBuffer::new()
-        };
-
-        if let Some(current_line) = self.current_line {
-            buffer.current_line = current_line;
-        }
-
-        buffer
     }
 }
 
@@ -316,27 +269,6 @@ mod tests {
     fn buffer_with_capacity_has_zero_len() {
         let buffer = EditBuffer::with_capacity(1024);
         assert_eq!(0, buffer.len());
-    }
-
-    ////
-    // Builder tests
-
-    #[test]
-    fn bare_builder_same_as_default() {
-        let expected = EditBuffer::new();
-        let res = EditBuffer::builder().build();
-        assert_eq!(expected, res);
-    }
-
-    ////
-    // Index tests
-
-    #[test]
-    fn index_returns_expected_slice() {
-        let buf = EditBuffer::from(vec!["line 1", "line 2", "line 3"]);
-        assert_eq!("line 1", buf[0]);
-        assert_eq!("line 3", buf[2]);
-        assert_eq!(vec!["line 2", "line 3"], buf[1..]);
     }
 
     ////
@@ -403,9 +335,22 @@ mod tests {
                     .read($at, &input[..])
                     .expect("Error reading added lines");
 
-                assert_eq!($expect, buffer.text);
-                assert_eq!($last_read, last_read);
-                    assert_eq!(true, buffer.needs_write());
+                assert_eq!($expect,
+                        buffer.text,
+                        "expected text: {:?}, got {:?}", $expect, &buffer.text
+                );
+                assert_eq!($last_read,
+                        last_read,
+                        "expected last_read {}, got {}", $last_read, last_read
+                );
+                assert_eq!(true,
+                        buffer.needs_write(),
+                        "expected buffer needs write, got {}", buffer.needs_write()
+                );
+                assert_eq!($last_read,
+                        buffer.current_line(),
+                        "expected current_line: {}, got {}", $last_read, buffer.current_line()
+                );
             }
         };
     }
@@ -416,7 +361,7 @@ mod tests {
         added: vec!["Line1\n", "Line2\n", "Line3\n",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3\n",],
-        last line read: 2,
+        last line read: 3,
     }
 
     read_test! {
@@ -425,7 +370,7 @@ mod tests {
         added: vec!["Line1\n", "Line2\n", "Line3",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3",],
-        last line read: 2,
+        last line read: 3,
     }
 
     read_test! {
@@ -436,7 +381,7 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
         ],
-        last line read: 5,
+        last line read: 6,
     }
 
     read_test! {
@@ -447,7 +392,7 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\r\n", "Line3\n", "Line4\n", "New1\n", "New2\n", "New3",
         ],
-        last line read: 6,
+        last line read: 7,
     }
 
     read_test! {
@@ -458,7 +403,7 @@ mod tests {
         expect: vec![
             "Line1\r\n", "Line2\r\n", "Line3\n", "Line4\r\n", "New1\r\n", "New2\n", "New3",
         ],
-        last line read: 6,
+        last line read: 7,
     }
 
     read_test! {
@@ -469,7 +414,7 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
         ],
-        last line read: 5,
+        last line read: 6,
     }
 
     read_test! {
@@ -480,7 +425,7 @@ mod tests {
         expect: vec![
             "Line1\r\n", "Line2\r\n", "Line3\r\n", "New1\r\n", "New2\r\n", "New3\r\n",
         ],
-        last line read: 5,
+        last line read: 6,
     }
 
     #[test]
@@ -506,7 +451,7 @@ mod tests {
             "New3",
         ];
         assert_eq!(expect, buffer.text);
-        assert_eq!(5, last_read);
+        assert_eq!(6, last_read);
         assert_eq!(true, buffer.needs_write());
     }
 
@@ -518,7 +463,7 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     read_test! {
@@ -535,7 +480,7 @@ mod tests {
             "Line3\n",
             "Line4\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     read_test! {
@@ -552,7 +497,7 @@ mod tests {
             "Line3\n",
             "Line4\r\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     read_test! {
@@ -569,7 +514,7 @@ mod tests {
             "Line3\n",
             "Line4\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     read_test! {
@@ -586,7 +531,7 @@ mod tests {
             "Line3\r\n",
             "Line4\r\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     #[test]
@@ -613,7 +558,7 @@ mod tests {
             "Line4\r\n",
         ];
         assert_eq!(expect, buffer.text);
-        assert_eq!(4, last_read);
+        assert_eq!(5, last_read);
         assert_eq!(true, buffer.needs_write());
     }
 

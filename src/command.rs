@@ -15,14 +15,14 @@ pub enum Cmd {
     Print(Option<Address>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Error {
     Unknown(String),
     UnexpectedAddress,
     OffsetTooLarge,
     OffsetTooSmall,
     OffsetOverflow,
-    LineNumberTooLarge,
+    InvalidLineNumber,
 }
 
 impl std::error::Error for Error {}
@@ -35,7 +35,7 @@ impl fmt::Display for Error {
             Error::OffsetTooLarge => write!(f, "Offset too large"),
             Error::OffsetOverflow => write!(f, "Overflow computing offset"),
             Error::OffsetTooSmall => write!(f, "Offset too small"),
-            Error::LineNumberTooLarge => write!(f, "Line number too large"),
+            Error::InvalidLineNumber => write!(f, "invalid line number:"),
         }
     }
 }
@@ -74,17 +74,39 @@ pub fn eval_address(
     let separator = parse_separator(cmd_chars);
     match separator {
         None => Ok(addr.map(Address::Line)),
-        Some(sep) => eval_addr_chain(cmd_chars, buffer, addr, sep),
+        Some(sep) => Ok(Some(eval_addr_chain(cmd_chars, buffer, addr, sep)?)),
     }
 }
 
 fn eval_addr_chain(
-    _cmd_chars: &mut iter::Peekable<str::Chars>,
-    _buffer: &mut EditBuffer,
-    _left: Option<usize>,
-    _separator: Separator,
-) -> Result<Option<Address>, Error> {
-    todo!();
+    cmd_chars: &mut iter::Peekable<str::Chars>,
+    buffer: &mut EditBuffer,
+    left: Option<usize>,
+    separator: Separator,
+) -> Result<Address, Error> {
+    let right =
+        eval_line_addr(cmd_chars, buffer)?.unwrap_or_else(|| left.unwrap_or_else(|| buffer.len()));
+    let left = match left {
+        Some(left) => {
+            if separator == Separator::Semicolon {
+                buffer
+                    .set_current_line(left)
+                    .map_err(|_| Error::InvalidLineNumber)?;
+            }
+            left
+        }
+        None => match separator {
+            Separator::Semicolon => buffer.current_line(),
+            Separator::Comma => 1,
+        },
+    };
+
+    let next_separator = parse_separator(cmd_chars);
+
+    Ok(match next_separator {
+        None => Address::Span(left, right),
+        Some(separator) => eval_addr_chain(cmd_chars, buffer, Some(right), separator)?,
+    })
 }
 
 fn parse_separator(cmd_chars: &mut iter::Peekable<str::Chars>) -> Option<Separator> {
@@ -111,7 +133,7 @@ fn eval_line_addr(
             let offset = eval_addr_offsets(cmd_chars)?;
             let line = buffer
                 .current_line()
-                .checked_add_signed(offset + 1)
+                .checked_add_signed(offset)
                 .ok_or(Error::OffsetOverflow)?;
             Ok(Some(line))
         }
@@ -143,7 +165,7 @@ fn eval_line_addr(
                     c.to_digit(10)
                         .and_then(|d| acc.checked_mul(10).and_then(|n| n.checked_add(d as usize)))
                 })
-                .ok_or(Error::LineNumberTooLarge)?;
+                .ok_or(Error::InvalidLineNumber)?;
             let offset = eval_addr_offsets(cmd_chars)?;
             let line = num
                 .checked_add_signed(offset)
@@ -154,9 +176,13 @@ fn eval_line_addr(
             let offset = eval_addr_offsets(cmd_chars)?;
             let line = buffer
                 .current_line()
-                .checked_add_signed(offset + 1)
-                .ok_or(Error::OffsetOverflow)?;
-            Ok(Some(line))
+                .checked_add_signed(offset)
+                .ok_or(Error::InvalidLineNumber)?;
+            if line > buffer.len() {
+                Err(Error::InvalidLineNumber)
+            } else {
+                Ok(Some(line))
+            }
         }
         _ => Ok(None),
     }
@@ -326,10 +352,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn dot_line_addr() {
-        let _input = ".n".chars().peekable();
-        todo!();
+        let buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        let mut input = ".n".chars().peekable();
+        let res = eval_line_addr(&mut input, &buffer).expect("successful line addr eval");
+        assert_eq!(Some(buffer.current_line()), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
@@ -391,10 +419,22 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn plus_line_addr() {
-        let _input = "+n".chars().peekable();
-        todo!();
+        let mut input = "+n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        buffer.set_current_line(2).expect("no error");
+        let res = eval_line_addr(&mut input, &buffer).expect("successful line addr eval");
+        assert_eq!(Some(3usize), res);
+        assert_eq!("n", input.collect::<String>());
+    }
+
+    #[test]
+    fn plus_line_addr_overflow() {
+        let mut input = "+n".chars().peekable();
+        let buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        let _res = eval_line_addr(&mut input, &buffer).expect_err("should overflow");
+        assert!(matches!(Error::InvalidLineNumber, _res));
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
@@ -557,7 +597,7 @@ mod tests {
         let _res = eval_addr_offsets(&mut input)
             .err()
             .expect("should be an error");
-        assert_eq!(Error::OffsetTooSmall, _res);
+        assert!(matches!(Error::OffsetTooSmall, _res));
     }
 
     #[test]
