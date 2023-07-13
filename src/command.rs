@@ -15,7 +15,7 @@ pub enum Cmd {
     Print(Option<Address>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
     Unknown(String),
     UnexpectedAddress,
@@ -33,9 +33,9 @@ impl fmt::Display for Error {
             Error::UnexpectedAddress => write!(f, "Command takes no line address."),
             Error::Unknown(s) => write!(f, "Unknown command '{s}'"),
             Error::OffsetTooLarge => write!(f, "Offset too large"),
-            Error::OffsetOverflow => write!(f, "Overflow computing offset"),
+            Error::OffsetOverflow => write!(f, "Offset results in invalid line number"),
             Error::OffsetTooSmall => write!(f, "Offset too small"),
-            Error::InvalidLineNumber => write!(f, "invalid line number:"),
+            Error::InvalidLineNumber => write!(f, "invalid line number"),
         }
     }
 }
@@ -43,9 +43,10 @@ impl fmt::Display for Error {
 impl Cmd {
     pub fn parse(
         cmd_chars: &mut iter::Peekable<str::Chars>,
-        _buffer: &EditBuffer,
-        address: Option<Address>,
+        buffer: &mut EditBuffer,
     ) -> Result<Cmd, Error> {
+        // eval address
+        let address = eval_address(cmd_chars, buffer)?;
         match cmd_chars.peek() {
             None | Some('\n') | Some('\r') => Ok(Cmd::Null(address)),
             Some('q') => address.map_or(Ok(Cmd::Quit), |_| Err(Error::UnexpectedAddress)),
@@ -84,22 +85,20 @@ fn eval_addr_chain(
     left: Option<usize>,
     separator: Separator,
 ) -> Result<Address, Error> {
+    // set current_line if left has a value
+    match left {
+        Some(left) if separator == Separator::Semicolon => buffer
+            .set_current_line(left)
+            .map_err(|_| Error::InvalidLineNumber)?,
+        _ => (),
+    }
+
     let right =
         eval_line_addr(cmd_chars, buffer)?.unwrap_or_else(|| left.unwrap_or_else(|| buffer.len()));
-    let left = match left {
-        Some(left) => {
-            if separator == Separator::Semicolon {
-                buffer
-                    .set_current_line(left)
-                    .map_err(|_| Error::InvalidLineNumber)?;
-            }
-            left
-        }
-        None => match separator {
-            Separator::Semicolon => buffer.current_line(),
-            Separator::Comma => 1,
-        },
-    };
+    let left = left.unwrap_or_else(|| match separator {
+        Separator::Semicolon => buffer.current_line(),
+        Separator::Comma => 1,
+    });
 
     let next_separator = parse_separator(cmd_chars);
 
@@ -251,9 +250,9 @@ mod tests {
 
     #[test]
     fn unknown_command_gives_error() {
-        let mut input = "o\n".chars().peekable();
+        let mut input = "~n".chars().peekable();
         let mut buffer = EditBuffer::new();
-        let res = Cmd::parse(&mut input, &mut buffer, None)
+        let res = Cmd::parse(&mut input, &mut buffer)
             .err()
             .expect("an error indicating an unknown command");
         assert!(matches!(res, Error::Unknown(_)));
@@ -261,38 +260,45 @@ mod tests {
 
     #[test]
     fn blank_cmd_line() {
-        let mut buffer = EditBuffer::new();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        buffer.set_current_line(2).expect("current line set");
         let mut input = "\n".chars().peekable();
-        let res = Cmd::parse(&mut input, &mut buffer, None).expect("a successful parse");
+        let res = Cmd::parse(&mut input, &mut buffer).expect("a successful parse");
         assert_eq!(Cmd::Null(None), res);
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn blank_cmd_line_crlf() {
-        let _input = "\r\n";
-        todo!();
+        let mut input = "\r\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(2).expect("current line set");
+        let res = Cmd::parse(&mut input, &mut buffer).expect("parsed command");
+        assert_eq!(Cmd::Null(None), res);
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn offset_only_cmd() {
-        let _input = "-\n";
-        todo!();
+        let mut input = "-\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        assert_eq!(3, buffer.current_line());
+        let res = Cmd::parse(&mut input, &mut buffer).expect("parsed command");
+        assert_eq!(Cmd::Null(Some(Address::Line(2))), res);
     }
 
     #[test]
     fn quit() {
         let mut buffer = EditBuffer::new();
         let mut input = "q\n".chars().peekable();
-        let res = Cmd::parse(&mut input, &mut buffer, None).expect("a successful parse");
+        let res = Cmd::parse(&mut input, &mut buffer).expect("a successful parse");
         assert_eq!(Cmd::Quit, res);
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn quit_with_illegal_addr() {
-        todo!();
+        let mut input = "2,3q\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4"]);
+        let res = Cmd::parse(&mut input, &mut buffer).expect_err("unexpected addr on quit");
+        assert_eq!(Error::UnexpectedAddress, res);
     }
 
     #[test]
@@ -361,10 +367,13 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn dot_line_addr_with_offset() {
-        let _input = ".+2n".chars().peekable();
-        todo!();
+        let mut input = ".+2n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four"]);
+        buffer.set_current_line(2usize).expect("no error");
+        let res = eval_line_addr(&mut input, &buffer).expect("no error");
+        assert_eq!(Some(4usize), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
@@ -387,7 +396,8 @@ mod tests {
 
     #[test]
     fn dollar_line_addr_with_offset() {
-        let buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(3).expect("current line set");
         let mut input = "$-2n".chars().peekable();
         let res = eval_line_addr(&mut input, &buffer).expect("successful eval of line addr");
         assert_eq!(Some(4usize), res);
@@ -438,19 +448,26 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn plus_num_line_addr() {
-        let buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        buffer.set_current_line(1usize).expect("no error");
         let mut input = "+2n".chars().peekable();
-        let _res = eval_line_addr(&mut input, &buffer).expect("successful line addr eval");
-        todo!();
+        let res = eval_line_addr(&mut input, &buffer).expect("successful line addr eval");
+        assert_eq!(Some(3usize), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn plus_line_addr_with_offsets() {
-        let _input = "+++5n".chars().peekable();
-        todo!();
+        let mut input = "+++3n".chars().peekable();
+        let mut buffer =
+            EditBuffer::from(vec!["one", "two", "three", "four", "five", "six", "seven"]);
+        buffer
+            .set_current_line(2usize)
+            .expect("no error setting current line");
+        let res = eval_line_addr(&mut input, &buffer).expect("successful line_addr eval");
+        assert_eq!(Some(7usize), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
@@ -515,72 +532,123 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn empty_addr_chain() {
-        let _input = "n".chars().peekable();
-        todo!();
+        let mut input = "n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert!(res.is_none());
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn comma_addr_chain() {
-        let _input = ",n".chars().peekable();
-        todo!();
+        let mut input = ",n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        buffer.set_current_line(2).expect("current line set");
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert_eq!(2, buffer.current_line());
+        assert_eq!(Some(Address::Span(1, 3)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn comma_left_addr_chain() {
-        todo!();
+        let mut input = "3,n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(2).expect("current line set");
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert_eq!(2, buffer.current_line());
+        assert_eq!(Some(Address::Span(3, 3)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn comma_right_addr_chain() {
-        let _input = ",10n".chars().peekable();
-        todo!();
+        let mut input = ",5n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(4).expect("current line set");
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert_eq!(4, buffer.current_line());
+        assert_eq!(Some(Address::Span(1, 5)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn comma_full_addr_chain() {
-        let _input = "2,10n".chars().peekable();
-        todo!();
+        let mut input = "2,5n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(4).expect("current line set");
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert_eq!(4, buffer.current_line());
+        assert_eq!(Some(Address::Span(2, 5)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn semicolon_addr_chain() {
-        let _input = ";n".chars().peekable();
-        todo!();
+        let mut input = ";n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        buffer.set_current_line(2).expect("current line set");
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert_eq!(2, buffer.current_line());
+        assert_eq!(Some(Address::Span(2, 3)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
+    fn semicolon_addr_chain_current_line_last() {
+        let mut input = ";n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert_eq!(3, buffer.current_line());
+        assert_eq!(Some(Address::Span(3, 3)), res);
+        assert_eq!("n", input.collect::<String>());
+    }
+
+    #[test]
     fn semicolon_addr_chain_with_offsets() {
-        let _input = "$-50;+32n".chars().peekable();
-        todo!();
+        let mut input = "$-4;+3n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5).expect("current line set");
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert_eq!(2, buffer.current_line());
+        assert_eq!(Some(Address::Span(2, 5)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn semicolon_left_addr_chain() {
-        let _input = "10;n".chars().peekable();
-        todo!();
+        let mut input = "3;n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(2).expect("current line set");
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert_eq!(3, buffer.current_line());
+        assert_eq!(Some(Address::Span(3, 3)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn semicolon_right_addr_chain() {
-        let _input = ";10n".chars().peekable();
-        todo!();
+        let mut input = ";5n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3).expect("current line set");
+        let res = eval_address(&mut input, &mut buffer).expect("evaluated address");
+        assert_eq!(3, buffer.current_line());
+        assert_eq!(Some(Address::Span(3, 5)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn semicolon_full_addr_chain() {
-        let _input = "2;10n".chars().peekable();
-        todo!();
+        let mut input = "2;10n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec![
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "11",
+        ]);
+        assert_eq!(11usize, buffer.current_line());
+        let res = eval_address(&mut input, &mut buffer).expect("successful address eval");
+        assert_eq!(2usize, buffer.current_line());
+        assert_eq!(Some(Address::Span(2usize, 10usize)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
@@ -594,23 +662,26 @@ mod tests {
     #[test]
     fn offset_too_small() {
         let mut input = "-999999999999999999999999999".chars().peekable();
-        let _res = eval_addr_offsets(&mut input)
-            .err()
-            .expect("should be an error");
+        let _res = eval_addr_offsets(&mut input).err().expect("an error");
         assert!(matches!(Error::OffsetTooSmall, _res));
     }
 
     #[test]
-    #[ignore = "todo!"]
-    fn parse_line_addr_propegates_errors() {
-        let _input = ".+9999999999999999999999999999n".chars().peekable();
-        todo!();
+    fn eval_line_addr_propegates_errors() {
+        let mut input = ".+9999999999999999999999999999n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        buffer.set_current_line(1).expect("valid line number");
+        let res = eval_line_addr(&mut input, &buffer).expect_err("OffsetTooLarge");
+        assert_eq!(Error::OffsetTooLarge, res);
     }
 
     #[test]
-    #[ignore = "todo!"]
-    fn parse_addr_chain_propegates_errors() {
-        let _input = ".+9999999999999999999999999999n".chars().peekable();
-        todo!();
+    fn eval_addr_chain_propegates_errors() {
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        buffer.set_current_line(1usize).expect("no error");
+        let mut input = ".+9999999999999999999999999999n".chars().peekable();
+        let res = eval_addr_chain(&mut input, &mut buffer, None, Separator::Comma)
+            .expect_err("OffsetTooLarge");
+        assert_eq!(Error::OffsetTooLarge, res);
     }
 }

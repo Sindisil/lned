@@ -52,21 +52,11 @@ where
         cmd_buf.clear();
         read_command(&mut input, &mut cmd_buf)?;
 
-        // eval address
-        let mut cmd_iter = cmd_buf.chars().peekable();
-        let address = command::eval_address(&mut cmd_iter, &mut buffers[current_buffer]);
+        // parse command
+        let mut cmd_chars = cmd_buf.chars().peekable();
+        let cmd = Cmd::parse(&mut cmd_chars, &mut buffers[current_buffer]);
 
         // handle possible error
-        if let Err(e) = address {
-            eprintln!("{e}");
-            continue;
-        }
-        let address = address.unwrap(); // just checked that it's not an Err
-
-        // parse command
-        let cmd = Cmd::parse(&mut cmd_iter, &buffers[current_buffer], address);
-
-        // handle possible parse error
         if let Err(e) = cmd {
             eprintln!("{e}");
             continue;

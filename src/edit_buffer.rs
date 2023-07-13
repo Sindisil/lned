@@ -189,7 +189,7 @@ impl EditBuffer {
         }
 
         // actually add new lines to buffer
-        self.text.splice(at_line..at_line, lines.into_iter());
+        self.text.splice(at_line..at_line, lines);
         self.needs_write = true;
         self.current_line = at_line + lines_added;
         Ok(self.current_line)

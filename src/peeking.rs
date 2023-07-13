@@ -121,6 +121,8 @@ where
         PeekingSkipWhile::new(self, pred)
     }
 }
+#[cfg(test)]
+
 mod tests {
     use super::*;
     use crate::char_utils::CharUtils;
