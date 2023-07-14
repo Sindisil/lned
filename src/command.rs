@@ -180,13 +180,29 @@ fn eval_line_addr(
         Some('?') => {
             cmd_chars.next();
             let re: String = cmd_chars.by_ref().take_while(|c| *c != '?').collect();
-            let _offset = eval_addr_offsets(cmd_chars)?;
-            let _re = Regex::new(&re).map_err(|e| match e {
+            let re = Regex::new(&re).map_err(|e| match e {
                 regex::Error::Syntax(s) => Error::RegexSyntax(s),
                 regex::Error::CompiledTooBig(n) => Error::RegexTooBig(n),
                 _ => Error::Regex,
             })?;
-            todo!();
+            let offset = eval_addr_offsets(cmd_chars)?;
+            let line = if buffer.current_line() == 1 {
+                (1..buffer.len()).rev().find(|&i| re.is_match(&buffer[i]))
+            } else {
+                (1..buffer.current_line())
+                    .rev()
+                    .find(|&i| re.is_match(&buffer[i]))
+                    .or_else(|| {
+                        (buffer.current_line()..=buffer.len())
+                            .rev()
+                            .find(|&i| re.is_match(&buffer[i]))
+                    })
+            }
+            .ok_or(Error::NoMatchingLine)?;
+            let line = line
+                .checked_add_signed(offset)
+                .ok_or(Error::OffsetOverflow)?;
+            Ok(Some(line))
         }
         Some('0'..='9') => {
             let num = cmd_chars
@@ -445,9 +461,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn rev_regex_line_addr() {
-        todo!();
+        let mut input = "?o.+?n\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2).expect("current_line set");
+        let res = eval_line_addr(&mut input, &buffer).expect("pattern found");
+        assert_eq!(Some(1), res);
     }
 
     #[test]
@@ -460,9 +479,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn rev_regex_line_addr_with_offset() {
-        todo!();
+        let mut input = "?o.+?+2\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2).expect("current_line set");
+        let res = eval_line_addr(&mut input, &buffer).expect("pattern found");
+        assert_eq!(Some(3), res);
     }
 
     #[test]
