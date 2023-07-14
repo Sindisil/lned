@@ -8,6 +8,8 @@ use crate::char_utils::CharUtils;
 use crate::edit_buffer::EditBuffer;
 use crate::peeking::Peeking;
 
+use regex::Regex;
+
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
     Quit,
@@ -23,6 +25,10 @@ pub enum Error {
     OffsetTooSmall,
     OffsetOverflow,
     InvalidLineNumber,
+    RegexSyntax(String),
+    RegexTooBig(usize),
+    Regex,
+    NoMatchingLine,
 }
 
 impl std::error::Error for Error {}
@@ -36,6 +42,10 @@ impl fmt::Display for Error {
             Error::OffsetOverflow => write!(f, "Offset results in invalid line number"),
             Error::OffsetTooSmall => write!(f, "Offset too small"),
             Error::InvalidLineNumber => write!(f, "invalid line number"),
+            Error::RegexSyntax(s) => write!(f, "regex syntax error '{s}'"),
+            Error::RegexTooBig(n) => write!(f, "regex exceeds size limit (is {n}"),
+            Error::Regex => write!(f, "regex error"),
+            Error::NoMatchingLine => write!(f, "no matching line"),
         }
     }
 }
@@ -147,15 +157,36 @@ fn eval_line_addr(
         }
         Some('/') => {
             cmd_chars.next();
-            let _re: String = cmd_chars.by_ref().take_while(|c| *c != '/').collect();
-            let _offset = eval_addr_offsets(cmd_chars)?;
-            todo!()
+            let re: String = cmd_chars.by_ref().take_while(|c| *c != '/').collect();
+            let re = Regex::new(&re).map_err(|e| match e {
+                regex::Error::Syntax(s) => Error::RegexSyntax(s),
+                regex::Error::CompiledTooBig(n) => Error::RegexTooBig(n),
+                _ => Error::Regex,
+            })?;
+            let offset = eval_addr_offsets(cmd_chars)?;
+            let line = if buffer.current_line() == buffer.len() {
+                (1..buffer.len()).find(|&i| re.is_match(&buffer[i]))
+            } else {
+                (buffer.current_line() + 1..)
+                    .find(|&i| re.is_match(&buffer[i]))
+                    .or_else(|| (1..=buffer.current_line()).find(|&i| re.is_match(&buffer[i])))
+            }
+            .ok_or(Error::NoMatchingLine)?;
+            let line = line
+                .checked_add_signed(offset)
+                .ok_or(Error::OffsetOverflow)?;
+            Ok(Some(line))
         }
         Some('?') => {
             cmd_chars.next();
-            let _re: String = cmd_chars.by_ref().take_while(|c| *c != '?').collect();
+            let re: String = cmd_chars.by_ref().take_while(|c| *c != '?').collect();
             let _offset = eval_addr_offsets(cmd_chars)?;
-            todo!()
+            let _re = Regex::new(&re).map_err(|e| match e {
+                regex::Error::Syntax(s) => Error::RegexSyntax(s),
+                regex::Error::CompiledTooBig(n) => Error::RegexTooBig(n),
+                _ => Error::Regex,
+            })?;
+            todo!();
         }
         Some('0'..='9') => {
             let num = cmd_chars
@@ -405,9 +436,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn regex_line_addr() {
-        todo!();
+        let mut input = "/o.+/n\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2).expect("current_line set");
+        let res = eval_line_addr(&mut input, &buffer).expect("pattern found");
+        assert_eq!(Some(4), res);
     }
 
     #[test]
@@ -417,9 +451,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "todo!"]
     fn regex_line_addr_with_offset() {
-        todo!();
+        let mut input = "/o.+/+2\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2).expect("current_line set");
+        let res = eval_line_addr(&mut input, &buffer).expect("pattern found");
+        assert_eq!(Some(6), res);
     }
 
     #[test]
