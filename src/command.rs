@@ -30,6 +30,8 @@ pub enum Error {
     Regex,
     NoMatchingLine,
     NoPreviousPattern,
+    TrailingBackslash,
+    InvalidPatternDelimiter,
 }
 
 impl std::error::Error for Error {}
@@ -43,11 +45,13 @@ impl fmt::Display for Error {
             Error::OffsetOverflow => write!(f, "Offset results in invalid line number"),
             Error::OffsetTooSmall => write!(f, "Offset too small"),
             Error::InvalidLineNumber => write!(f, "invalid line number"),
-            Error::RegexSyntax(s) => write!(f, "regex syntax error '{s}'"),
-            Error::RegexTooBig(n) => write!(f, "regex exceeds size limit (is {n}"),
-            Error::Regex => write!(f, "regex error"),
+            Error::RegexSyntax(s) => write!(f, "pattern syntax error '{s}'"),
+            Error::RegexTooBig(n) => write!(f, "pattern exceeds size limit (is {n}"),
+            Error::Regex => write!(f, "pattern error"),
             Error::NoMatchingLine => write!(f, "no matching line"),
+            Error::TrailingBackslash => write!(f, "invalid trailing backslash"),
             Error::NoPreviousPattern => write!(f, "no previous pattern"),
+            Error::InvalidPatternDelimiter => write!(f, "invalid pattern delimiter"),
         }
     }
 }
@@ -255,6 +259,29 @@ fn eval_line_addr(
         }
         _ => Ok(None),
     }
+}
+
+fn parse_pattern(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<String, Error> {
+    let delimiter = cmd_chars
+        .next_if(|c| *c != '\n' && *c != '\r' && *c != ' ')
+        .ok_or(Error::InvalidPatternDelimiter)?;
+    let mut pattern = String::new();
+    while let Some(c) = cmd_chars.next_if(|c| *c != '\n' && *c != '\r') {
+        if c == delimiter {
+            break;
+        } else if c != '\\' {
+            pattern.push(c);
+        } else {
+            let escaped_c = cmd_chars
+                .next_if(|c| *c != 'r' && *c != '\n')
+                .ok_or(Error::TrailingBackslash)?;
+            if escaped_c != delimiter {
+                pattern.push('\\');
+            }
+            pattern.push(escaped_c);
+        }
+    }
+    Ok(pattern)
 }
 
 fn eval_addr_offsets(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<isize, Error> {
@@ -503,6 +530,17 @@ mod tests {
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
         assert_eq!(Some(4), res);
+    }
+
+    #[test]
+    fn regex_line_addr_embedded_delim() {
+        let mut input = r"/o.+\//n\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one\\", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2).expect("current_line set");
+        let mut previous_pattern: Option<regex::Regex> = None;
+        let res =
+            eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(Some(1), res);
     }
 
     #[test]
@@ -853,5 +891,53 @@ mod tests {
         )
         .expect_err("OffsetTooLarge");
         assert_eq!(Error::OffsetTooLarge, res);
+    }
+
+    ////
+    // parse_pattern tests
+
+    #[test]
+    fn parse_pattern_invalid_delimiter() {
+        let mut input = " stuff + other_stuff. \n".chars().peekable();
+        let res = parse_pattern(&mut input);
+        assert_eq!(Err(Error::InvalidPatternDelimiter), res);
+    }
+
+    #[test]
+    fn parse_pattern_trailing_backslash() {
+        let mut input = "/stuff + other_stuff.\\\n".chars().peekable();
+        let res = parse_pattern(&mut input);
+        assert_eq!(Err(Error::TrailingBackslash), res);
+        let mut input = "/stuff + other_stuff.\\".chars().peekable();
+        let res = parse_pattern(&mut input);
+        assert_eq!(Err(Error::TrailingBackslash), res);
+    }
+
+    #[test]
+    fn parse_pattern_no_terminating_delimiter() {
+        let mut input = "/stuff\\/other_stuff.\n".chars().peekable();
+        let res = parse_pattern(&mut input).expect("parsed pattern");
+        assert_eq!("stuff/other_stuff.".to_owned(), res);
+    }
+
+    #[test]
+    fn parse_pattern_escaped_terminator() {
+        let mut input = "/stuff\\/other_stuff./\n".chars().peekable();
+        let res = parse_pattern(&mut input).expect("parsed pattern");
+        assert_eq!("stuff/other_stuff.".to_owned(), res);
+    }
+
+    #[test]
+    fn parse_pattern_escaped_chars() {
+        let mut input = "?stuff \\+ other_stuff\\.?\n".chars().peekable();
+        let res = parse_pattern(&mut input).expect("parsed pattern");
+        assert_eq!("stuff \\+ other_stuff\\.".to_owned(), res);
+    }
+
+    #[test]
+    fn parse_pattern_no_escaped_chars() {
+        let mut input = "/stuff + other_stuff./\n".chars().peekable();
+        let res = parse_pattern(&mut input).expect("parsed pattern");
+        assert_eq!("stuff + other_stuff.".to_owned(), res);
     }
 }
