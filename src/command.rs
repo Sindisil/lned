@@ -173,11 +173,7 @@ fn eval_line_addr(
             Ok(Some(line))
         }
         Some('/') => {
-            cmd_chars.next();
-            let pattern = cmd_chars
-                .peeking_take_while(|c| *c != '/' && *c != '\r' && *c != '\n')
-                .collect::<String>();
-            cmd_chars.next_if_eq(&'/'); // consume closing terminator, if any
+            let pattern = parse_pattern(cmd_chars)?;
             if !pattern.is_empty() {
                 *previous_pattern = Some(Regex::new(&pattern).map_err(|e| match e {
                     regex::Error::Syntax(s) => Error::RegexSyntax(s),
@@ -200,11 +196,7 @@ fn eval_line_addr(
             Ok(Some(line))
         }
         Some('?') => {
-            cmd_chars.next();
-            let pattern = cmd_chars
-                .peeking_take_while(|c| *c != '?' && *c != '\r' && *c != '\n')
-                .collect::<String>();
-            cmd_chars.next_if_eq(&'?'); // consume closing terminator, if any
+            let pattern = parse_pattern(cmd_chars)?;
             if !pattern.is_empty() {
                 *previous_pattern = Some(Regex::new(&pattern).map_err(|e| match e {
                     regex::Error::Syntax(s) => Error::RegexSyntax(s),
@@ -534,8 +526,8 @@ mod tests {
 
     #[test]
     fn regex_line_addr_embedded_delim() {
-        let mut input = r"/o.+\//n\n".chars().peekable();
-        let mut buffer = EditBuffer::from(vec!["one\\", "two", "three", "four", "five", "six"]);
+        let mut input = "/o.+\\//n\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one/", "two", "three", "four", "five", "six"]);
         buffer.set_current_line(2).expect("current_line set");
         let mut previous_pattern: Option<regex::Regex> = None;
         let res =
