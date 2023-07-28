@@ -32,6 +32,7 @@ pub enum Error {
     NoPreviousPattern,
     TrailingBackslash,
     InvalidPatternDelimiter,
+    InvalidCmdSuffix,
 }
 
 impl std::error::Error for Error {}
@@ -52,6 +53,7 @@ impl fmt::Display for Error {
             Error::TrailingBackslash => write!(f, "invalid trailing backslash"),
             Error::NoPreviousPattern => write!(f, "no previous pattern"),
             Error::InvalidPatternDelimiter => write!(f, "invalid pattern delimiter"),
+            Error::InvalidCmdSuffix => write!(f, "invalid command suffix"),
         }
     }
 }
@@ -63,9 +65,23 @@ impl Cmd {
         previous_pattern: &mut Option<regex::Regex>,
     ) -> Result<Cmd, Error> {
         let address = eval_address(cmd_chars, buffer, previous_pattern)?;
-        match cmd_chars.peek() {
-            None | Some('\n') | Some('\r') => Ok(Cmd::Null(address)),
-            Some('q') => address.map_or(Ok(Cmd::Quit), |_| Err(Error::UnexpectedAddress)),
+        let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
+        match cmd {
+            None => match cmd_chars.peek() {
+                None | Some('\n') | Some('\r') => Ok(Cmd::Null(address)),
+                _ => Err(Error::InvalidCmdSuffix),
+            },
+            Some('q') => address.map_or_else(
+                || match cmd_chars.peek() {
+                    None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
+                    _ => Err(Error::InvalidCmdSuffix),
+                },
+                |_| Err(Error::UnexpectedAddress),
+            ),
+            Some('p') => match cmd_chars.peek() {
+                None | Some('\n') | Some('\r') => Ok(Cmd::Print(address)),
+                _ => Err(Error::InvalidCmdSuffix),
+            },
             _ => Err(Error::Unknown(cmd_chars.collect())),
         }
     }
@@ -402,6 +418,16 @@ mod tests {
     }
 
     #[test]
+    fn quit_with_invalid_suffix() {
+        let mut input = "q/more/\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4"]);
+        let mut previous_pattern: Option<regex::Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
+            .expect_err("invalid command suffix");
+        assert_eq!(Error::InvalidCmdSuffix, res);
+    }
+
+    #[test]
     fn single_addr_offset() {
         let mut input = "2n".chars().peekable();
         let res = eval_addr_offsets(&mut input).unwrap();
@@ -702,13 +728,13 @@ mod tests {
 
     #[test]
     fn empty_addr_chain() {
-        let mut input = "n".chars().peekable();
+        let mut input = "p\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
         let mut previous_pattern: Option<regex::Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert!(res.is_none());
-        assert_eq!("n", input.collect::<String>());
+        assert_eq!("p\n", input.collect::<String>());
     }
 
     #[test]
