@@ -1,9 +1,10 @@
-use lexopt::prelude::*;
+use core::fmt::{self, Display, Formatter};
+use core::iter::IntoIterator;
 use std::ffi::OsString;
-use std::fmt;
 use std::io::Write;
-use std::iter::IntoIterator;
 use std::path::PathBuf;
+
+use lexopt::prelude::*;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -90,8 +91,8 @@ where
     })
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Error::WroteMessage => write!(f, "message output, no error"),
             Error::ParsingFilename(_) => write!(f, "error parsing filame from command line"),

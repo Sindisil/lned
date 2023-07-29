@@ -1,5 +1,5 @@
-use std::fmt;
-use std::iter;
+use core::fmt::{self, Debug, Formatter};
+use core::iter::Peekable;
 
 pub trait Peeking: Iterator + Sized {
     fn peeking_take_while<P>(self, pred: P) -> PeekingTakeWhile<Self, P>
@@ -17,18 +17,18 @@ pub struct PeekingTakeWhile<I, P> {
     pred: P,
 }
 
-impl<I, P> fmt::Debug for PeekingTakeWhile<I, P>
+impl<I, P> Debug for PeekingTakeWhile<I, P>
 where
-    I: fmt::Debug,
+    I: Debug,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PeekingTakeWhile")
             .field("iter", &self.iter)
             .finish()
     }
 }
 
-impl<I, P> PeekingTakeWhile<&mut iter::Peekable<I>, P>
+impl<I, P> PeekingTakeWhile<&mut Peekable<I>, P>
 where
     I: Iterator,
 {
@@ -41,7 +41,7 @@ where
     }
 }
 
-impl<I, P> Iterator for PeekingTakeWhile<&mut iter::Peekable<I>, P>
+impl<I, P> Iterator for PeekingTakeWhile<&mut Peekable<I>, P>
 where
     I: Iterator,
     P: Fn(&I::Item) -> bool,
@@ -53,7 +53,7 @@ where
     }
 }
 
-impl<I, P> Iterator for PeekingSkipWhile<&mut iter::Peekable<I>, P>
+impl<I, P> Iterator for PeekingSkipWhile<&mut Peekable<I>, P>
 where
     I: Iterator,
     P: Fn(&I::Item) -> bool,
@@ -74,7 +74,7 @@ pub struct PeekingSkipWhile<I, P> {
     done_skipping: bool,
 }
 
-impl<I, P> PeekingSkipWhile<&mut iter::Peekable<I>, P>
+impl<I, P> PeekingSkipWhile<&mut Peekable<I>, P>
 where
     I: Iterator,
 {
@@ -91,11 +91,11 @@ where
     }
 }
 
-impl<I, P> fmt::Debug for PeekingSkipWhile<I, P>
+impl<I, P> Debug for PeekingSkipWhile<I, P>
 where
-    I: fmt::Debug,
+    I: Debug,
 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PeekingSkipWhile")
             .field("iter", &self.iter)
             .field("done_skipping", &self.done_skipping)
@@ -103,7 +103,7 @@ where
     }
 }
 
-impl<I> Peeking for &mut iter::Peekable<I>
+impl<I> Peeking for &mut Peekable<I>
 where
     I: Iterator,
 {

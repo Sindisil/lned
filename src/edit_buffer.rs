@@ -3,19 +3,20 @@
 // is responsible for translating into the 0 based indexing of the Vec<String>
 // containing the lines of text.
 
+use core::cmp::Ordering;
+use core::fmt::{self, Display, Formatter};
+use core::ops::{Deref, Index, Range, RangeFrom, RangeInclusive};
+use std::io::{self, BufRead};
+use std::path::PathBuf;
+
 use regex::Regex;
-use std::cmp::Ordering;
-use std::fmt;
-use std::io;
-use std::ops;
-use std::path;
 
 #[derive(Debug, PartialEq)]
 pub struct EditBuffer {
     text: Vec<String>,
     needs_write: bool,
     current_line: usize,
-    default_filename: Option<path::PathBuf>,
+    default_filename: Option<PathBuf>,
     default_eol: Option<&'static str>,
 }
 
@@ -28,8 +29,8 @@ pub enum Error {
 
 impl std::error::Error for Error {}
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Error::Read(e) => write!(f, "error reading lines: {e}"),
             Error::ReadBadIndex(sz, i) => write!(
@@ -57,7 +58,7 @@ impl From<Vec<&str>> for EditBuffer {
     }
 }
 
-impl ops::Index<usize> for EditBuffer {
+impl Index<usize> for EditBuffer {
     type Output = String;
 
     #[inline]
@@ -66,31 +67,31 @@ impl ops::Index<usize> for EditBuffer {
     }
 }
 
-impl ops::Index<ops::Range<usize>> for EditBuffer {
+impl Index<Range<usize>> for EditBuffer {
     type Output = [String];
 
     #[inline]
-    fn index(&self, index: ops::Range<usize>) -> &[String] {
+    fn index(&self, index: Range<usize>) -> &[String] {
         assert!(index.start > 0 && index.end > 0, "Invalid range");
         &self.text[index.start - 1..index.end - 1]
     }
 }
 
-impl ops::Index<ops::RangeInclusive<usize>> for EditBuffer {
+impl Index<RangeInclusive<usize>> for EditBuffer {
     type Output = [String];
 
     #[inline]
-    fn index(&self, index: ops::RangeInclusive<usize>) -> &[String] {
+    fn index(&self, index: RangeInclusive<usize>) -> &[String] {
         assert!(*index.start() > 0 && *index.end() > 0, "Invalid range");
         &self.text[*index.start() - 1..=*index.end() - 1]
     }
 }
 
-impl ops::Index<ops::RangeFrom<usize>> for EditBuffer {
+impl Index<RangeFrom<usize>> for EditBuffer {
     type Output = [String];
 
     #[inline]
-    fn index(&self, index: ops::RangeFrom<usize>) -> &[String] {
+    fn index(&self, index: RangeFrom<usize>) -> &[String] {
         assert!(index.start > 0, "Invalid range");
         &self.text[index.start - 1..]
     }
@@ -193,7 +194,7 @@ impl EditBuffer {
     /// Returns index of last line read, or an error if read fails
     pub fn read<R>(&mut self, at_line: usize, mut reader: R) -> Result<usize, Error>
     where
-        R: io::BufRead,
+        R: BufRead,
     {
         if at_line > self.text.len() {
             return Err(Error::ReadBadIndex(self.len(), at_line));
@@ -252,7 +253,7 @@ fn compute_native_eol() -> &'static str {
 
 fn compute_default_eol<S>(lines: &[S]) -> &'static str
 where
-    S: ops::Deref<Target = str>,
+    S: Deref<Target = str>,
 {
     let native_eol = if std::env::consts::FAMILY == "windows" {
         "\r\n"
@@ -281,9 +282,11 @@ where
 mod tests {
     use super::*;
 
+    use std::io::{BufReader, Read};
+
     struct BadReader {}
 
-    impl io::Read for BadReader {
+    impl Read for BadReader {
         fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
             Err(io::Error::from(io::ErrorKind::Other))
         }
@@ -355,7 +358,7 @@ mod tests {
 
     fn new_input_buf<S>(content: &[S]) -> Vec<u8>
     where
-        S: ops::Deref<Target = str>,
+        S: Deref<Target = str>,
     {
         let mut input = Vec::new();
         for line in content {
@@ -620,7 +623,7 @@ mod tests {
     #[test]
     fn read_with_io_error() {
         let reader = BadReader {};
-        let mut input = io::BufReader::new(reader);
+        let mut input = BufReader::new(reader);
         let mut buffer = EditBuffer::new();
         let _res = buffer.read(0, &mut input);
         assert!(matches!(Err::<Error, _>(Error::Read), _res));

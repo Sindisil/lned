@@ -1,8 +1,7 @@
-use std::cmp;
-use std::fmt;
-use std::fmt::Debug;
-use std::iter;
-use std::str;
+use core::cmp;
+use core::fmt::{self, Debug, Display, Formatter};
+use core::iter::Peekable;
+use core::str::Chars;
 
 use crate::char_utils::CharUtils;
 use crate::edit_buffer::EditBuffer;
@@ -37,8 +36,8 @@ pub enum Error {
 
 impl std::error::Error for Error {}
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Error::UnexpectedAddress => write!(f, "Command takes no line address."),
             Error::Unknown(s) => write!(f, "Unknown command '{s}'"),
@@ -60,9 +59,9 @@ impl fmt::Display for Error {
 
 impl Cmd {
     pub fn parse(
-        cmd_chars: &mut iter::Peekable<str::Chars>,
+        cmd_chars: &mut Peekable<Chars>,
         buffer: &mut EditBuffer,
-        previous_pattern: &mut Option<regex::Regex>,
+        previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
         let address = eval_address(cmd_chars, buffer, previous_pattern)?;
         parse_cmd(cmd_chars, buffer, previous_pattern, address)
@@ -70,9 +69,9 @@ impl Cmd {
 }
 
 fn parse_cmd(
-    cmd_chars: &mut iter::Peekable<str::Chars>,
+    cmd_chars: &mut Peekable<Chars>,
     _buffer: &EditBuffer,
-    _previous_pattern: &mut Option<regex::Regex>,
+    _previous_pattern: &mut Option<Regex>,
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
@@ -84,20 +83,14 @@ fn parse_cmd(
     }
 }
 
-fn parse_null_cmd(
-    cmd_chars: &mut iter::Peekable<str::Chars>,
-    address: Option<Address>,
-) -> Result<Cmd, Error> {
+fn parse_null_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
         None | Some('\n') | Some('\r') => Ok(Cmd::Null(address)),
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
 
-fn parse_quit_cmd(
-    cmd_chars: &mut iter::Peekable<str::Chars>,
-    address: Option<Address>,
-) -> Result<Cmd, Error> {
+fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
     address.map_or_else(
         || match cmd_chars.peek() {
             None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
@@ -108,7 +101,7 @@ fn parse_quit_cmd(
 }
 
 fn parse_print_cmd(
-    cmd_chars: &mut iter::Peekable<str::Chars>,
+    cmd_chars: &mut Peekable<Chars>,
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
@@ -130,9 +123,9 @@ pub enum Separator {
 }
 
 pub fn eval_address(
-    cmd_chars: &mut iter::Peekable<str::Chars>,
+    cmd_chars: &mut Peekable<Chars>,
     buffer: &mut EditBuffer,
-    previous_pattern: &mut Option<regex::Regex>,
+    previous_pattern: &mut Option<Regex>,
 ) -> Result<Option<Address>, Error> {
     let addr = eval_line_addr(cmd_chars, buffer, previous_pattern)?;
     let separator = parse_separator(cmd_chars);
@@ -149,11 +142,11 @@ pub fn eval_address(
 }
 
 fn eval_addr_chain(
-    cmd_chars: &mut iter::Peekable<str::Chars>,
+    cmd_chars: &mut Peekable<Chars>,
     buffer: &mut EditBuffer,
     left: Option<usize>,
     separator: Separator,
-    previous_pattern: &mut Option<regex::Regex>,
+    previous_pattern: &mut Option<Regex>,
 ) -> Result<Address, Error> {
     // set current_line if left has a value
     match left {
@@ -180,7 +173,7 @@ fn eval_addr_chain(
     })
 }
 
-fn parse_separator(cmd_chars: &mut iter::Peekable<str::Chars>) -> Option<Separator> {
+fn parse_separator(cmd_chars: &mut Peekable<Chars>) -> Option<Separator> {
     match cmd_chars.peeking_skip_while(|c| c.is_blank()).peek() {
         Some(',') => {
             cmd_chars.next();
@@ -195,9 +188,9 @@ fn parse_separator(cmd_chars: &mut iter::Peekable<str::Chars>) -> Option<Separat
 }
 
 fn eval_line_addr(
-    cmd_chars: &mut iter::Peekable<str::Chars>,
+    cmd_chars: &mut Peekable<Chars>,
     buffer: &EditBuffer,
-    previous_pattern: &mut Option<regex::Regex>,
+    previous_pattern: &mut Option<Regex>,
 ) -> Result<Option<usize>, Error> {
     match cmd_chars.peeking_skip_while(|c| c.is_blank()).peek() {
         Some('.') => {
@@ -299,7 +292,7 @@ fn eval_line_addr(
     }
 }
 
-fn parse_pattern(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<String, Error> {
+fn parse_pattern(cmd_chars: &mut Peekable<Chars>) -> Result<String, Error> {
     let delimiter = cmd_chars
         .next_if(|c| *c != '\n' && *c != '\r' && *c != ' ')
         .ok_or(Error::InvalidPatternDelimiter)?;
@@ -322,7 +315,7 @@ fn parse_pattern(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<String, E
     Ok(pattern)
 }
 
-fn eval_addr_offsets(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<isize, Error> {
+fn eval_addr_offsets(cmd_chars: &mut Peekable<Chars>) -> Result<isize, Error> {
     let mut total_offset = 0isize;
     while let Some(c) = cmd_chars.peek() {
         let offset = match c {
@@ -387,7 +380,7 @@ mod tests {
     fn unknown_command_gives_error() {
         let mut input = "~n".chars().peekable();
         let mut buffer = EditBuffer::new();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .err()
             .expect("an error indicating an unknown command");
@@ -398,7 +391,7 @@ mod tests {
     fn blank_cmd_line() {
         let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         buffer.set_current_line(2).expect("current line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let mut input = "\n".chars().peekable();
         let res =
             Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("a successful parse");
@@ -409,7 +402,7 @@ mod tests {
     fn blank_cmd_line_crlf() {
         let mut input = "\r\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         buffer.set_current_line(2).expect("current line set");
         let res =
             Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed command");
@@ -420,7 +413,7 @@ mod tests {
     fn offset_only_cmd() {
         let mut input = "-\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         assert_eq!(3, buffer.current_line());
         let res =
             Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed command");
@@ -431,7 +424,7 @@ mod tests {
     fn quit() {
         let mut buffer = EditBuffer::new();
         let mut input = "q\n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res =
             Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("a successful parse");
         assert_eq!(Cmd::Quit, res);
@@ -441,7 +434,7 @@ mod tests {
     fn quit_with_illegal_addr() {
         let mut input = "2,3q\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4"]);
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("unexpected addr on quit");
         assert_eq!(Error::UnexpectedAddress, res);
@@ -451,7 +444,7 @@ mod tests {
     fn quit_with_invalid_suffix() {
         let mut input = "q/more/\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4"]);
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid command suffix");
         assert_eq!(Error::InvalidCmdSuffix, res);
@@ -517,7 +510,7 @@ mod tests {
     fn dot_line_addr() {
         let buffer = EditBuffer::from(vec!["one", "two", "three"]);
         let mut input = ".n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful line addr eval");
         assert_eq!(Some(buffer.current_line()), res);
@@ -529,7 +522,7 @@ mod tests {
         let mut input = ".+2n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four"]);
         buffer.set_current_line(2usize).expect("no error");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("no error");
         assert_eq!(Some(4usize), res);
         assert_eq!("n", input.collect::<String>());
@@ -539,7 +532,7 @@ mod tests {
     fn dollar_line_addr_empty_buffer() {
         let buffer = EditBuffer::new();
         let mut input = "$n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful eval of line addr");
         assert_eq!(Some(0usize), res);
@@ -550,7 +543,7 @@ mod tests {
     fn dollar_line_addr_() {
         let buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
         let mut input = "$n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful eval of line addr");
         assert_eq!(Some(6usize), res);
@@ -562,7 +555,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
         buffer.set_current_line(3).expect("current line set");
         let mut input = "$-2n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful eval of line addr");
         assert_eq!(Some(4usize), res);
@@ -574,7 +567,7 @@ mod tests {
         let mut input = "/o.+/n\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
         buffer.set_current_line(2).expect("current_line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
         assert_eq!(Some(4), res);
@@ -585,7 +578,7 @@ mod tests {
         let mut input = "/o.+\\//n\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one/", "two", "three", "four", "five", "six"]);
         buffer.set_current_line(2).expect("current_line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
         assert_eq!(Some(1), res);
@@ -596,7 +589,7 @@ mod tests {
         let mut input = "/o.+\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
         buffer.set_current_line(2).expect("current_line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
         assert_eq!(Some(4), res);
@@ -607,7 +600,7 @@ mod tests {
         let mut input = "?o.+?n\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
         buffer.set_current_line(2).expect("current_line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
         assert_eq!(Some(1), res);
@@ -618,7 +611,7 @@ mod tests {
         let mut input = "/o.+/+2\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
         buffer.set_current_line(2).expect("current_line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
         assert_eq!(Some(6), res);
@@ -629,7 +622,7 @@ mod tests {
         let mut input = "?o.+?+2\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
         buffer.set_current_line(2).expect("current_line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
         assert_eq!(Some(3), res);
@@ -640,7 +633,7 @@ mod tests {
         let mut input = "+n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
         buffer.set_current_line(2).expect("no error");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful line addr eval");
         assert_eq!(Some(3usize), res);
@@ -651,7 +644,7 @@ mod tests {
     fn plus_line_addr_overflow() {
         let mut input = "+n".chars().peekable();
         let buffer = EditBuffer::from(vec!["one", "two", "three"]);
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let _res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect_err("should overflow");
         assert!(matches!(Error::InvalidLineNumber, _res));
@@ -663,7 +656,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
         buffer.set_current_line(1usize).expect("no error");
         let mut input = "+2n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful line addr eval");
         assert_eq!(Some(3usize), res);
@@ -678,7 +671,7 @@ mod tests {
         buffer
             .set_current_line(2usize)
             .expect("no error setting current line");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful line_addr eval");
         assert_eq!(Some(7usize), res);
@@ -689,7 +682,7 @@ mod tests {
     fn plus_num_line_addr_with_offsets() {
         let buffer = EditBuffer::from(vec!["one", "two", "three"]);
         let mut input = "+2--1n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful line addr eval");
         assert_eq!(Some(3usize), res);
@@ -700,7 +693,7 @@ mod tests {
     fn minus_line_addr_with_offsets() {
         let buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
         let mut input = "---2n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful line addr eval");
         assert_eq!(Some(2usize), res);
@@ -711,7 +704,7 @@ mod tests {
     fn minus_num_line_addr_with_offsets() {
         let buffer = EditBuffer::from(vec!["one", "two", "three"]);
         let mut input = "-2-+1n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful line addr eval");
         assert_eq!(Some(1usize), res);
@@ -722,7 +715,7 @@ mod tests {
     fn num_line_addr() {
         let buffer = EditBuffer::from(vec!["one", "two", "three"]);
         let mut input = "2n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful eval of line addr");
         assert_eq!(Some(2usize), res);
@@ -733,7 +726,7 @@ mod tests {
     fn num_line_addr_with_offsets() {
         let buffer = EditBuffer::new();
         let mut input = "2++5-n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful eval of line addr");
         assert_eq!(Some(7usize), res);
@@ -760,7 +753,7 @@ mod tests {
     fn empty_addr_chain() {
         let mut input = "p\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert!(res.is_none());
@@ -772,7 +765,7 @@ mod tests {
         let mut input = ",n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
         buffer.set_current_line(2).expect("current line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert_eq!(2, buffer.current_line());
@@ -785,7 +778,7 @@ mod tests {
         let mut input = "3,n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(2).expect("current line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert_eq!(2, buffer.current_line());
@@ -798,7 +791,7 @@ mod tests {
         let mut input = ",5n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(4).expect("current line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert_eq!(4, buffer.current_line());
@@ -811,7 +804,7 @@ mod tests {
         let mut input = "2,5n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(4).expect("current line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert_eq!(4, buffer.current_line());
@@ -824,7 +817,7 @@ mod tests {
         let mut input = ";n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
         buffer.set_current_line(2).expect("current line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert_eq!(2, buffer.current_line());
@@ -836,7 +829,7 @@ mod tests {
     fn semicolon_addr_chain_current_line_last() {
         let mut input = ";n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert_eq!(3, buffer.current_line());
@@ -849,7 +842,7 @@ mod tests {
         let mut input = "$-4;+3n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5).expect("current line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert_eq!(2, buffer.current_line());
@@ -862,7 +855,7 @@ mod tests {
         let mut input = "3;n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(2).expect("current line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert_eq!(3, buffer.current_line());
@@ -875,7 +868,7 @@ mod tests {
         let mut input = ";5n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3).expect("current line set");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("evaluated address");
         assert_eq!(3, buffer.current_line());
@@ -890,7 +883,7 @@ mod tests {
             "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "11",
         ]);
         assert_eq!(11usize, buffer.current_line());
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .expect("successful address eval");
         assert_eq!(2usize, buffer.current_line());
@@ -918,7 +911,7 @@ mod tests {
         let mut input = ".+9999999999999999999999999999n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
         buffer.set_current_line(1).expect("valid line number");
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect_err("OffsetTooLarge");
         assert_eq!(Error::OffsetTooLarge, res);
@@ -929,7 +922,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
         buffer.set_current_line(1usize).expect("no error");
         let mut input = ".+9999999999999999999999999999n".chars().peekable();
-        let mut previous_pattern: Option<regex::Regex> = None;
+        let mut previous_pattern: Option<Regex> = None;
         let res = eval_addr_chain(
             &mut input,
             &mut buffer,
