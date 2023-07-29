@@ -65,25 +65,55 @@ impl Cmd {
         previous_pattern: &mut Option<regex::Regex>,
     ) -> Result<Cmd, Error> {
         let address = eval_address(cmd_chars, buffer, previous_pattern)?;
-        let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
-        match cmd {
-            None => match cmd_chars.peek() {
-                None | Some('\n') | Some('\r') => Ok(Cmd::Null(address)),
-                _ => Err(Error::InvalidCmdSuffix),
-            },
-            Some('q') => address.map_or_else(
-                || match cmd_chars.peek() {
-                    None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
-                    _ => Err(Error::InvalidCmdSuffix),
-                },
-                |_| Err(Error::UnexpectedAddress),
-            ),
-            Some('p') => match cmd_chars.peek() {
-                None | Some('\n') | Some('\r') => Ok(Cmd::Print(address)),
-                _ => Err(Error::InvalidCmdSuffix),
-            },
-            _ => Err(Error::Unknown(cmd_chars.collect())),
-        }
+        parse_cmd(cmd_chars, buffer, previous_pattern, address)
+    }
+}
+
+fn parse_cmd(
+    cmd_chars: &mut iter::Peekable<str::Chars>,
+    _buffer: &EditBuffer,
+    _previous_pattern: &mut Option<regex::Regex>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
+    match cmd {
+        None => parse_null_cmd(cmd_chars, address),
+        Some('q') => parse_quit_cmd(cmd_chars, address),
+        Some('p') => parse_print_cmd(cmd_chars, address),
+        _ => Err(Error::Unknown(cmd_chars.collect())),
+    }
+}
+
+fn parse_null_cmd(
+    cmd_chars: &mut iter::Peekable<str::Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    match cmd_chars.peek() {
+        None | Some('\n') | Some('\r') => Ok(Cmd::Null(address)),
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_quit_cmd(
+    cmd_chars: &mut iter::Peekable<str::Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    address.map_or_else(
+        || match cmd_chars.peek() {
+            None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
+            _ => Err(Error::InvalidCmdSuffix),
+        },
+        |_| Err(Error::UnexpectedAddress),
+    )
+}
+
+fn parse_print_cmd(
+    cmd_chars: &mut iter::Peekable<str::Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    match cmd_chars.peek() {
+        None | Some('\n') | Some('\r') => Ok(Cmd::Print(address)),
+        _ => Err(Error::InvalidCmdSuffix),
     }
 }
 

@@ -4,7 +4,6 @@ use crate::edit_buffer::EditBuffer;
 use std::fmt;
 use std::io::{self, prelude::*};
 
-
 #[derive(Debug)]
 pub enum Error {
     /// I/O Error writing out prompt
