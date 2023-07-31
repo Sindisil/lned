@@ -24,7 +24,6 @@ pub struct EditBuffer {
 pub enum Error {
     Read(io::Error),
     ReadBadIndex(usize, usize),
-    InvalidIndex,
 }
 
 impl std::error::Error for Error {}
@@ -37,7 +36,6 @@ impl Display for Error {
                 f,
                 "error reading lines: location {i} beyond end of buffer {sz}"
             ),
-            Error::InvalidIndex => write!(f, "invalid index"),
         }
     }
 }
@@ -162,7 +160,7 @@ impl EditBuffer {
 
     pub fn set_current_line(&mut self, line: usize) -> Result<(), Error> {
         if line == 0 || line > self.text.len() {
-            Err(Error::InvalidIndex)
+            panic!("{line} is an invalid index (0-{})", self.len());
         } else {
             self.current_line = line;
             Ok(())
@@ -722,5 +720,26 @@ mod tests {
     fn zero_based_range_from_panics() {
         let buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let _ = &buffer[0..];
+    }
+
+    #[test]
+    fn set_current_line() {
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        buffer.set_current_line(2);
+        assert_eq!(2, buffer.current_line());
+    }
+
+    #[test]
+    #[should_panic]
+    fn set_current_line_bad_index() {
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        buffer.set_current_line(0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn set_current_line_beyond_end() {
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        buffer.set_current_line(99);
     }
 }
