@@ -76,17 +76,10 @@ fn parse_cmd(
 ) -> Result<Cmd, Error> {
     let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
     match cmd {
-        None => parse_null_cmd(cmd_chars, address),
+        None => Ok(Cmd::Null(address)),
         Some('q') => parse_quit_cmd(cmd_chars, address),
         Some('p') => parse_print_cmd(cmd_chars, address),
         _ => Err(Error::Unknown(cmd_chars.collect())),
-    }
-}
-
-fn parse_null_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
-    match cmd_chars.peek() {
-        None | Some('\n') | Some('\r') => Ok(Cmd::Null(address)),
-        _ => Err(Error::InvalidCmdSuffix),
     }
 }
 
@@ -388,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn blank_cmd_line() {
+    fn null_cmd() {
         let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         buffer.set_current_line(2).expect("current line set");
         let mut previous_pattern: Option<Regex> = None;
@@ -399,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn blank_cmd_line_crlf() {
+    fn null_cmd_crlf() {
         let mut input = "\r\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
         let mut previous_pattern: Option<Regex> = None;
@@ -410,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn offset_only_cmd() {
+    fn offset_only_null_cmd() {
         let mut input = "-\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
