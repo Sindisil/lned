@@ -2,7 +2,7 @@ use core::fmt::{self, Display, Formatter};
 use core::iter::IntoIterator;
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use lexopt::prelude::*;
 
@@ -144,5 +144,18 @@ mod tests {
         let args = &["test", "--unexpected-arg"];
         let res = parse_args(&mut output, args);
         assert!(matches!(res, Err(Error::UnexpectedArg(_))));
+    }
+
+    #[test]
+    fn filename_options() {
+        let args = &["test", "src\\cli.rs", "src\\main.rs"];
+        let mut output = Vec::new();
+        let res = parse_args(&mut output, args).expect("parsed filenames");
+        assert_eq!(2, res.files.len());
+        let expected = vec![
+            Path::new(r"src\cli.rs").to_path_buf(),
+            Path::new(r"src\main.rs").to_path_buf(),
+        ];
+        assert_eq!(expected, res.files);
     }
 }
