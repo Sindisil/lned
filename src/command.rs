@@ -234,6 +234,8 @@ fn eval_line_addr(
             if !pattern.is_empty() {
                 *previous_pattern = Some(Regex::new(&pattern).map_err(|e| match e {
                     regex::Error::Syntax(s) => Error::RegexSyntax(s),
+                    // todo!() - only two regex errors exist: syntax(str) and toobig(n), so
+                    // I should just create a from() for regex::Error to command::Error accordingly.
                     _ => Error::Regex,
                 })?);
             }
@@ -566,6 +568,28 @@ mod tests {
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
         assert_eq!(Some(4), res);
+    }
+
+    #[test]
+    fn regex_line_addr_regex_syntax() {
+        let mut input = "/\\lo.+/n\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let mut previous_pattern: Option<Regex> = None;
+        let _res =
+            eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect_err("bad pattern");
+        assert!(matches!(Error::RegexSyntax, _res));
+    }
+
+    #[test]
+    fn rev_regex_line_addr_regex_syntax() {
+        let mut input = "?\\lo.+?n\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let mut previous_pattern: Option<Regex> = None;
+        let _res =
+            eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect_err("bad pattern");
+        assert!(matches!(Error::RegexSyntax, _res));
     }
 
     #[test]
