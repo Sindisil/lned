@@ -158,12 +158,11 @@ impl EditBuffer {
         self.current_line
     }
 
-    pub fn set_current_line(&mut self, line: usize) -> Result<(), Error> {
+    pub fn set_current_line(&mut self, line: usize) {
         if line == 0 || line > self.text.len() {
             panic!("{line} is an invalid index (0-{})", self.len());
         } else {
             self.current_line = line;
-            Ok(())
         }
     }
 
