@@ -548,17 +548,6 @@ mod tests {
     }
 
     #[test]
-    fn regex_line_addr() {
-        let mut input = "/o.+/n\n".chars().peekable();
-        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
-        buffer.set_current_line(2);
-        let mut previous_pattern: Option<Regex> = None;
-        let res =
-            eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
-        assert_eq!(Some(4), res);
-    }
-
-    #[test]
     fn regex_line_addr_regex_syntax() {
         let mut input = "/\\lo.+/n\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
@@ -600,6 +589,39 @@ mod tests {
         let res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
         assert_eq!(Some(4), res);
+    }
+
+    #[test]
+    fn regex_line_addr_needle_in_first_half_of_split_range() {
+        let mut input = "/o.+/n\n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let res =
+            eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(Some(4), res);
+    }
+
+    #[test]
+    fn regex_line_addr_needle_in_second_half_of_split_range() {
+        let mut input = "/on.+/n\n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(4);
+        let res =
+            eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(Some(1), res);
+    }
+
+    #[test]
+    fn regex_line_addr_contiguous_search_range() {
+        let mut input = "/o.+/n\n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let mut buffer = EditBuffer::from(vec!["one", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(6);
+        let res =
+            eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(Some(1), res);
     }
 
     #[test]
