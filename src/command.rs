@@ -138,12 +138,13 @@ fn eval_addr_chain(
     previous_pattern: &mut Option<Regex>,
 ) -> Result<Address, Error> {
     // set current_line if left has a value
-    if left.is_some() && separator == Separator::Semicolon {
-        let left = left.unwrap();
-        if left == 0 || left > buffer.len() {
-            return Err(Error::InvalidLineNumber);
-        } else {
-            buffer.set_current_line(left);
+    if let Some(left) = left {
+        if separator == Separator::Semicolon {
+            if left == 0 || left > buffer.len() {
+                return Err(Error::InvalidLineNumber);
+            } else {
+                buffer.set_current_line(left);
+            }
         }
     }
 

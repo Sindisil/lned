@@ -2,7 +2,7 @@ use core::fmt::{self, Display, Formatter};
 use core::iter::IntoIterator;
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use lexopt::prelude::*;
 
@@ -107,6 +107,8 @@ impl std::error::Error for Error {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::path::Path;
 
     #[test]
     fn help_options_output_help_message() {
