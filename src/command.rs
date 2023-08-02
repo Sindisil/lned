@@ -437,6 +437,26 @@ mod tests {
     }
 
     #[test]
+    fn print_cmd() {
+        let mut input = "p\r\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed print cmd");
+        assert_eq!(Cmd::Print(None), res);
+    }
+
+    #[test]
+    fn print_cmd_with_invald_suffix() {
+        let mut input = "p/more/\r\n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect_err("invalid suffix");
+        assert_eq!(Error::InvalidCmdSuffix, res);
+    }
+
+    #[test]
     fn single_addr_offset() {
         let mut input = "2n".chars().peekable();
         let res = eval_addr_offsets(&mut input).unwrap();
