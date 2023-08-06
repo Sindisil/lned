@@ -110,6 +110,7 @@ where
         }
     }
     output.write(b"\n").map_err(Error::WriteOutput)?;
+    output.flush().map_err(Error::WriteOutput)?;
     Ok(false)
 }
 
@@ -317,5 +318,48 @@ mod tests {
         let buffers = vec![EditBuffer::new()];
         let safe = ok_to_exit(&mut prev_cmd, &buffers);
         assert!(safe);
+    }
+
+    #[test]
+    fn print_cmd_no_addr() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        let res = print_cmd(&mut output, None, &mut buffer).expect("successful print");
+        assert_eq!(false, res);
+        assert_eq!(b"2\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn print_cmd_single_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        let res =
+            print_cmd(&mut output, Some(Address::Line(3)), &mut buffer).expect("successful print");
+        assert_eq!(false, res);
+        assert_eq!(b"3\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn print_cmd_span() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        let res = print_cmd(&mut output, Some(Address::Span(2, 4)), &mut buffer)
+            .expect("successful print");
+        assert_eq!(false, res);
+        assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn print_cmd_empty_buffer_gives_error() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::new();
+        let res = print_cmd(&mut output, None, &mut buffer);
+        assert!(match res {
+          Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
+          _ => false,
+        });
     }
 }
