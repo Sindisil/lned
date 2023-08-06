@@ -1,10 +1,11 @@
-use regex::Regex;
-use std::cmp::Ordering;
-use std::fmt;
+use core::cmp::Ordering;
+use core::fmt;
+use core::ops::Deref;
+use core::slice::Iter;
 use std::io::{self, prelude::*};
-use std::ops::Deref;
 use std::path;
 
+#[derive(Debug, PartialEq)]
 pub struct EditBuffer {
     text: Vec<String>,
     needs_write: bool,
@@ -42,7 +43,18 @@ impl Default for EditBuffer {
 impl From<Vec<&str>> for EditBuffer {
     fn from(value: Vec<&str>) -> Self {
         let mut buf = EditBuffer::with_capacity(value.len());
-        let mut value = value.iter().map(|v| v.to_string()).collect::<Vec<String>>();
+        let default_eol = compute_default_eol(&value[..]);
+        buf.default_eol = Some(default_eol);
+        let mut value = value
+            .iter()
+            .map(|v| {
+                let mut line = v.to_string();
+                if !(line.ends_with("\r\n") || line.ends_with("\n")) {
+                    line.push_str(default_eol.as_ref());
+                }
+                line
+            })
+            .collect::<Vec<String>>();
         buf.text.append(&mut value);
         buf
     }
@@ -159,8 +171,7 @@ impl EditBuffer {
                 let i = lines.len() - 1;
                 &mut lines[i]
             };
-            let eol_pat = Regex::new(r"^.*(\r\n|\n|\r)$").unwrap();
-            if !eol_pat.is_match(last_line) {
+            if !(last_line.ends_with("\r\n") || last_line.ends_with("\n")) {
                 last_line.push_str(default_eol.as_ref());
             }
         }
@@ -169,6 +180,10 @@ impl EditBuffer {
         self.text.splice(at_line..at_line, lines.into_iter());
         self.needs_write = true;
         Ok(at_line + lines_added - 1)
+    }
+
+    fn iter(&self) -> Iter<'_, String> {
+        self.text.iter()
     }
 }
 
@@ -245,6 +260,17 @@ mod tests {
     fn buffer_with_capacity_has_zero_len() {
         let buffer = EditBuffer::with_capacity(1024);
         assert_eq!(0, buffer.len());
+    }
+
+    #[test]
+    fn buffer_from_vec_ensures_eols() {
+        let buf_fully_terminated = EditBuffer::from(vec!["1\n", "2\n", "3\n"]);
+        let buf_non_terminated = EditBuffer::from(vec!["1", "2", "3"]);
+        let buf_partially_terminated = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert_eq!(buf_partially_terminated, buf_fully_terminated);
+        assert!(buf_non_terminated
+            .iter()
+            .all(|l| l.ends_with("\r\n") || l.ends_with("\n")));
     }
 
     ////
