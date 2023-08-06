@@ -6,10 +6,9 @@
 use core::cmp::Ordering;
 use core::fmt::{self, Display, Formatter};
 use core::ops::{Deref, Index, Range, RangeFrom, RangeInclusive};
+use core::slice::Iter;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
-
-use regex::Regex;
 
 #[derive(Debug, PartialEq)]
 pub struct EditBuffer {
@@ -49,7 +48,18 @@ impl Default for EditBuffer {
 impl From<Vec<&str>> for EditBuffer {
     fn from(value: Vec<&str>) -> Self {
         let mut buf = EditBuffer::with_capacity(value.len());
-        let mut value = value.iter().map(|v| v.to_string()).collect::<Vec<String>>();
+        let default_eol = compute_default_eol(&value[..]);
+        buf.default_eol = Some(default_eol);
+        let mut value = value
+            .iter()
+            .map(|v| {
+                let mut line = v.to_string();
+                if !(line.ends_with("\r\n") || line.ends_with("\n")) {
+                    line.push_str(default_eol.as_ref());
+                }
+                line
+            })
+            .collect::<Vec<String>>();
         buf.text.append(&mut value);
         buf.current_line = buf.text.len();
         buf
@@ -226,8 +236,7 @@ impl EditBuffer {
                 let i = lines.len() - 1;
                 &mut lines[i]
             };
-            let eol_pat = Regex::new(r"^.*(\r\n|\n|\r)$").unwrap();
-            if !eol_pat.is_match(last_line) {
+            if !(last_line.ends_with("\r\n") || last_line.ends_with("\n")) {
                 last_line.push_str(default_eol.as_ref());
             }
         }
@@ -237,6 +246,10 @@ impl EditBuffer {
         self.needs_write = true;
         self.current_line = at_line + lines_added;
         Ok(self.current_line)
+    }
+
+    fn iter(&self) -> Iter<'_, String> {
+        self.text.iter()
     }
 }
 
@@ -315,6 +328,17 @@ mod tests {
     fn buffer_with_capacity_has_zero_len() {
         let buffer = EditBuffer::with_capacity(1024);
         assert_eq!(0, buffer.len());
+    }
+
+    #[test]
+    fn buffer_from_vec_ensures_eols() {
+        let buf_fully_terminated = EditBuffer::from(vec!["1\n", "2\n", "3\n"]);
+        let buf_non_terminated = EditBuffer::from(vec!["1", "2", "3"]);
+        let buf_partially_terminated = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert_eq!(buf_partially_terminated, buf_fully_terminated);
+        assert!(buf_non_terminated
+            .iter()
+            .all(|l| l.ends_with("\r\n") || l.ends_with("\n")));
     }
 
     ////
@@ -631,9 +655,9 @@ mod tests {
 
     #[test]
     fn usize_index() {
-        let buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
-        assert_eq!("1", buffer[1]);
-        assert_eq!("6", buffer[6]);
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!("1\n", buffer[1]);
+        assert_eq!("6\n", buffer[6]);
     }
 
     #[test]
@@ -652,16 +676,19 @@ mod tests {
 
     #[test]
     fn range_index() {
-        let buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
-        assert_eq!(vec!["2", "3", "4"], buffer[2..5]);
-        assert_eq!(vec!["1", "2", "3", "4", "5", "6"], buffer[1..7]);
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(vec!["2\n", "3\n", "4\n"], buffer[2..5]);
+        assert_eq!(vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"], buffer[1..7]);
     }
 
     #[test]
     fn range_inclusive_index() {
-        let buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
-        assert_eq!(vec!["2", "3", "4"], buffer[2..=4]);
-        assert_eq!(vec!["1", "2", "3", "4", "5", "6"], buffer[1..=6]);
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(vec!["2\n", "3\n", "4\n"], buffer[2..=4]);
+        assert_eq!(
+            vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"],
+            buffer[1..=6]
+        );
     }
 
     #[test]
@@ -708,9 +735,9 @@ mod tests {
 
     #[test]
     fn range_from() {
-        let buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
-        assert_eq!(vec!["4", "5", "6"], buffer[4..]);
-        assert_eq!(vec!["6"], buffer[6..]);
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(vec!["4\n", "5\n", "6\n"], buffer[4..]);
+        assert_eq!(vec!["6\n"], buffer[6..]);
         assert!(buffer[7..].is_empty());
     }
 
