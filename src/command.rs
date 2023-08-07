@@ -5,7 +5,7 @@ use core::str::Chars;
 
 use crate::char_utils::CharUtils;
 use crate::edit_buffer::EditBuffer;
-use crate::peeking::Peeking;
+use crate::iter_utils::Peeking;
 
 use regex::Regex;
 
