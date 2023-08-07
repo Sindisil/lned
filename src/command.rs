@@ -166,7 +166,11 @@ fn eval_addr_chain(
 }
 
 fn parse_separator(cmd_chars: &mut Peekable<Chars>) -> Option<Separator> {
-    match cmd_chars.peeking_skip_while(|c| c.is_blank()).peek() {
+    match cmd_chars.peek() {
+        Some(c) if c.is_blank() => {
+            cmd_chars.next();
+            parse_separator(cmd_chars)
+        }
         Some(',') => {
             cmd_chars.next();
             Some(Separator::Comma)
@@ -184,7 +188,11 @@ fn eval_line_addr(
     buffer: &EditBuffer,
     previous_pattern: &mut Option<Regex>,
 ) -> Result<Option<usize>, Error> {
-    match cmd_chars.peeking_skip_while(|c| c.is_blank()).peek() {
+    match cmd_chars.peek() {
+        Some(c) if c.is_blank() => {
+            cmd_chars.next();
+            eval_line_addr(cmd_chars, buffer, previous_pattern)
+        }
         Some('.') => {
             cmd_chars.next();
             let offset = eval_addr_offsets(cmd_chars)?;
