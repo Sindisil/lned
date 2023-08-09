@@ -61,6 +61,7 @@ impl From<Vec<&str>> for EditBuffer {
             })
             .collect::<Vec<String>>();
         buf.text.append(&mut value);
+        buf.needs_write = true;
         buf.current_line = buf.text.len();
         buf
     }
@@ -341,6 +342,11 @@ mod tests {
             .all(|l| l.ends_with("\r\n") || l.ends_with("\n")));
     }
 
+    #[test]
+    fn buffer_from_vec_needs_write() {
+        let buf = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(buf.needs_write());
+    }
     ////
     // compute_default_eol() tests
 

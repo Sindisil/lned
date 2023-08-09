@@ -29,39 +29,9 @@ What counts as a change?
   * Deletions of text not undone
   * Substituions of text not undone
 
-Does an insert followed by a delete of the same lines count? I don't think so, as that's
-equivalent to an undo, but how to tell?
-
-We'll create a hash at the start of a buffer session (new empty buffer or after initial
-read of file content), as well as a current_hash (initially the same as the initial_hash,
-obviously). When a command is executed that might cause the buffer to become dirty, the
-current_hash is recalculated. buffer.is_dirty() is then just:
-
-impl EditBuffer {
-  fn is_dirty() -> bool {
-    initial_hash != current_hash
-  }
-}
-
-If we eventually add support for file watching, activity on the file could trigger
-recalculation of initial_hash from new file content.
-
-When a "file" command is executed, a new initial_hash should be calculated from
-the contents of the new file, if it exists.
-
-Variables considered:
-  * char count
-  * line count
-  * hash of content
-
-New buffer:
-  * char_count = 0;
-  * line_count = 0;
-  * hash = hash of empty line vec
-
-In case of no file on disk, *any* content beyond empty means dirty.
-
-"File on disk" is determined by default_file_name of buffer, so read from file,
+After testing several editors, they all consider a buffer dirty if there are any changes not
+undone via the undo function. A few are even simpler, and consider it dirty after the
+first change -- even undo doesn't clear the flag.
 
 ## Data Types
 
