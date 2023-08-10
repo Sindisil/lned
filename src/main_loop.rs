@@ -68,7 +68,7 @@ where
             //   passed on to the current buffer to execute. Commands that act on editor state
             //   (e.g., quit, edit, buffer) are executed directly here.
             Cmd::Quit => Ok(ok_to_exit(&mut prev_command, &buffers)),
-            Cmd::Print(address) => print_cmd(&mut output, address, &mut buffers[current_buffer]),
+            Cmd::Print(address) => do_print(&mut output, address, &mut buffers[current_buffer]),
             Cmd::Null(_address) => todo!(),
         })
         .or_else(|e| {
@@ -79,7 +79,7 @@ where
     Ok(())
 }
 
-fn print_cmd<W>(
+fn do_print<W>(
     output: &mut W,
     address: Option<Address>,
     buffer: &mut EditBuffer,
@@ -321,42 +321,42 @@ mod tests {
     }
 
     #[test]
-    fn print_cmd_no_addr() {
+    fn do_print_no_addr() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
-        let res = print_cmd(&mut output, None, &mut buffer).expect("successful print");
+        let res = do_print(&mut output, None, &mut buffer).expect("successful print");
         assert_eq!(false, res);
         assert_eq!(b"2\r\n\n", &output[..]);
     }
 
     #[test]
-    fn print_cmd_single_line() {
+    fn do_print_single_line() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         let res =
-            print_cmd(&mut output, Some(Address::Line(3)), &mut buffer).expect("successful print");
+            do_print(&mut output, Some(Address::Line(3)), &mut buffer).expect("successful print");
         assert_eq!(false, res);
         assert_eq!(b"3\r\n\n", &output[..]);
     }
 
     #[test]
-    fn print_cmd_span() {
+    fn do_print_span() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
-        let res = print_cmd(&mut output, Some(Address::Span(2, 4)), &mut buffer)
+        let res = do_print(&mut output, Some(Address::Span(2, 4)), &mut buffer)
             .expect("successful print");
         assert_eq!(false, res);
         assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
     }
 
     #[test]
-    fn print_cmd_empty_buffer_gives_error() {
+    fn do_print_empty_buffer_gives_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::new();
-        let res = print_cmd(&mut output, None, &mut buffer);
+        let res = do_print(&mut output, None, &mut buffer);
         assert!(match res {
             Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
             _ => false,
