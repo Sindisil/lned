@@ -33,6 +33,65 @@ After testing several editors, they all consider a buffer dirty if there are any
 undone via the undo function. A few are even simpler, and consider it dirty after the
 first change -- even undo doesn't clear the flag.
 
+### Undo/Redo
+
+Two design quesions are fundamental to the undo/redo design:
+
+1. Should undo/redo be tracked editor wide, or individually for each buffer?
+2. Should undo/redo be a stack or tree model?
+
+#### Undo/Redo scope
+
+Tracking per buffer seems like the obvious choice (and seems to be the common choice
+with other editors). It provides simpler implementation in some ways, and would cause
+less "spooky action at a distance" (i.e., either switching buffers or causing changes
+in other than the current active buffer).
+
+It is increasingly seeming that the current abstractions aren't quite right, though. Right
+now we have the following:
+
+ * main_loop
+   - contains the vector of EditBuffers
+   - interprets commands, interacting with buffers as needed
+ * EditBuffer
+   - contains the actual text
+   - provides operations on the text
+   - tracks current_line and the buffers's dirty status (needs_write)
+
+This is awkward for undo/redo, as they are per buffer (so should probably live in EditBuffer),
+but seem easiest to define in terms of Cmds, which main_loop currently translates into
+operations on EditBuffer.
+
+One solution would be to track undo/redo stacks in parallel with EditBuffers, and probably also
+track buffer dirty status in parallel, as well. This feels a bit hacky, but would be pretty
+simple to implement, would not require any signficant refactoring of the current code, and
+should be rather performant (though I doubt any differene would be significant in lned's case).
+
+Another option is to add another layer of abstraction, which would provide for separation of concerns,
+and maybe make it easier to tell where to put (and find) specific functionality.
+
+  * main_loop
+    - contain vector of EditBuffer
+    - interpret non-buffer specific commands (primarily quit and the buffer manipulation comands).
+    - could still interpret buffer specific commands, but could instead pass them along to
+      the correct EditBuffer (typically the active_buffer).
+  * EditBuffer
+    - contain's TextBuffer
+    - contains undo/redo stacks
+    - tracks current_line & dirty status
+    - possibly (probably) interprets buffer specific commands, interacting with TextBuffer as
+      necessary. Otherwise could simply provide a reference to the TextBuffer if main_loop
+      would still interpret the commands.
+  * TextBuffer
+    - contains actual text
+    - provides operations on the text lines
+    - provides I/O operations for the text content
+    - probably doesn't need to track needs_write anymore
+
+Both options seem viable. I'll make a decision when I implement undo/redo, right after the first
+opposing commands are complete (append & delete).
+
+
 ## Data Types
 
 struct CmdArgs {
