@@ -63,11 +63,8 @@ where
         )
         .map_err(Error::ParseCmd)
         .and_then(|cmd| match cmd {
-            // execute command
-            //   Commands that act on text in buffers or on an individual buffer state are
-            //   passed on to the current buffer to execute. Commands that act on editor state
-            //   (e.g., quit, edit, buffer) are executed directly here.
-            Cmd::Quit => Ok(ok_to_exit(&mut prev_command, &buffers)),
+            // dispatch command
+            Cmd::Quit => do_quit(&mut prev_command, &buffers),
             Cmd::Print(address) => do_print(&mut output, address, &mut buffers[current_buffer]),
             Cmd::Null(_address) => todo!(),
         })
@@ -77,6 +74,10 @@ where
         })?;
     }
     Ok(())
+}
+
+fn do_quit(prev_command: &mut Option<Cmd>, buffers: &[EditBuffer]) -> Result<bool, Error> {
+    Ok(ok_to_exit(prev_command, buffers))
 }
 
 fn do_print<W>(
