@@ -62,18 +62,24 @@ where
             &mut previous_pattern,
         )
         .map_err(Error::ParseCmd)
-        .and_then(|ref mut cmd| match cmd {
-            // dispatch command
-            Cmd::Quit => do_quit(&mut prev_command, &buffers),
-            Cmd::Print(address) => do_print(&mut output, address, &mut buffers[current_buffer]),
-            Cmd::Append(address, lines) => do_append(
-                &mut input,
-                &mut output,
-                &mut buffers[current_buffer],
-                address,
-                lines,
-            ),
-            Cmd::Null(_address) => todo!(),
+        .and_then(|mut cmd| {
+            let res = match cmd {
+                // dispatch command
+                Cmd::Quit => do_quit(&prev_command, &buffers),
+                Cmd::Print(ref address) => {
+                    do_print(&mut output, address, &mut buffers[current_buffer])
+                }
+                Cmd::Append(ref address, ref mut lines) => do_append(
+                    &mut input,
+                    &mut output,
+                    &mut buffers[current_buffer],
+                    address,
+                    lines,
+                ),
+                Cmd::Null(_address) => todo!(),
+            };
+            prev_command = Some(cmd);
+            res
         })
         .or_else(|e| {
             eprintln!("{e}");
@@ -83,7 +89,7 @@ where
     Ok(())
 }
 
-fn do_quit(prev_command: &mut Option<Cmd>, buffers: &[EditBuffer]) -> Result<bool, Error> {
+fn do_quit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> Result<bool, Error> {
     Ok(ok_to_exit(prev_command, buffers))
 }
 
@@ -136,14 +142,13 @@ where
     todo!();
 }
 
-fn ok_to_exit(prev_command: &mut Option<Cmd>, buffers: &[EditBuffer]) -> bool {
+fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
     let ok = match prev_command {
         Some(Cmd::Quit) => true,
         _ => !buffers.iter().any(|buf| buf.needs_write()),
     };
     if !ok {
         eprintln!("Unwritten changes - a second quit will exit w/o saving.");
-        *prev_command = Some(Cmd::Quit);
     }
     ok
 }
