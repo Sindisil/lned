@@ -124,7 +124,7 @@ where
 }
 
 fn do_append<R>(
-    input: &mut R,
+    input: R,
     buffer: &mut EditBuffer,
     address: &Option<Address>,
     lines: &mut Vec<String>,
@@ -133,14 +133,12 @@ where
     R: BufRead,
 {
     read_lines(input, lines)?;
-    let _i = match address {
+    let i = match address {
         Some(Address::Line(line)) => *line,
         Some(Address::Span(_, last)) => *last,
         None => buffer.current_line(),
     };
-    if !lines.is_empty() {
-        todo!("add append function to EditBuffer");
-    }
+    buffer.insert(i, lines);
     Ok(false)
 }
 
@@ -182,9 +180,7 @@ fn initialize_buffers(args: &cli::CmdArgs) -> Result<Vec<EditBuffer>, Error> {
     // if buffer list is empty, push new empty buffer onto buffer list
 
     if !args.files.is_empty() {
-        return Err(Error::Other(
-            "Reading files not yet implemented".to_string(),
-        ));
+todo!("Reading files not yet implemented");
     }
 
     // No files passed in, or none read successfully, so
@@ -220,6 +216,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use io::BufReader;
 
     struct BadWriter {}
 
@@ -263,7 +260,7 @@ mod tests {
     #[test]
     fn read_command_io_error_gives_correct_error() {
         let input = BadReader {};
-        let mut input = io::BufReader::new(input);
+        let mut input = BufReader::new(input);
         let mut cmd = String::new();
         let _res = read_command(&mut input, &mut cmd);
         assert!(matches!(Err::<Error, _>(Error::ReadCommand), _res));
@@ -273,7 +270,7 @@ mod tests {
     fn read_command_returns_input() {
         let cmd_input = "q\n";
         let mut input = Vec::new();
-        input.extend(cmd_input.as_bytes());
+        input.extend(cmd_input.bytes());
         let mut cmd_ret = String::new();
         let len = read_command(&input[..], &mut cmd_ret).expect("Error reading command string");
         assert_eq!(2, len);
@@ -286,7 +283,7 @@ mod tests {
     #[test]
     fn read_line_io_error_gives_correct_error() {
         let input = BadReader {};
-        let mut input = io::BufReader::new(input);
+        let mut input = BufReader::new(input);
         let mut lines = Vec::new();
         let _line_count = read_lines(&mut input, &mut lines);
         assert!(matches!(Err::<Error, _>(Error::ReadLines), _line_count));
@@ -304,6 +301,21 @@ mod tests {
     #[test]
     fn read_lines_returns_lines_entered() {
         let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\n"];
+        let mut input = Vec::new();
+        for line in &three_lines {
+            input.extend(line.as_bytes());
+        }
+        let mut lines = Vec::new();
+        let line_count = read_lines(&input[..], &mut lines).expect("Error reading lines");
+
+        assert_eq!(3, line_count);
+        assert_eq!(3, lines.len());
+        assert_eq!(three_lines[..3], lines);
+    }
+
+    #[test]
+    fn read_lines_returns_lines_entered_CRLF() {
+        let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\r\n"];
         let mut input = Vec::new();
         for line in &three_lines {
             input.extend(line.as_bytes());
@@ -350,6 +362,22 @@ mod tests {
     }
 
     #[test]
+    fn do_quit_twice_is_done() {
+        let mut buffers = vec![EditBuffer::new()];
+        let input = b"1\n2\n3\n.\n";
+        let mut lines = Vec::new();
+        let res =
+            do_append(&input[..], &mut buffers[0], &None, &mut lines).expect("successful append");
+        assert!(!res);
+        let mut prev_command = Some(Cmd::Append(0, Some(Address::Line(0)), lines));
+        let res = do_quit(&prev_command, &buffers).expect("no error");
+        prev_command = Some(Cmd::Quit);
+        assert!(!res);
+        let res = do_quit(&prev_command, &buffers).expect("no error");
+        assert!(res);
+    }
+
+    #[test]
     fn do_print_no_addr() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
@@ -390,5 +418,78 @@ mod tests {
             Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
             _ => false,
         });
+    }
+
+    #[test]
+    fn do_append_empty_buffer() {
+        let mut buffer = EditBuffer::new();
+        let mut lines = Vec::new();
+        let input = b"some test text\nanother line\none more\n.\n";
+        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(0)), &mut lines)
+            .expect("successful append");
+        assert_eq!(3, buffer.current_line());
+        assert_eq!(3, buffer.len());
+        assert!(!res);
+    }
+
+    #[test]
+    fn do_append_non_empty_at_0() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut lines = Vec::new();
+        let input = b"some test text\nanother line\none more\n.\n";
+        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(0)), &mut lines)
+            .expect("successful append");
+        assert_eq!(3, buffer.current_line());
+        assert_eq!(6, buffer.len());
+        assert!(!res);
+    }
+
+    #[test]
+    fn do_append_in_middle() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut lines = Vec::new();
+        let input = b"some test text\nanother line\none more\n.\n";
+        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(2)), &mut lines)
+            .expect("successful append");
+        assert_eq!(5, buffer.current_line());
+        assert_eq!(6, buffer.len());
+        assert!(!res);
+    }
+
+    #[test]
+    fn do_append_span_address() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut lines = Vec::new();
+        let input = b"some test text\nanother line\none more\n.\n";
+        let res = do_append(&input[..], &mut buffer, &Some(Address::Span(2,3)), &mut lines)
+            .expect("successful append");
+        assert_eq!(6, buffer.current_line());
+        assert_eq!(9, buffer.len());
+        assert!(!res);
+    }
+
+    #[test]
+    fn do_append_at_end() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut lines = Vec::new();
+        let input = b"some test text\nanother line\none more\n.\n";
+        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(3)), &mut lines)
+            .expect("successful append");
+        assert_eq!(6, buffer.current_line());
+        assert_eq!(6, buffer.len());
+        assert!(!res);
+    }
+
+    #[test]
+    fn do_append_of_zero_lines() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut lines = Vec::new();
+        let input = b".\n";
+        assert_eq!(3, buffer.current_line());
+        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(2)), &mut lines)
+            .expect("successful append");
+        assert_eq!(2, buffer.current_line());
+        assert_eq!(3, buffer.len());
+        assert!(!res);
     }
 }

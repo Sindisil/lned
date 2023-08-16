@@ -252,6 +252,13 @@ impl EditBuffer {
     fn iter(&self) -> Iter<'_, String> {
         self.text.iter()
     }
+    pub fn insert(&mut self, at_line: usize, lines: &[String]) -> usize {
+        let lines_added = lines.len();
+        self.text.splice(at_line..at_line, lines.iter().cloned());
+        self.needs_write = true;
+        self.current_line = at_line + lines_added;
+        self.current_line
+    }
 }
 
 fn compute_native_eol() -> &'static str {
@@ -349,6 +356,7 @@ mod tests {
         let buf = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert!(buf.needs_write());
     }
+
     ////
     // compute_default_eol() tests
 
@@ -448,6 +456,17 @@ mod tests {
         added: ["Line1\n", "Line2\n", "Line3",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3",],
+        last line read: 3,
+    }
+
+    read_test! {
+        read_insert_at_start,
+        initial: vec!["1\r\n", "2", "3",],
+        added: ["New1\n", "New2\n", "New3\n"],
+        at: 0,
+        expect: vec![
+            "New1\n", "New2\n", "New3\n", "1\r\n", "2\r\n", "3\r\n",
+        ],
         last line read: 3,
     }
 
