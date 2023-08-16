@@ -12,13 +12,14 @@ use regex::Regex;
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
     Quit,
-    Null(Option<Address>),
-    Print(Option<Address>),
+    Null(usize, Option<Address>),
+    Print(usize, Option<Address>),
+    Append(usize, Option<Address>, Vec<String>),
 }
 
 #[derive(Debug, PartialEq)]
 pub enum Error {
-    Unknown(String),
+    Unknown(char),
     UnexpectedAddress,
     OffsetTooLarge,
     OffsetTooSmall,
@@ -38,7 +39,7 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Error::UnexpectedAddress => write!(f, "Command takes no line address."),
-            Error::Unknown(s) => write!(f, "Unknown command '{s}'"),
+            Error::Unknown(c) => write!(f, "Unknown command '{c}'"),
             Error::OffsetTooLarge => write!(f, "Offset too large"),
             Error::OffsetOverflow => write!(f, "Offset results in invalid line number"),
             Error::OffsetTooSmall => write!(f, "Offset too small"),
@@ -56,26 +57,28 @@ impl Display for Error {
 impl Cmd {
     pub fn parse(
         cmd_chars: &mut Peekable<Chars>,
-        buffer: &mut EditBuffer,
+        buffers: &mut [EditBuffer],
+        current_buffer: usize,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
-        let address = eval_address(cmd_chars, buffer, previous_pattern)?;
-        parse_cmd(cmd_chars, buffer, previous_pattern, address)
+        let address = eval_address(cmd_chars, &mut buffers[current_buffer], previous_pattern)?;
+        parse_cmd(cmd_chars, current_buffer, previous_pattern, address)
     }
 }
 
 fn parse_cmd(
     cmd_chars: &mut Peekable<Chars>,
-    _buffer: &EditBuffer,
+    current_buffer: usize,
     _previous_pattern: &mut Option<Regex>,
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
     match cmd {
-        None => Ok(Cmd::Null(address)),
+        None => Ok(Cmd::Null(current_buffer, address)),
         Some('q') => parse_quit_cmd(cmd_chars, address),
-        Some('p') => parse_print_cmd(cmd_chars, address),
-        _ => Err(Error::Unknown(cmd_chars.collect())),
+        Some('p') => parse_print_cmd(current_buffer, cmd_chars, address),
+        Some('a') => parse_append_cmd(current_buffer, cmd_chars, address),
+        Some(c) => Err(Error::Unknown(c)),
     }
 }
 
@@ -90,11 +93,23 @@ fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> 
 }
 
 fn parse_print_cmd(
+    current_buffer: usize,
     cmd_chars: &mut Peekable<Chars>,
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
-        None | Some('\n') | Some('\r') => Ok(Cmd::Print(address)),
+        None | Some('\n') | Some('\r') => Ok(Cmd::Print(current_buffer, address)),
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_append_cmd(
+    current_buffer: usize,
+    cmd_chars: &mut Peekable<Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    match cmd_chars.peek() {
+        None | Some('\n') | Some('\r') => Ok(Cmd::Append(current_buffer, address, Vec::new())),
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
@@ -373,63 +388,62 @@ mod tests {
     #[test]
     fn unknown_command_gives_error() {
         let mut input = "~n".chars().peekable();
-        let mut buffer = EditBuffer::new();
+        let mut buffers = vec![EditBuffer::new()];
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
-            .err()
-            .expect("an error indicating an unknown command");
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("an error indicating an unknown command");
         assert!(matches!(res, Error::Unknown(_)));
     }
 
     #[test]
     fn null_cmd() {
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
-        buffer.set_current_line(2);
+        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
+        buffers[0].set_current_line(2);
         let mut previous_pattern: Option<Regex> = None;
         let mut input = "\n".chars().peekable();
-        let res =
-            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("a successful parse");
-        assert_eq!(Cmd::Null(None), res);
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect("a successful parse");
+        assert_eq!(Cmd::Null(0, None), res);
     }
 
     #[test]
     fn null_cmd_crlf() {
         let mut input = "\r\n".chars().peekable();
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"])];
         let mut previous_pattern: Option<Regex> = None;
-        buffer.set_current_line(2);
+        buffers[0].set_current_line(2);
         let res =
-            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed command");
-        assert_eq!(Cmd::Null(None), res);
+            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed command");
+        assert_eq!(Cmd::Null(0, None), res);
     }
 
     #[test]
     fn offset_only_null_cmd() {
         let mut input = "-\n".chars().peekable();
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
         let mut previous_pattern: Option<Regex> = None;
-        assert_eq!(3, buffer.current_line());
+        assert_eq!(3, buffers[0].current_line());
         let res =
-            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed command");
-        assert_eq!(Cmd::Null(Some(Address::Line(2))), res);
+            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed command");
+        assert_eq!(Cmd::Null(0, Some(Address::Line(2))), res);
     }
 
     #[test]
     fn quit() {
-        let mut buffer = EditBuffer::new();
+        let mut buffers = vec![EditBuffer::new()];
         let mut input = "q\n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res =
-            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("a successful parse");
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect("a successful parse");
         assert_eq!(Cmd::Quit, res);
     }
 
     #[test]
     fn quit_with_illegal_addr() {
         let mut input = "2,3q\n".chars().peekable();
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4"]);
+        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3", "4"])];
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect_err("unexpected addr on quit");
         assert_eq!(Error::UnexpectedAddress, res);
     }
@@ -437,9 +451,9 @@ mod tests {
     #[test]
     fn quit_with_invalid_suffix() {
         let mut input = "q/more/\n".chars().peekable();
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4"]);
+        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3", "4"])];
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect_err("invalid command suffix");
         assert_eq!(Error::InvalidCmdSuffix, res);
     }
@@ -447,21 +461,41 @@ mod tests {
     #[test]
     fn print_cmd() {
         let mut input = "p\r\n".chars().peekable();
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
         let mut previous_pattern: Option<Regex> = None;
-        let res =
-            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed print cmd");
-        assert_eq!(Cmd::Print(None), res);
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect("parsed print cmd");
+        assert_eq!(Cmd::Print(0, None), res);
     }
 
     #[test]
     fn print_cmd_with_invald_suffix() {
         let mut input = "p/more/\r\n".chars().peekable();
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("invalid suffix");
+        assert_eq!(Error::InvalidCmdSuffix, res);
+    }
+
+    #[test]
+    fn append_cmd() {
+        let mut input = "a\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
         let mut previous_pattern: Option<Regex> = None;
         let res =
-            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect_err("invalid suffix");
-        assert_eq!(Error::InvalidCmdSuffix, res);
+            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
+        assert_eq!(Cmd::Append(0, None, Vec::new()), res);
+    }
+
+    #[test]
+    fn append_cmd_with_invalid_suffix() {
+        let mut input = "a/this is invalid/\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("invalid suffix");
+        assert_eq!(Error::InvalidCmdSuffix, res)
     }
 
     #[test]
@@ -972,15 +1006,13 @@ mod tests {
     #[test]
     fn offset_too_large() {
         let mut input = "999999999999999999999999999".chars().peekable();
-        let _res = eval_addr_offsets(&mut input)
-            .err()
-            .expect("should be an error");
+        let _res = eval_addr_offsets(&mut input).expect_err("should be an error");
     }
 
     #[test]
     fn offset_too_small() {
         let mut input = "-999999999999999999999999999".chars().peekable();
-        let _res = eval_addr_offsets(&mut input).err().expect("an error");
+        let _res = eval_addr_offsets(&mut input).expect_err("an error");
         assert!(matches!(Error::OffsetTooSmall, _res));
     }
 

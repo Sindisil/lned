@@ -48,7 +48,7 @@ impl Default for EditBuffer {
 impl From<Vec<&str>> for EditBuffer {
     fn from(value: Vec<&str>) -> Self {
         let mut buf = EditBuffer::with_capacity(value.len());
-        let default_eol = compute_default_eol(&value[..]);
+        let default_eol = compute_default_eol(value.iter());
         buf.default_eol = Some(default_eol);
         let mut value = value
             .iter()
@@ -221,7 +221,7 @@ impl EditBuffer {
 
         // set default_eol if neccessary
         if self.default_eol.is_none() {
-            self.default_eol = Some(compute_default_eol(&lines[..]));
+            self.default_eol = Some(compute_default_eol(&lines));
         }
 
         // Add in missing eol as needed
@@ -252,6 +252,13 @@ impl EditBuffer {
     fn iter(&self) -> Iter<'_, String> {
         self.text.iter()
     }
+    pub fn insert(&mut self, at_line: usize, lines: &[String]) -> usize {
+        let lines_added = lines.len();
+        self.text.splice(at_line..at_line, lines.iter().cloned());
+        self.needs_write = true;
+        self.current_line = at_line + lines_added;
+        self.current_line
+    }
 }
 
 fn compute_native_eol() -> &'static str {
@@ -262,9 +269,10 @@ fn compute_native_eol() -> &'static str {
     }
 }
 
-fn compute_default_eol<S>(lines: &[S]) -> &'static str
+fn compute_default_eol<I, T>(lines: I) -> &'static str
 where
-    S: Deref<Target = str>,
+    I: IntoIterator<Item = T>,
+    T: AsRef<str>,
 {
     let native_eol = if std::env::consts::FAMILY == "windows" {
         "\r\n"
@@ -275,6 +283,7 @@ where
     let mut lf = 0;
 
     for line in lines {
+        let line = line.as_ref();
         if line.ends_with("\r\n") {
             crlf += 1;
         } else if line.ends_with('\n') {
@@ -339,7 +348,7 @@ mod tests {
         assert_eq!(buf_partially_terminated, buf_fully_terminated);
         assert!(buf_non_terminated
             .iter()
-            .all(|l| l.ends_with("\r\n") || l.ends_with("\n")));
+            .all(|l| l.ends_with("\r\n") || l.ends_with('\n')));
     }
 
     #[test]
@@ -347,6 +356,7 @@ mod tests {
         let buf = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert!(buf.needs_write());
     }
+
     ////
     // compute_default_eol() tests
 
@@ -434,7 +444,7 @@ mod tests {
     read_test! {
         read_to_empty_buf_all_lf,
         initial: Vec::<&str>::new(),
-        added: vec!["Line1\n", "Line2\n", "Line3\n",],
+        added: ["Line1\n", "Line2\n", "Line3\n",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3\n",],
         last line read: 3,
@@ -443,16 +453,27 @@ mod tests {
     read_test! {
         read_to_empty_buf_all_lf_no_final,
         initial: Vec::<&str>::new(),
-        added: vec!["Line1\n", "Line2\n", "Line3",],
+        added: ["Line1\n", "Line2\n", "Line3",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3",],
         last line read: 3,
     }
 
     read_test! {
+        read_insert_at_start,
+        initial: vec!["1\r\n", "2", "3",],
+        added: ["New1\n", "New2\n", "New3\n"],
+        at: 0,
+        expect: vec![
+            "New1\n", "New2\n", "New3\n", "1\r\n", "2\r\n", "3\r\n",
+        ],
+        last line read: 3,
+    }
+
+    read_test! {
         read_append_all_lf,
         initial: vec!["Line1\n", "Line2\n", "Line3\n",],
-        added: vec!["New1\n", "New2\n", "New3\n"],
+        added: ["New1\n", "New2\n", "New3\n"],
         at: 3,
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
@@ -463,7 +484,7 @@ mod tests {
     read_test! {
         read_append_most_lf_no_final,
         initial: vec!["Line1\n", "Line2\r\n", "Line3\n", "Line4",],
-        added: vec!["New1\n", "New2\n", "New3"],
+        added: ["New1\n", "New2\n", "New3"],
         at: 4,
         expect: vec![
             "Line1\n", "Line2\r\n", "Line3\n", "Line4\n", "New1\n", "New2\n", "New3",
@@ -474,7 +495,7 @@ mod tests {
     read_test! {
         read_append_most_crlf_no_final,
         initial: vec!["Line1\r\n", "Line2\r\n", "Line3\n", "Line4",],
-        added: vec!["New1\r\n", "New2\n", "New3"],
+        added: ["New1\r\n", "New2\n", "New3"],
         at: 4,
         expect: vec![
             "Line1\r\n", "Line2\r\n", "Line3\n", "Line4\r\n", "New1\r\n", "New2\n", "New3",
@@ -485,7 +506,7 @@ mod tests {
     read_test! {
         read_append_all_lf_no_final,
         initial: vec!["Line1\n", "Line2\n", "Line3",],
-        added: vec!["New1\n", "New2\n", "New3\n"],
+        added: ["New1\n", "New2\n", "New3\n"],
         at: 3,
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
@@ -496,7 +517,7 @@ mod tests {
     read_test! {
         read_append_all_crlf_no_final,
         initial: vec!["Line1\r\n", "Line2\r\n", "Line3",],
-        added: vec!["New1\r\n", "New2\r\n", "New3\r\n"],
+        added: ["New1\r\n", "New2\r\n", "New3\r\n"],
         at: 3,
         expect: vec![
             "Line1\r\n", "Line2\r\n", "Line3\r\n", "New1\r\n", "New2\r\n", "New3\r\n",
@@ -510,7 +531,7 @@ mod tests {
         let mut buffer = EditBuffer::from(initial);
 
         let at = 3;
-        let added = vec!["New1\n", "New2\r\n", "New3"];
+        let added = ["New1\n", "New2\r\n", "New3"];
         let input = new_input_buf(&added[..]);
         let last_read = buffer
             .read(at, &input[..])
@@ -528,13 +549,13 @@ mod tests {
         ];
         assert_eq!(expect, buffer.text);
         assert_eq!(6, last_read);
-        assert_eq!(true, buffer.needs_write());
+        assert!(buffer.needs_write());
     }
 
     read_test! {
         read_insert_all_lf,
         initial: vec!["Line1\n", "Line2\n", "Line3\n",],
-        added: vec!["New1\n", "New2\n", "New3\n"],
+        added: ["New1\n", "New2\n", "New3\n"],
         at: 2,
         expect: vec![
             "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
@@ -545,7 +566,7 @@ mod tests {
     read_test! {
         read_insert_most_lf_no_final,
         initial: vec!["Line1\n", "Line2\r\n", "Line3\n", "Line4\n",],
-        added: vec!["New1\n", "New2\n", "New3"],
+        added: ["New1\n", "New2\n", "New3"],
         at: 2,
         expect: vec![
             "Line1\n",
@@ -562,7 +583,7 @@ mod tests {
     read_test! {
         read_insert_most_crlf_no_final,
         initial: vec!["Line1\r\n", "Line2\r\n", "Line3\n", "Line4\r\n",],
-        added: vec!["New1\r\n", "New2\n", "New3"],
+        added: ["New1\r\n", "New2\n", "New3"],
         at: 2,
         expect: vec![
             "Line1\r\n",
@@ -579,7 +600,7 @@ mod tests {
     read_test! {
         read_insert_all_lf_no_final,
         initial: vec!["Line1\n", "Line2\n", "Line3\n", "Line4\n",],
-        added: vec!["New1\n", "New2\n", "New3"],
+        added: ["New1\n", "New2\n", "New3"],
         at: 2,
         expect: vec![
             "Line1\n",
@@ -596,7 +617,7 @@ mod tests {
     read_test! {
         read_insert_all_crlf_no_final,
         initial: vec!["Line1\r\n", "Line2\r\n", "Line3\r\n", "Line4\r\n",],
-        added: vec!["New1\r\n", "New2\r\n", "New3"],
+        added: ["New1\r\n", "New2\r\n", "New3"],
         at: 2,
         expect: vec![
             "Line1\r\n",
@@ -616,7 +637,7 @@ mod tests {
         let mut buffer = EditBuffer::from(initial);
 
         let at = 2;
-        let added = vec!["New1\r\n", "New2\r\n", "New3"];
+        let added = ["New1\r\n", "New2\r\n", "New3"];
         let input = new_input_buf(&added[..]);
         let last_read = buffer
             .read(at, &input[..])
@@ -635,7 +656,7 @@ mod tests {
         ];
         assert_eq!(expect, buffer.text);
         assert_eq!(5, last_read);
-        assert_eq!(true, buffer.needs_write());
+        assert!(buffer.needs_write());
     }
 
     #[test]
@@ -713,6 +734,7 @@ mod tests {
 
     #[test]
     #[should_panic]
+    #[allow(clippy::reversed_empty_ranges)]
     fn zero_terminated_range_panics() {
         let buffer = EditBuffer::from(vec!["1", "2"]);
         let _ = &buffer[1..0];
@@ -720,6 +742,7 @@ mod tests {
 
     #[test]
     #[should_panic]
+    #[allow(clippy::reversed_empty_ranges)]
     fn zero_terminated_range_inclusive_panics() {
         let buffer = EditBuffer::from(vec!["1", "2"]);
         let _ = &buffer[1..=0];
