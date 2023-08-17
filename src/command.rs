@@ -15,6 +15,7 @@ pub enum Cmd {
     Null(usize, Option<Address>),
     Print(usize, Option<Address>),
     Append(usize, Option<Address>, Vec<String>),
+    Delete(usize, Option<Address>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -78,6 +79,7 @@ fn parse_cmd(
         Some('q') => parse_quit_cmd(cmd_chars, address),
         Some('p') => parse_print_cmd(current_buffer, cmd_chars, address),
         Some('a') => parse_append_cmd(current_buffer, cmd_chars, address),
+        Some('d') => parse_delete_cmd(current_buffer, cmd_chars, address),
         Some(c) => Err(Error::Unknown(c)),
     }
 }
@@ -98,7 +100,11 @@ fn parse_print_cmd(
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
-        None | Some('\n') | Some('\r') => Ok(Cmd::Print(current_buffer, address)),
+        None | Some('\n') => Ok(Cmd::Print(current_buffer, address)),
+        Some('\r') => {
+            cmd_chars.next();
+            parse_print_cmd(current_buffer, cmd_chars, address)
+        }
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
@@ -109,7 +115,26 @@ fn parse_append_cmd(
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
-        None | Some('\n') | Some('\r') => Ok(Cmd::Append(current_buffer, address, Vec::new())),
+        None | Some('\n') => Ok(Cmd::Append(current_buffer, address, Vec::new())),
+        Some('r') => {
+            cmd_chars.next();
+            parse_append_cmd(current_buffer, cmd_chars, address)
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_delete_cmd(
+    current_buffer: usize,
+    cmd_chars: &mut Peekable<Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    match cmd_chars.peek() {
+        None | Some('\n') => Ok(Cmd::Delete(current_buffer, address)),
+        Some('\r') => {
+            cmd_chars.next();
+            parse_delete_cmd(current_buffer, cmd_chars, address)
+        }
         _ => Err(Error::InvalidCmdSuffix),
     }
 }

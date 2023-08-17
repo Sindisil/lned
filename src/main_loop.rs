@@ -13,7 +13,6 @@ pub enum Error {
     /// I/O Error reading input lines
     ReadLines(io::Error),
     ParseCmd(command::Error),
-    Other(String),
 }
 
 impl std::error::Error for Error {}
@@ -25,7 +24,6 @@ impl fmt::Display for Error {
             Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
             Error::ReadLines(e) => write!(f, "Error reading input lines: {e}"),
             Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
-            Error::Other(s) => write!(f, "Error: {s}"),
         }
     }
 }
@@ -71,6 +69,7 @@ where
                 Cmd::Append(i, ref address, ref mut lines) => {
                     do_append(&mut input, &mut buffers[i], address, lines)
                 }
+                Cmd::Delete(i, ref address) => do_delete(&mut buffers[i], address),
                 Cmd::Null(ref _buffer, _address) => todo!(),
             };
             prev_command = Some(cmd);
@@ -142,6 +141,10 @@ where
     Ok(false)
 }
 
+fn do_delete(_buffer: &mut EditBuffer, _address: &Option<Address>) -> Result<bool, Error> {
+    todo!();
+}
+
 fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
     let ok = match prev_command {
         Some(Cmd::Quit) => true,
@@ -180,7 +183,7 @@ fn initialize_buffers(args: &cli::CmdArgs) -> Result<Vec<EditBuffer>, Error> {
     // if buffer list is empty, push new empty buffer onto buffer list
 
     if !args.files.is_empty() {
-todo!("Reading files not yet implemented");
+        todo!("Reading files not yet implemented");
     }
 
     // No files passed in, or none read successfully, so
@@ -314,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn read_lines_returns_lines_entered_CRLF() {
+    fn read_lines_returns_lines_entered_crlf() {
         let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\r\n"];
         let mut input = Vec::new();
         for line in &three_lines {
@@ -461,8 +464,13 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let mut lines = Vec::new();
         let input = b"some test text\nanother line\none more\n.\n";
-        let res = do_append(&input[..], &mut buffer, &Some(Address::Span(2,3)), &mut lines)
-            .expect("successful append");
+        let res = do_append(
+            &input[..],
+            &mut buffer,
+            &Some(Address::Span(2, 3)),
+            &mut lines,
+        )
+        .expect("successful append");
         assert_eq!(6, buffer.current_line());
         assert_eq!(9, buffer.len());
         assert!(!res);
