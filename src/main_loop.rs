@@ -1,6 +1,6 @@
 use crate::cli;
 use crate::command::{self, Address, Cmd};
-use crate::edit_buffer::EditBuffer;
+use crate::edit_buffer::{EditBuffer, Remove};
 use std::fmt;
 use std::io::{self, prelude::*};
 
@@ -141,8 +141,17 @@ where
     Ok(false)
 }
 
-fn do_delete(_buffer: &mut EditBuffer, _address: &Option<Address>) -> Result<bool, Error> {
-    todo!();
+fn do_delete(buffer: &mut EditBuffer, address: &Option<Address>) -> Result<bool, Error> {
+    match address {
+        Some(Address::Line(0)) => return Err(Error::ParseCmd(command::Error::InvalidLineNumber)),
+        Some(Address::Line(n)) => buffer.remove(*n),
+        Some(Address::Span(b, e)) => buffer.remove(*b..=*e),
+        None if buffer.current_line() == 0 => {
+            return Err(Error::ParseCmd(command::Error::InvalidLineNumber))
+        }
+        None => buffer.remove(buffer.current_line()),
+    };
+    Ok(false)
 }
 
 fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
@@ -364,6 +373,9 @@ mod tests {
         assert!(safe);
     }
 
+    ////
+    // Cmd tests
+
     #[test]
     fn do_quit_twice_is_done() {
         let mut buffers = vec![EditBuffer::new()];
@@ -499,5 +511,61 @@ mod tests {
         assert_eq!(2, buffer.current_line());
         assert_eq!(3, buffer.len());
         assert!(!res);
+    }
+
+    #[test]
+    fn do_delete_span() {
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let res = do_delete(&mut buffer, &Some(Address::Span(3, 5))).expect("deleted span");
+        assert!(!res);
+        assert_eq!(3, buffer.len());
+        assert_eq!(vec!["1\r\n", "2\r\n", "6\r\n"], buffer[..]);
+    }
+
+    #[test]
+    fn do_delete_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let res = do_delete(&mut buffer, &Some(Address::Line(3))).expect("deleted line");
+        assert!(!res);
+        assert_eq!(5, buffer.len());
+        assert_eq!(vec!["1\n", "2\n", "4\n", "5\n", "6\n"], buffer[..]);
+    }
+
+    #[test]
+    fn do_delete_span_at_start() {
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let res = do_delete(&mut buffer, &Some(Address::Span(1, 3))).expect("deleted span");
+        assert!(!res);
+        assert_eq!(3, buffer.len());
+        assert_eq!(vec!["4\r\n", "5\r\n", "6\r\n"], buffer[..]);
+    }
+
+    #[test]
+    fn do_delete_span_at_end() {
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let res = do_delete(&mut buffer, &Some(Address::Span(5, 6))).expect("deleted span");
+        assert!(!res);
+        assert_eq!(4, buffer.len());
+        assert_eq!(vec!["1\r\n", "2\r\n", "3\r\n", "4\r\n"], buffer[..]);
+    }
+
+    #[test]
+    fn do_delete_no_addr() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = do_delete(&mut buffer, &None).expect("deleted line");
+        assert!(!res);
+        assert_eq!(5, buffer.len());
+        assert_eq!(vec!["1\n", "2\n", "4\n", "5\n", "6\n"], buffer[..]);
+    }
+
+    #[test]
+    fn do_delete_empty_buffer() {
+        let mut buffer = EditBuffer::new();
+        let res = do_delete(&mut buffer, &None);
+        assert!(match res {
+            Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
+            _ => false,
+        });
     }
 }

@@ -115,6 +115,38 @@ impl Index<RangeFull> for EditBuffer {
     }
 }
 
+pub trait Remove<Idx>
+where
+    Idx: ?Sized,
+{
+    type Element: Sized;
+
+    // Required method
+    fn remove(&mut self, index: Idx) -> Vec<Self::Element>;
+}
+
+impl Remove<usize> for EditBuffer {
+    type Element = String;
+    fn remove(&mut self, index: usize) -> Vec<Self::Element> {
+        let rem = vec![self.text.remove(index - 1)];
+        self.current_line = usize::min(self.len(), index);
+        rem
+    }
+}
+
+impl Remove<RangeInclusive<usize>> for EditBuffer {
+    type Element = String;
+    fn remove(&mut self, index: RangeInclusive<usize>) -> Vec<Self::Element> {
+        let start = *index.start();
+        let rem = self
+            .text
+            .splice(index.start() - 1..=index.end() - 1, None)
+            .collect();
+        self.current_line = usize::min(self.len(), start);
+        rem
+    }
+}
+
 impl EditBuffer {
     /// Creates a new empty `EditBuffer`.
     ///
@@ -179,7 +211,7 @@ impl EditBuffer {
     }
 
     pub fn set_current_line(&mut self, line: usize) {
-        if line == 0 || line > self.text.len() {
+        if (line == 0 && !self.text.is_empty()) || line > self.text.len() {
             panic!("{line} is an invalid index (0-{})", self.len());
         } else {
             self.current_line = line;
@@ -813,5 +845,77 @@ mod tests {
     fn set_current_line_beyond_end() {
         let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         buffer.set_current_line(99);
+    }
+
+    #[test]
+    fn remove_first_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let rem = buffer.remove(1);
+        assert_eq!(vec!["1\n"], rem);
+        assert_eq!(vec!["2\n", "3\n"], buffer[..]);
+        assert_eq!(1, buffer.current_line());
+    }
+
+    #[test]
+    fn remove_last_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let rem = buffer.remove(3);
+        assert_eq!(vec!["3\n"], rem);
+        assert_eq!(vec!["1\n", "2\n"], buffer[..]);
+        assert_eq!(2, buffer.current_line());
+    }
+
+    #[test]
+    fn remove_only_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n"]);
+        let rem = buffer.remove(1);
+        assert_eq!(vec!["1\n"], rem);
+        assert_eq!(Vec::<String>::new(), buffer[..]);
+        assert_eq!(0, buffer.current_line());
+    }
+
+    #[test]
+    fn remove_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let rem = buffer.remove(2);
+        assert_eq!(vec!["2\n"], rem);
+        assert_eq!(vec!["1\n", "3\n"], buffer[..]);
+        assert_eq!(2, buffer.current_line());
+    }
+
+    #[test]
+    fn remove_span_at_start() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let rem = buffer.remove(1..=4);
+        assert_eq!(vec!["1\n", "2\n", "3\n", "4\n"], rem);
+        assert_eq!(vec!["5\n", "6\n"], buffer[..]);
+        assert_eq!(1, buffer.current_line());
+    }
+
+    #[test]
+    fn remove_span_at_end() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let rem = buffer.remove(3..=6);
+        assert_eq!(vec!["3\n", "4\n", "5\n", "6\n"], rem);
+        assert_eq!(vec!["1\n", "2\n"], buffer[..]);
+        assert_eq!(2, buffer.current_line());
+    }
+
+    #[test]
+    fn remove_span() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let rem = buffer.remove(3..=5);
+        assert_eq!(vec!["3\n", "4\n", "5\n"], rem);
+        assert_eq!(vec!["1\n", "2\n", "6\n"], buffer[..]);
+        assert_eq!(3, buffer.current_line());
+    }
+
+    #[test]
+    fn remove_all() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let rem = buffer.remove(1..=6);
+        assert_eq!(vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"], rem);
+        assert_eq!(Vec::<String>::new(), buffer[..]);
+        assert_eq!(0, buffer.current_line());
     }
 }
