@@ -71,6 +71,7 @@ where
                     do_append(&mut input, &mut buffers[i], address, lines)
                 }
                 Cmd::Delete(i, ref address) => do_delete(&mut buffers[i], address),
+                Cmd::Undo => do_undo(),
             };
             prev_command = Some(cmd);
             res
@@ -186,6 +187,10 @@ fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
         eprintln!("Unwritten changes - a second quit will exit w/o saving.");
     }
     ok
+}
+
+fn do_undo() -> Result<bool, Error> {
+    todo!();
 }
 
 fn write_prompt<W>(output: &mut W) -> Result<(), Error>

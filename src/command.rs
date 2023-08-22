@@ -16,6 +16,7 @@ pub enum Cmd {
     Print(usize, Option<Address>),
     Append(usize, Option<Address>, Vec<String>),
     Delete(usize, Option<Address>),
+    Undo,
 }
 
 #[derive(Debug, PartialEq)]
@@ -80,6 +81,7 @@ fn parse_cmd(
         Some('p') => parse_print_cmd(current_buffer, cmd_chars, address),
         Some('a') => parse_append_cmd(current_buffer, cmd_chars, address),
         Some('d') => parse_delete_cmd(current_buffer, cmd_chars, address),
+        Some('u') => parse_undo_cmd(current_buffer, cmd_chars, address),
         Some(c) => Err(Error::Unknown(c)),
     }
 }
@@ -131,6 +133,21 @@ fn parse_delete_cmd(
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
         None | Some('\n') => Ok(Cmd::Delete(current_buffer, address)),
+        Some('\r') => {
+            cmd_chars.next();
+            parse_delete_cmd(current_buffer, cmd_chars, address)
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_undo_cmd(
+    current_buffer: usize,
+    cmd_chars: &mut Peekable<Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    match cmd_chars.peek() {
+        None | Some('\n') => Ok(Cmd::Undo),
         Some('\r') => {
             cmd_chars.next();
             parse_delete_cmd(current_buffer, cmd_chars, address)
