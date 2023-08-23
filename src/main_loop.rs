@@ -65,12 +65,12 @@ where
             let res = match cmd {
                 // dispatch command
                 Cmd::Quit => do_quit(&prev_command, &buffers),
+                Cmd::Null(i, ref address) => do_null(&mut output, &mut buffers[i], address),
                 Cmd::Print(i, ref address) => do_print(&mut output, &mut buffers[i], address),
                 Cmd::Append(i, ref address, ref mut lines) => {
                     do_append(&mut input, &mut buffers[i], address, lines)
                 }
                 Cmd::Delete(i, ref address) => do_delete(&mut buffers[i], address),
-                Cmd::Null(ref _buffer, _address) => todo!(),
             };
             prev_command = Some(cmd);
             res
@@ -85,6 +85,29 @@ where
 
 fn do_quit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> Result<bool, Error> {
     Ok(ok_to_exit(prev_command, buffers))
+}
+
+fn do_null<W>(
+    output: &mut W,
+    buffer: &mut EditBuffer,
+    address: &Option<Address>,
+) -> Result<bool, Error>
+where
+    W: Write,
+{
+    match address {
+        None => {
+            if buffer.is_empty() || buffer.current_line() == buffer.len() {
+                return Err(Error::ParseCmd(command::Error::InvalidLineNumber));
+            }
+            do_print(
+                output,
+                buffer,
+                &Some(Address::Line(buffer.current_line() + 1)),
+            )
+        }
+        _ => do_print(output, buffer, address),
+    }
 }
 
 fn do_print<W>(
@@ -390,6 +413,49 @@ mod tests {
         assert!(!res);
         let res = do_quit(&prev_command, &buffers).expect("no error");
         assert!(res);
+    }
+
+    #[test]
+    fn do_null_no_addr() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        let res = do_null(&mut output, &mut buffer, &None).expect("successful print");
+        assert!(!res);
+        assert_eq!(b"3\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn do_null_single_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        let res =
+            do_null(&mut output, &mut buffer, &Some(Address::Line(3))).expect("successful print");
+        assert!(!res);
+        assert_eq!(b"3\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn do_null_span() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        let res = do_null(&mut output, &mut buffer, &Some(Address::Span(2, 4)))
+            .expect("successful print");
+        assert!(!res);
+        assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn do_null_empty_buffer_gives_error() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::new();
+        let res = do_null(&mut output, &mut buffer, &None);
+        assert!(match res {
+            Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
+            _ => false,
+        });
     }
 
     #[test]

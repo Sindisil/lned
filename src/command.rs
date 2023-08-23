@@ -139,7 +139,7 @@ fn parse_delete_cmd(
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Address {
     Line(usize),
     Span(usize, usize),
