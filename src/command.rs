@@ -9,7 +9,7 @@ use crate::iter_utils::Peeking;
 
 use regex::Regex;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Cmd {
     Quit,
     Null(Option<Address>),
@@ -115,7 +115,7 @@ fn parse_append_cmd(
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
         None | Some('\n') => Ok(Cmd::Append(address, Vec::new())),
-        Some('r') => {
+        Some('\r') => {
             cmd_chars.next();
             parse_append_cmd(cmd_chars, address)
         }
@@ -138,14 +138,13 @@ fn parse_delete_cmd(
 }
 
 fn parse_undo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
-    match cmd_chars.peek() {
-        None | Some('\n') => Ok(Cmd::Undo),
-        Some('\r') => {
-            cmd_chars.next();
-            parse_delete_cmd(cmd_chars, address)
-        }
-        _ => Err(Error::InvalidCmdSuffix),
-    }
+    address.map_or_else(
+        || match cmd_chars.peek() {
+            None | Some('\n') | Some('\r') => Ok(Cmd::Undo),
+            _ => Err(Error::InvalidCmdSuffix),
+        },
+        |_| Err(Error::UnexpectedAddress),
+    )
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -514,7 +513,7 @@ mod tests {
 
     #[test]
     fn append_cmd() {
-        let mut input = "a\n".chars().peekable();
+        let mut input = "a\r\n".chars().peekable();
         let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
         let mut previous_pattern: Option<Regex> = None;
         let res =
@@ -525,6 +524,46 @@ mod tests {
     #[test]
     fn append_cmd_with_invalid_suffix() {
         let mut input = "a/this is invalid/\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("invalid suffix");
+        assert_eq!(Error::InvalidCmdSuffix, res)
+    }
+
+    #[test]
+    fn delete_cmd() {
+        let mut input = "d\r\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
+        assert_eq!(Cmd::Delete(None), res);
+    }
+
+    #[test]
+    fn delete_cmd_with_invalid_suffix() {
+        let mut input = "d/this is invalid/\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("invalid suffix");
+        assert_eq!(Error::InvalidCmdSuffix, res)
+    }
+
+    #[test]
+    fn undo_cmd() {
+        let mut input = "u\r\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
+        assert_eq!(Cmd::Undo, res);
+    }
+
+    #[test]
+    fn undo_cmd_with_invalid_suffix() {
+        let mut input = "u/this is invalid/\n".chars().peekable();
         let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
@@ -592,6 +631,17 @@ mod tests {
     fn dot_line_addr() {
         let buffer = EditBuffer::from(vec!["one", "two", "three"]);
         let mut input = ".n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
+            .expect("successful line addr eval");
+        assert_eq!(Some(buffer.current_line()), res);
+        assert_eq!("n", input.collect::<String>());
+    }
+
+    #[test]
+    fn dot_line_addr_with_spaces() {
+        let buffer = EditBuffer::from(vec!["one", "two", "three"]);
+        let mut input = "   .  n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
         let res = eval_line_addr(&mut input, &buffer, &mut previous_pattern)
             .expect("successful line addr eval");
@@ -896,6 +946,14 @@ mod tests {
     }
 
     #[test]
+    fn semicolon_addr_separator_with_spaces() {
+        let mut input = "  ;n".chars().peekable();
+        let _res = parse_separator(&mut input);
+        assert_eq!(Some(Separator::Semicolon), _res);
+        assert_eq!("n", input.collect::<String>());
+    }
+
+    #[test]
     fn empty_addr_chain() {
         let mut input = "p\n".chars().peekable();
         let mut buffer = EditBuffer::from(vec!["one", "two", "three"]);
@@ -904,6 +962,18 @@ mod tests {
             .expect("evaluated address");
         assert!(res.is_none());
         assert_eq!("p\n", input.collect::<String>());
+    }
+
+    #[test]
+    fn multi_spearator_addr_chain() {
+        let mut input = " 1,2 ; $n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut previous_pattern: Option<Regex> = None;
+        let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
+            .expect("evaluated address");
+        assert_eq!(2, buffer.current_line());
+        assert_eq!(Some(Address::Span(2, 3)), res);
+        assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
@@ -1007,6 +1077,17 @@ mod tests {
         assert_eq!(3, buffer.current_line());
         assert_eq!(Some(Address::Span(3, 3)), res);
         assert_eq!("n", input.collect::<String>());
+    }
+
+    #[test]
+    fn semicolon_left_addr_chain_line_zero() {
+        let mut input = "0;n".chars().peekable();
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(2);
+        let mut previous_pattern: Option<Regex> = None;
+        let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
+            .expect_err("invalid line number");
+        assert_eq!(Error::InvalidLineNumber, res);
     }
 
     #[test]

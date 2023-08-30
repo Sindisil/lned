@@ -1,6 +1,6 @@
 use crate::cli;
-use crate::command::{self, Address, Cmd};
-use crate::edit_buffer::{EditBuffer, Remove};
+use crate::command::{self, Cmd};
+use crate::edit_buffer::{self, EditBuffer};
 use std::fmt;
 use std::io::{self, prelude::*};
 
@@ -11,8 +11,8 @@ pub enum Error {
     /// I/O Error reading command input
     ReadCommand(io::Error),
     /// I/O Error reading input lines
-    ReadLines(io::Error),
     ParseCmd(command::Error),
+    BufferCmd(edit_buffer::Error),
 }
 
 impl std::error::Error for Error {}
@@ -22,8 +22,8 @@ impl fmt::Display for Error {
         match self {
             Error::ReadCommand(e) => write!(f, "Error reading command: {e}"),
             Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
-            Error::ReadLines(e) => write!(f, "Error reading input lines: {e}"),
             Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
+            Error::BufferCmd(e) => write!(f, "buffer command error: {e}"),
         }
     }
 }
@@ -61,27 +61,16 @@ where
             &mut previous_pattern,
         )
         .map_err(Error::ParseCmd)
-        .and_then(|mut cmd| {
+        .and_then(|cmd| {
             let res = match cmd {
-                // TODO:
-                //  - Move buffer specific commands into methods of EditBuffer
-                //  - Dispatch those commands to the current buffer
-                //  - Organize match arms here into App (e.t., quit, edit, switch buffer)
-                //    and Buffer (e.g., print, append, write).
-                //  - Remove buffer index from Cmd -- shouldn't be needed.
-                // dispatch command
+                // dispatch editor commands
                 Cmd::Quit => do_quit(&prev_command, &buffers),
-                Cmd::Null(ref address) => {
-                    do_null(&mut output, &mut buffers[current_buffer], address)
-                }
-                Cmd::Print(ref address) => {
-                    do_print(&mut output, &mut buffers[current_buffer], address)
-                }
-                Cmd::Append(ref address, ref mut lines) => {
-                    do_append(&mut input, &mut buffers[current_buffer], address, lines)
-                }
-                Cmd::Delete(ref address) => do_delete(&mut buffers[current_buffer], address),
-                Cmd::Undo => do_undo(),
+
+                // Otherwise must be a buffer command, so delegate to current buffer
+                _ => buffers[current_buffer]
+                    .do_cmd(cmd.clone(), &mut input, &mut output)
+                    .map_err(Error::BufferCmd)
+                    .and(Ok(false)),
             };
             prev_command = Some(cmd);
             res
@@ -98,96 +87,6 @@ fn do_quit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> Result<bool, E
     Ok(ok_to_exit(prev_command, buffers))
 }
 
-fn do_null<W>(
-    output: &mut W,
-    buffer: &mut EditBuffer,
-    address: &Option<Address>,
-) -> Result<bool, Error>
-where
-    W: Write,
-{
-    match address {
-        None => {
-            if buffer.is_empty() || buffer.current_line() == buffer.len() {
-                return Err(Error::ParseCmd(command::Error::InvalidLineNumber));
-            }
-            do_print(
-                output,
-                buffer,
-                &Some(Address::Line(buffer.current_line() + 1)),
-            )
-        }
-        _ => do_print(output, buffer, address),
-    }
-}
-
-fn do_print<W>(
-    output: &mut W,
-    buffer: &mut EditBuffer,
-    address: &Option<Address>,
-) -> Result<bool, Error>
-where
-    W: Write,
-{
-    match address {
-        Some(Address::Line(n)) => {
-            output
-                .write_all(buffer[*n].as_bytes())
-                .map_err(Error::WriteOutput)?;
-            buffer.set_current_line(*n);
-        }
-        Some(Address::Span(first, last)) => {
-            for l in &buffer[*first..=*last] {
-                output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
-            }
-            buffer.set_current_line(*last);
-        }
-        None => {
-            if buffer.current_line() == 0 {
-                return Err(Error::ParseCmd(command::Error::InvalidLineNumber));
-            }
-            output
-                .write_all(buffer[buffer.current_line()].as_bytes())
-                .map_err(Error::WriteOutput)?;
-        }
-    }
-    output.write(b"\n").map_err(Error::WriteOutput)?;
-    output.flush().map_err(Error::WriteOutput)?;
-    Ok(false)
-}
-
-fn do_append<R>(
-    input: R,
-    buffer: &mut EditBuffer,
-    address: &Option<Address>,
-    lines: &mut Vec<String>,
-) -> Result<bool, Error>
-where
-    R: BufRead,
-{
-    read_lines(input, lines)?;
-    let i = match address {
-        Some(Address::Line(line)) => *line,
-        Some(Address::Span(_, last)) => *last,
-        None => buffer.current_line(),
-    };
-    buffer.insert(i, lines);
-    Ok(false)
-}
-
-fn do_delete(buffer: &mut EditBuffer, address: &Option<Address>) -> Result<bool, Error> {
-    match address {
-        Some(Address::Line(0)) => return Err(Error::ParseCmd(command::Error::InvalidLineNumber)),
-        Some(Address::Line(n)) => buffer.remove(*n),
-        Some(Address::Span(b, e)) => buffer.remove(*b..=*e),
-        None if buffer.current_line() == 0 => {
-            return Err(Error::ParseCmd(command::Error::InvalidLineNumber))
-        }
-        None => buffer.remove(buffer.current_line()),
-    };
-    Ok(false)
-}
-
 fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
     let ok = match prev_command {
         Some(Cmd::Quit) => true,
@@ -197,10 +96,6 @@ fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
         eprintln!("Unwritten changes - a second quit will exit w/o saving.");
     }
     ok
-}
-
-fn do_undo() -> Result<bool, Error> {
-    todo!();
 }
 
 fn write_prompt<W>(output: &mut W) -> Result<(), Error>
@@ -246,23 +141,6 @@ fn initialize_buffers(args: &cli::CmdArgs) -> Result<Vec<EditBuffer>, Error> {
 // Clears previous content of buffer, but doesn't shrink capacity.
 // Returns a Vec of all lines entered *except* the terminating line
 // containing a single dot.
-fn read_lines<R>(mut reader: R, buf: &mut Vec<String>) -> Result<usize, Error>
-where
-    R: BufRead,
-{
-    let mut line = String::new(); // single line input buffer
-    buf.clear(); // get rid of any old input
-
-    loop {
-        reader.read_line(&mut line).map_err(Error::ReadLines)?;
-        if line == ".\n" || line == ".\r\n" {
-            return Ok(buf.len());
-        }
-        buf.push(line);
-        line = String::new();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,60 +206,9 @@ mod tests {
     }
 
     ////
-    // read_lines() tests
-
-    #[test]
-    fn read_line_io_error_gives_correct_error() {
-        let input = BadReader {};
-        let mut input = BufReader::new(input);
-        let mut lines = Vec::new();
-        let _line_count = read_lines(&mut input, &mut lines);
-        assert!(matches!(Err::<Error, _>(Error::ReadLines), _line_count));
-    }
-
-    #[test]
-    fn read_lines_with_no_input_gives_zero_lines() {
-        let input = b".\n";
-        let mut lines = Vec::new();
-        let line_count = read_lines(&input[..], &mut lines).expect("Error reading lines");
-        assert_eq!(0, line_count);
-        assert_eq!(0, lines.len());
-    }
-
-    #[test]
-    fn read_lines_returns_lines_entered() {
-        let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\n"];
-        let mut input = Vec::new();
-        for line in &three_lines {
-            input.extend(line.as_bytes());
-        }
-        let mut lines = Vec::new();
-        let line_count = read_lines(&input[..], &mut lines).expect("Error reading lines");
-
-        assert_eq!(3, line_count);
-        assert_eq!(3, lines.len());
-        assert_eq!(three_lines[..3], lines);
-    }
-
-    #[test]
-    fn read_lines_returns_lines_entered_crlf() {
-        let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\r\n"];
-        let mut input = Vec::new();
-        for line in &three_lines {
-            input.extend(line.as_bytes());
-        }
-        let mut lines = Vec::new();
-        let line_count = read_lines(&input[..], &mut lines).expect("Error reading lines");
-
-        assert_eq!(3, line_count);
-        assert_eq!(3, lines.len());
-        assert_eq!(three_lines[..3], lines);
-    }
-
-    ////
     // initialize_buffers() tests
-
     #[test]
+
     fn initialize_buffers_no_files_gives_single_empty_buffer() {
         let args = cli::CmdArgs {
             files: Vec::new(),
@@ -418,235 +245,15 @@ mod tests {
     fn do_quit_twice_is_done() {
         let mut buffers = vec![EditBuffer::new()];
         let input = b"1\n2\n3\n.\n";
-        let mut lines = Vec::new();
-        let res =
-            do_append(&input[..], &mut buffers[0], &None, &mut lines).expect("successful append");
-        assert!(!res);
-        let mut prev_command = Some(Cmd::Append(Some(Address::Line(0)), lines));
+        let cmd = Cmd::Append(None, Vec::new());
+        buffers[0]
+            .do_cmd(cmd.clone(), &input[..], &mut Vec::new())
+            .expect("appended lines");
+        let mut prev_command = Some(cmd);
         let res = do_quit(&prev_command, &buffers).expect("no error");
         prev_command = Some(Cmd::Quit);
         assert!(!res);
         let res = do_quit(&prev_command, &buffers).expect("no error");
         assert!(res);
-    }
-
-    #[test]
-    fn do_null_no_addr() {
-        let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
-        buffer.set_current_line(2);
-        let res = do_null(&mut output, &mut buffer, &None).expect("successful print");
-        assert!(!res);
-        assert_eq!(b"3\r\n\n", &output[..]);
-    }
-
-    #[test]
-    fn do_null_single_line() {
-        let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
-        buffer.set_current_line(2);
-        let res =
-            do_null(&mut output, &mut buffer, &Some(Address::Line(3))).expect("successful print");
-        assert!(!res);
-        assert_eq!(b"3\r\n\n", &output[..]);
-    }
-
-    #[test]
-    fn do_null_span() {
-        let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_line(5);
-        let res = do_null(&mut output, &mut buffer, &Some(Address::Span(2, 4)))
-            .expect("successful print");
-        assert!(!res);
-        assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
-    }
-
-    #[test]
-    fn do_null_empty_buffer_gives_error() {
-        let mut output = Vec::new();
-        let mut buffer = EditBuffer::new();
-        let res = do_null(&mut output, &mut buffer, &None);
-        assert!(match res {
-            Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
-            _ => false,
-        });
-    }
-
-    #[test]
-    fn do_print_no_addr() {
-        let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
-        buffer.set_current_line(2);
-        let res = do_print(&mut output, &mut buffer, &None).expect("successful print");
-        assert!(!res);
-        assert_eq!(b"2\r\n\n", &output[..]);
-    }
-
-    #[test]
-    fn do_print_single_line() {
-        let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
-        buffer.set_current_line(2);
-        let res =
-            do_print(&mut output, &mut buffer, &Some(Address::Line(3))).expect("successful print");
-        assert!(!res);
-        assert_eq!(b"3\r\n\n", &output[..]);
-    }
-
-    #[test]
-    fn do_print_span() {
-        let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_line(5);
-        let res = do_print(&mut output, &mut buffer, &Some(Address::Span(2, 4)))
-            .expect("successful print");
-        assert!(!res);
-        assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
-    }
-
-    #[test]
-    fn do_print_empty_buffer_gives_error() {
-        let mut output = Vec::new();
-        let mut buffer = EditBuffer::new();
-        let res = do_print(&mut output, &mut buffer, &None);
-        assert!(match res {
-            Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
-            _ => false,
-        });
-    }
-
-    #[test]
-    fn do_append_empty_buffer() {
-        let mut buffer = EditBuffer::new();
-        let mut lines = Vec::new();
-        let input = b"some test text\nanother line\none more\n.\n";
-        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(0)), &mut lines)
-            .expect("successful append");
-        assert_eq!(3, buffer.current_line());
-        assert_eq!(3, buffer.len());
-        assert!(!res);
-    }
-
-    #[test]
-    fn do_append_non_empty_at_0() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let mut lines = Vec::new();
-        let input = b"some test text\nanother line\none more\n.\n";
-        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(0)), &mut lines)
-            .expect("successful append");
-        assert_eq!(3, buffer.current_line());
-        assert_eq!(6, buffer.len());
-        assert!(!res);
-    }
-
-    #[test]
-    fn do_append_in_middle() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let mut lines = Vec::new();
-        let input = b"some test text\nanother line\none more\n.\n";
-        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(2)), &mut lines)
-            .expect("successful append");
-        assert_eq!(5, buffer.current_line());
-        assert_eq!(6, buffer.len());
-        assert!(!res);
-    }
-
-    #[test]
-    fn do_append_span_address() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let mut lines = Vec::new();
-        let input = b"some test text\nanother line\none more\n.\n";
-        let res = do_append(
-            &input[..],
-            &mut buffer,
-            &Some(Address::Span(2, 3)),
-            &mut lines,
-        )
-        .expect("successful append");
-        assert_eq!(6, buffer.current_line());
-        assert_eq!(9, buffer.len());
-        assert!(!res);
-    }
-
-    #[test]
-    fn do_append_at_end() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let mut lines = Vec::new();
-        let input = b"some test text\nanother line\none more\n.\n";
-        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(3)), &mut lines)
-            .expect("successful append");
-        assert_eq!(6, buffer.current_line());
-        assert_eq!(6, buffer.len());
-        assert!(!res);
-    }
-
-    #[test]
-    fn do_append_of_zero_lines() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let mut lines = Vec::new();
-        let input = b".\n";
-        assert_eq!(3, buffer.current_line());
-        let res = do_append(&input[..], &mut buffer, &Some(Address::Line(2)), &mut lines)
-            .expect("successful append");
-        assert_eq!(2, buffer.current_line());
-        assert_eq!(3, buffer.len());
-        assert!(!res);
-    }
-
-    #[test]
-    fn do_delete_span() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        let res = do_delete(&mut buffer, &Some(Address::Span(3, 5))).expect("deleted span");
-        assert!(!res);
-        assert_eq!(3, buffer.len());
-        assert_eq!(vec!["1\r\n", "2\r\n", "6\r\n"], buffer[..]);
-    }
-
-    #[test]
-    fn do_delete_line() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let res = do_delete(&mut buffer, &Some(Address::Line(3))).expect("deleted line");
-        assert!(!res);
-        assert_eq!(5, buffer.len());
-        assert_eq!(vec!["1\n", "2\n", "4\n", "5\n", "6\n"], buffer[..]);
-    }
-
-    #[test]
-    fn do_delete_span_at_start() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        let res = do_delete(&mut buffer, &Some(Address::Span(1, 3))).expect("deleted span");
-        assert!(!res);
-        assert_eq!(3, buffer.len());
-        assert_eq!(vec!["4\r\n", "5\r\n", "6\r\n"], buffer[..]);
-    }
-
-    #[test]
-    fn do_delete_span_at_end() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        let res = do_delete(&mut buffer, &Some(Address::Span(5, 6))).expect("deleted span");
-        assert!(!res);
-        assert_eq!(4, buffer.len());
-        assert_eq!(vec!["1\r\n", "2\r\n", "3\r\n", "4\r\n"], buffer[..]);
-    }
-
-    #[test]
-    fn do_delete_no_addr() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_line(3);
-        let res = do_delete(&mut buffer, &None).expect("deleted line");
-        assert!(!res);
-        assert_eq!(5, buffer.len());
-        assert_eq!(vec!["1\n", "2\n", "4\n", "5\n", "6\n"], buffer[..]);
-    }
-
-    #[test]
-    fn do_delete_empty_buffer() {
-        let mut buffer = EditBuffer::new();
-        let res = do_delete(&mut buffer, &None);
-        assert!(match res {
-            Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
-            _ => false,
-        });
     }
 }
