@@ -33,6 +33,15 @@ After testing several editors, they all consider a buffer dirty if there are any
 undone via the undo function. A few are even simpler, and consider it dirty after the
 first change -- even undo doesn't clear the flag.
 
+Lned implementation should probably be:
+
+1. Hash undo stack after initial file read or after (e) command. In the latter case, the (e)'s undo record should include the previous hash.
+2. Whenever the buffer's dirty status is queried:
+    a. Compute the undo stack's hash if none is cached
+    b. Report dirty buffer if current hash differs from initial hash.
+3. If the undo buffer changes, clear the cached hash.
+4. If a (w) command is issued that writes the whole file (ie., Address is None or spans all lines), compute a new initial hash.
+
 ### Undo/Redo
 
 Two design quesions are fundamental to the undo/redo design:
