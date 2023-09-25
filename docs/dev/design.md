@@ -35,12 +35,20 @@ first change -- even undo doesn't clear the flag.
 
 Lned implementation should probably be:
 
-1. Hash undo stack after initial file read or after (e) command. In the latter case, the (e)'s undo record should include the previous hash.
-2. Whenever the buffer's dirty status is queried:
-    a. Compute the undo stack's hash if none is cached
-    b. Report dirty buffer if current hash differs from initial hash.
-3. If the undo buffer changes, clear the cached hash.
-4. If a (w) command is issued that writes the whole file (ie., Address is None or spans all lines), compute a new initial hash.
+Update clean fingerprint after:
+1. initial file read to buffer
+2. new empty buffer
+3. after (e) command
+4. new buffer with content
+5. after (w) command, if whole buffer is written to default filename
+
+
+The buffer fingerprint contains:
+1. line count 
+2. total length
+3. hash of file
+
+A buffer is dirty if the current state doesn't match the fingerprint.
 
 ### Undo/Redo
 
