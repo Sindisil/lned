@@ -90,7 +90,7 @@ fn do_quit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> Result<bool, E
 fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
     let ok = match prev_command {
         Some(Cmd::Quit) => true,
-        _ => !buffers.iter().any(|buf| buf.needs_write()),
+        _ => !buffers.iter().any(|buf| buf.is_dirty()),
     };
     if !ok {
         eprintln!("Unwritten changes - a second quit will exit w/o saving.");

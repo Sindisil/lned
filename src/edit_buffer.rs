@@ -7,12 +7,14 @@ use core::cmp::Ordering;
 use core::fmt::{self, Display, Formatter};
 use core::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use core::slice::Iter;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use crate::command::{Address, Cmd};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct Revert {
     current_line: usize,
     commands: Vec<Cmd>,
@@ -21,11 +23,11 @@ pub struct Revert {
 #[derive(Debug, Clone)]
 pub struct EditBuffer {
     text: Vec<String>,
-    needs_write: bool,
     current_line: usize,
     default_filename: Option<PathBuf>,
     default_eol: Option<&'static str>,
     undo_stack: Vec<Revert>,
+    clean_fingerprint: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -78,7 +80,6 @@ impl From<Vec<&str>> for EditBuffer {
             })
             .collect::<Vec<String>>();
         buf.text.append(&mut value);
-        buf.needs_write = true;
         buf.current_line = buf.text.len();
         buf
     }
@@ -175,11 +176,11 @@ impl EditBuffer {
     pub fn new() -> EditBuffer {
         EditBuffer {
             text: Vec::new(),
-            needs_write: false,
             current_line: 0,
             default_filename: None,
             default_eol: None,
             undo_stack: Vec::new(),
+            clean_fingerprint: None,
         }
     }
 
@@ -220,8 +221,11 @@ impl EditBuffer {
     }
 
     /// Returns true if buffer has been changed since last write.
-    pub fn needs_write(&self) -> bool {
-        self.needs_write
+    pub fn is_dirty(&self) -> bool {
+        self.clean_fingerprint.map_or_else(
+            || !self.undo_stack.is_empty(),
+            |f| f != fingerprint(&self.undo_stack),
+        )
     }
 
     pub fn current_line(&self) -> usize {
@@ -303,7 +307,6 @@ impl EditBuffer {
 
         // actually add new lines to buffer
         self.text.splice(at_line..at_line, lines);
-        self.needs_write = true;
         self.current_line = at_line + lines_added;
         Ok(self.current_line)
     }
@@ -339,7 +342,6 @@ impl EditBuffer {
         R: BufRead,
         W: Write,
     {
-        eprintln!("do_cmd before execute:\n{:?}\n", self.undo_stack);
         match cmd {
             Cmd::Append(ref address, ref mut lines) => self.do_append(input, address, lines),
             Cmd::Delete(ref address) => self.do_delete(address),
@@ -428,7 +430,6 @@ impl EditBuffer {
         if lines_to_add > 0 {
             self.text
                 .splice(line_before..line_before, lines.iter().cloned());
-            self.needs_write = true;
         }
         self.current_line = line_before + lines_to_add;
 
@@ -534,6 +535,15 @@ where
     }
 }
 
+fn fingerprint<T>(t: &T) -> u64
+where
+    T: Hash,
+{
+    let mut h = DefaultHasher::new();
+    t.hash(&mut h);
+    h.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +575,12 @@ mod tests {
     }
 
     #[test]
+    fn new_empty_buffer_is_clean() {
+        let buffer = EditBuffer::new();
+        assert!(!buffer.is_dirty());
+    }
+
+    #[test]
     fn buffer_with_capacity_has_correct_capacity() {
         const INIT_CAPACITY: usize = 1024;
         let buffer = EditBuffer::with_capacity(INIT_CAPACITY);
@@ -589,9 +605,9 @@ mod tests {
     }
 
     #[test]
-    fn buffer_from_vec_needs_write() {
+    fn buffer_from_vec_is_clean() {
         let buf = EditBuffer::from(vec!["1\n", "2", "3"]);
-        assert!(buf.needs_write());
+        assert!(!buf.is_dirty());
     }
 
     /////
@@ -717,10 +733,6 @@ mod tests {
                         last_read,
                         "expected last_read {}, got {}", $last_read, last_read
                 );
-                assert_eq!(true,
-                        buffer.needs_write(),
-                        "expected buffer needs write, got {}", buffer.needs_write()
-                );
                 assert_eq!($last_read,
                         buffer.current_line(),
                         "expected current_line: {}, got {}", $last_read, buffer.current_line()
@@ -837,7 +849,6 @@ mod tests {
         ];
         assert_eq!(expect, buffer.text);
         assert_eq!(6, last_read);
-        assert!(buffer.needs_write());
     }
 
     read_test! {
@@ -944,7 +955,6 @@ mod tests {
         ];
         assert_eq!(expect, buffer.text);
         assert_eq!(5, last_read);
-        assert!(buffer.needs_write());
     }
 
     #[test]
@@ -1474,6 +1484,19 @@ mod tests {
     }
 
     #[test]
+    fn buffer_dirty_after_append() {
+        let mut buffer = EditBuffer::new();
+        assert!(!buffer.is_dirty());
+        buffer
+            .do_user_cmd(
+                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                &mut &b"1\n2\n3\n.\n"[..],
+                &mut Vec::new(),
+            )
+            .expect("lines appended");
+        assert!(buffer.is_dirty());
+    }
+    #[test]
     fn do_cmd_undo_append() {
         let mut buffer = EditBuffer::new();
         buffer
@@ -1548,6 +1571,44 @@ mod tests {
 
     #[test]
     fn buffer_clean_after_undo_all() {
-        todo!();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+
+        buffer
+            .do_user_cmd(
+                Cmd::Append(Some(Address::Line(2)), Vec::new()),
+                &mut &b"a\nb\nc\n.\n"[..],
+                &mut Vec::new(),
+            )
+            .expect("3 lines appended");
+
+        buffer
+            .do_user_cmd(
+                Cmd::Delete(Some(Address::Span(4, 7))),
+                &mut &b""[..],
+                &mut Vec::new(),
+            )
+            .expect("lines deleted");
+
+        buffer
+            .do_user_cmd(
+                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                &mut &b"x\ny\nz\n.\n"[..],
+                &mut Vec::new(),
+            )
+            .expect("3 lines appended");
+
+        buffer
+            .do_user_cmd(Cmd::Undo, &mut &b""[..], &mut Vec::new())
+            .expect("undone Append");
+
+        buffer
+            .do_user_cmd(Cmd::Undo, &mut &b""[..], &mut Vec::new())
+            .expect("undone Delete");
+
+        buffer
+            .do_user_cmd(Cmd::Undo, &mut &b""[..], &mut Vec::new())
+            .expect("undone Append");
+
+        assert!(!buffer.is_dirty());
     }
 }

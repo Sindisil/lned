@@ -9,7 +9,7 @@ use crate::iter_utils::Peeking;
 
 use regex::Regex;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Hash)]
 pub enum Cmd {
     Quit,
     Null(Option<Address>),
@@ -147,7 +147,7 @@ fn parse_undo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> 
     )
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone, Hash)]
 pub enum Address {
     Line(usize),
     Span(usize, usize),
