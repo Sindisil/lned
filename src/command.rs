@@ -11,11 +11,11 @@ use regex::Regex;
 
 #[derive(Debug, PartialEq, Clone, Hash)]
 pub enum Cmd {
-    Quit,
-    Null(Option<Address>),
-    Print(Option<Address>),
     Append(Option<Address>, Vec<String>),
     Delete(Option<Address>),
+    Null(Option<Address>),
+    Print(Option<Address>),
+    Quit,
     Undo,
 }
 
@@ -76,36 +76,12 @@ fn parse_cmd(
     let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
     match cmd {
         None => Ok(Cmd::Null(address)),
-        Some('q') => parse_quit_cmd(cmd_chars, address),
-        Some('p') => parse_print_cmd(cmd_chars, address),
         Some('a') => parse_append_cmd(cmd_chars, address),
         Some('d') => parse_delete_cmd(cmd_chars, address),
+        Some('p') => parse_print_cmd(cmd_chars, address),
+        Some('q') => parse_quit_cmd(cmd_chars, address),
         Some('u') => parse_undo_cmd(cmd_chars, address),
         Some(c) => Err(Error::Unknown(c)),
-    }
-}
-
-fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
-    address.map_or_else(
-        || match cmd_chars.peek() {
-            None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
-            _ => Err(Error::InvalidCmdSuffix),
-        },
-        |_| Err(Error::UnexpectedAddress),
-    )
-}
-
-fn parse_print_cmd(
-    cmd_chars: &mut Peekable<Chars>,
-    address: Option<Address>,
-) -> Result<Cmd, Error> {
-    match cmd_chars.peek() {
-        None | Some('\n') => Ok(Cmd::Print(address)),
-        Some('\r') => {
-            cmd_chars.next();
-            parse_print_cmd(cmd_chars, address)
-        }
-        _ => Err(Error::InvalidCmdSuffix),
     }
 }
 
@@ -135,6 +111,30 @@ fn parse_delete_cmd(
         }
         _ => Err(Error::InvalidCmdSuffix),
     }
+}
+
+fn parse_print_cmd(
+    cmd_chars: &mut Peekable<Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    match cmd_chars.peek() {
+        None | Some('\n') => Ok(Cmd::Print(address)),
+        Some('\r') => {
+            cmd_chars.next();
+            parse_print_cmd(cmd_chars, address)
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
+    address.map_or_else(
+        || match cmd_chars.peek() {
+            None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
+            _ => Err(Error::InvalidCmdSuffix),
+        },
+        |_| Err(Error::UnexpectedAddress),
+    )
 }
 
 fn parse_undo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
