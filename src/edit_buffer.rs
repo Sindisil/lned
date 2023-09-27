@@ -1281,6 +1281,20 @@ mod tests {
     }
 
     #[test]
+    fn do_cmd_append_one_to_empty_buffer() {
+        let mut buffer = EditBuffer::new();
+        let cmd = Cmd::Append(Some(Address::Line(0)), Vec::new());
+        let input = b"one\n.\n";
+        let expected = EditBuffer::from(vec!["one\n"]);
+        buffer
+            .do_cmd(cmd, &mut &input[..], &mut Vec::new())
+            .expect("successful append");
+        assert_eq!(1, buffer.current_line);
+        assert_eq!(1, buffer.len());
+        assert_eq!(&expected[..], &buffer[..]);
+    }
+
+    #[test]
     fn do_cmd_append_empty_buffer() {
         let mut buffer = EditBuffer::new();
         let cmd = Cmd::Append(Some(Address::Line(0)), Vec::new());
