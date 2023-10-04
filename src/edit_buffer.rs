@@ -24,7 +24,7 @@ pub struct Revert {
 pub struct EditBuffer {
     text: Vec<String>,
     current_line: usize,
-    default_filename: Option<PathBuf>,
+    filename: Option<PathBuf>,
     default_eol: Option<&'static str>,
     undo_stack: Vec<Revert>,
     clean_fingerprint: Option<u64>,
@@ -177,7 +177,7 @@ impl EditBuffer {
         EditBuffer {
             text: Vec::new(),
             current_line: 0,
-            default_filename: None,
+            filename: None,
             default_eol: None,
             undo_stack: Vec::new(),
             clean_fingerprint: None,
@@ -238,6 +238,10 @@ impl EditBuffer {
         } else {
             self.current_line = line;
         }
+    }
+
+    pub fn filename(&self) -> &Option<PathBuf> {
+        &self.filename
     }
 
     pub fn get(&self, index: usize) -> Option<&String> {
@@ -345,65 +349,12 @@ impl EditBuffer {
         match cmd {
             Cmd::Append(ref address, ref mut lines) => self.do_append(input, address, lines),
             Cmd::Delete(ref address) => self.do_delete(address),
+            Cmd::File(ref filename) => self.do_file(output, filename),
             Cmd::Null(ref address) => self.do_null(output, address),
             Cmd::Print(ref address) => self.do_print(output, address),
             Cmd::Undo => self.do_undo(input, output),
             _ => Err(Error::InvalidCmd(cmd)),
         }
-    }
-
-    fn do_null<W>(
-        &mut self,
-        output: &mut W,
-        address: &Option<Address>,
-    ) -> Result<Option<Revert>, Error>
-    where
-        W: Write,
-    {
-        match address {
-            None => {
-                if self.is_empty() || self.current_line == self.len() {
-                    return Err(Error::InvalidAddress);
-                }
-                self.do_print(output, &Some(Address::Line(self.current_line + 1)))
-            }
-            _ => self.do_print(output, address),
-        }
-    }
-
-    fn do_print<W>(
-        &mut self,
-        output: &mut W,
-        address: &Option<Address>,
-    ) -> Result<Option<Revert>, Error>
-    where
-        W: Write,
-    {
-        match address {
-            Some(Address::Line(n)) => {
-                output
-                    .write_all(self[*n].as_bytes())
-                    .map_err(Error::WriteOutput)?;
-                self.current_line = *n;
-            }
-            Some(Address::Span(first, last)) => {
-                for l in &self[*first..=*last] {
-                    output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
-                }
-                self.current_line = *last;
-            }
-            None => {
-                if self.current_line == 0 {
-                    return Err(Error::InvalidAddress);
-                }
-                output
-                    .write_all(self[self.current_line].as_bytes())
-                    .map_err(Error::WriteOutput)?;
-            }
-        }
-        output.write(b"\n").map_err(Error::WriteOutput)?;
-        output.flush().map_err(Error::WriteOutput)?;
-        Ok(None)
     }
 
     fn do_append<R>(
@@ -464,6 +415,88 @@ impl EditBuffer {
             current_line: undo_current_line,
             commands: vec![Cmd::Append(Some(Address::Line(line_before)), lines_removed)],
         }))
+    }
+
+    fn do_file<W>(
+        &mut self,
+        output: &mut W,
+        filename: &Option<PathBuf>,
+    ) -> Result<Option<Revert>, Error>
+    where
+        W: Write,
+    {
+        if filename.is_some() {
+            self.filename = filename.clone();
+        }
+
+        match &self.filename {
+            None => {
+                output
+                    .write_all(b"No current filename\n")
+                    .map_err(Error::WriteOutput)?;
+                Ok(None)
+            }
+            Some(f) => {
+                output
+                    .write_all(format!("{}\n", f.display()).as_bytes())
+                    .map_err(Error::WriteOutput)?;
+                Ok(None)
+            }
+        }
+    }
+
+    fn do_null<W>(
+        &mut self,
+        output: &mut W,
+        address: &Option<Address>,
+    ) -> Result<Option<Revert>, Error>
+    where
+        W: Write,
+    {
+        match address {
+            None => {
+                if self.is_empty() || self.current_line == self.len() {
+                    return Err(Error::InvalidAddress);
+                }
+                self.do_print(output, &Some(Address::Line(self.current_line + 1)))
+            }
+            _ => self.do_print(output, address),
+        }
+    }
+
+    fn do_print<W>(
+        &mut self,
+        output: &mut W,
+        address: &Option<Address>,
+    ) -> Result<Option<Revert>, Error>
+    where
+        W: Write,
+    {
+        match address {
+            Some(Address::Line(n)) => {
+                output
+                    .write_all(self[*n].as_bytes())
+                    .map_err(Error::WriteOutput)?;
+                self.current_line = *n;
+            }
+            Some(Address::Span(first, last)) => {
+                for l in &self[*first..=*last] {
+                    output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
+                }
+                self.current_line = *last;
+            }
+            None => {
+                if self.current_line == 0 {
+                    return Err(Error::InvalidAddress);
+                }
+                output
+                    .write_all(self[self.current_line].as_bytes())
+                    .map_err(Error::WriteOutput)?;
+            }
+        }
+        output.write(b"\n").map_err(Error::WriteOutput)?;
+        output.flush().map_err(Error::WriteOutput)?;
+        Ok(None)
     }
 
     fn do_undo<R, W>(&mut self, input: &mut R, output: &mut W) -> Result<Option<Revert>, Error>
@@ -1624,5 +1657,79 @@ mod tests {
             .expect("undone Append");
 
         assert!(!buffer.is_dirty());
+    }
+
+    #[test]
+    fn print_filename_none_set() {
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut output = Vec::new();
+        let _res = buffer
+            .do_cmd(Cmd::File(None), &mut &b""[..], &mut output)
+            .expect("notice of no current filename");
+        assert_eq!(b"No current filename\n", &output[..]);
+        assert_eq!(None, *buffer.filename());
+    }
+
+    #[test]
+    fn set_filename() {
+        let new_filename = "a_new_filename.txt";
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut output = Vec::new();
+        assert_eq!(None, *buffer.filename());
+        let _res = buffer
+            .do_cmd(
+                Cmd::File(Some(PathBuf::from(new_filename))),
+                &mut &b""[..],
+                &mut output,
+            )
+            .expect("successful setting of filename");
+        assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
+        assert_eq!(Some(PathBuf::from(new_filename)), *buffer.filename());
+    }
+
+    #[test]
+    fn print_filename() {
+        let new_filename = "a_new_filename.txt";
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut output = Vec::new();
+        assert_eq!(None, *buffer.filename());
+        let _res = buffer
+            .do_cmd(
+                Cmd::File(Some(PathBuf::from(new_filename))),
+                &mut &b""[..],
+                &mut output,
+            )
+            .expect("successful setting of filename");
+        assert_eq!(Some(PathBuf::from(new_filename)), *buffer.filename());
+        output.clear();
+        let _res = buffer
+            .do_cmd(Cmd::File(None), &mut &b""[..], &mut output)
+            .expect("displayed filename");
+        assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
+    }
+
+    #[test]
+    fn change_filename() {
+        let orig_filename = "a_filename.md";
+        let new_filename = "a_new_filename.txt";
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut output = Vec::new();
+        let _res = buffer
+            .do_cmd(
+                Cmd::File(Some(PathBuf::from(orig_filename))),
+                &mut &b""[..],
+                &mut output,
+            )
+            .expect("successful setting of filename");
+        output.clear();
+        let _res = buffer
+            .do_cmd(
+                Cmd::File(Some(PathBuf::from(new_filename))),
+                &mut &b""[..],
+                &mut output,
+            )
+            .expect("displayed filename");
+        assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
+        assert_eq!(Some(PathBuf::from(new_filename)), *buffer.filename());
     }
 }

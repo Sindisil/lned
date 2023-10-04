@@ -2,6 +2,7 @@ use core::cmp;
 use core::fmt::{self, Debug, Display, Formatter};
 use core::iter::Peekable;
 use core::str::Chars;
+use std::path::PathBuf;
 
 use crate::char_utils::CharUtils;
 use crate::edit_buffer::EditBuffer;
@@ -11,11 +12,12 @@ use regex::Regex;
 
 #[derive(Debug, PartialEq, Clone, Hash)]
 pub enum Cmd {
-    Quit,
-    Null(Option<Address>),
-    Print(Option<Address>),
     Append(Option<Address>, Vec<String>),
     Delete(Option<Address>),
+    File(Option<PathBuf>),
+    Null(Option<Address>),
+    Print(Option<Address>),
+    Quit,
     Undo,
 }
 
@@ -33,6 +35,7 @@ pub enum Error {
     TrailingBackslash,
     InvalidPatternDelimiter,
     InvalidCmdSuffix,
+    InvalidFilename,
 }
 
 impl std::error::Error for Error {}
@@ -52,6 +55,7 @@ impl Display for Error {
             Error::NoPreviousPattern => write!(f, "no previous pattern"),
             Error::InvalidPatternDelimiter => write!(f, "invalid pattern delimiter"),
             Error::InvalidCmdSuffix => write!(f, "invalid command suffix"),
+            Error::InvalidFilename => write!(f, "invalid filename"),
         }
     }
 }
@@ -76,36 +80,13 @@ fn parse_cmd(
     let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
     match cmd {
         None => Ok(Cmd::Null(address)),
-        Some('q') => parse_quit_cmd(cmd_chars, address),
-        Some('p') => parse_print_cmd(cmd_chars, address),
         Some('a') => parse_append_cmd(cmd_chars, address),
         Some('d') => parse_delete_cmd(cmd_chars, address),
+        Some('f') => parse_file_cmd(cmd_chars, address),
+        Some('p') => parse_print_cmd(cmd_chars, address),
+        Some('q') => parse_quit_cmd(cmd_chars, address),
         Some('u') => parse_undo_cmd(cmd_chars, address),
         Some(c) => Err(Error::Unknown(c)),
-    }
-}
-
-fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
-    address.map_or_else(
-        || match cmd_chars.peek() {
-            None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
-            _ => Err(Error::InvalidCmdSuffix),
-        },
-        |_| Err(Error::UnexpectedAddress),
-    )
-}
-
-fn parse_print_cmd(
-    cmd_chars: &mut Peekable<Chars>,
-    address: Option<Address>,
-) -> Result<Cmd, Error> {
-    match cmd_chars.peek() {
-        None | Some('\n') => Ok(Cmd::Print(address)),
-        Some('\r') => {
-            cmd_chars.next();
-            parse_print_cmd(cmd_chars, address)
-        }
-        _ => Err(Error::InvalidCmdSuffix),
     }
 }
 
@@ -135,6 +116,57 @@ fn parse_delete_cmd(
         }
         _ => Err(Error::InvalidCmdSuffix),
     }
+}
+
+fn parse_file_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
+    if address.is_some() {
+        return Err(Error::UnexpectedAddress);
+    }
+    match cmd_chars.peek() {
+        None | Some('\n') | Some('\r') => Ok(Cmd::File(None)),
+        Some(c) if c.is_blank() => {
+            let filename = parse_filename(cmd_chars);
+            if filename.is_empty() {
+                Err(Error::InvalidFilename)
+            } else {
+                Ok(Cmd::File(Some(PathBuf::from(filename))))
+            }
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_filename(cmd_chars: &mut Peekable<Chars>) -> String {
+    let mut filename = String::new();
+    while let Some(c) = cmd_chars.next_if(|c| *c != '\n') {
+        filename.push(c);
+    }
+
+    filename.trim().to_owned()
+}
+
+fn parse_print_cmd(
+    cmd_chars: &mut Peekable<Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    match cmd_chars.peek() {
+        None | Some('\n') => Ok(Cmd::Print(address)),
+        Some('\r') => {
+            cmd_chars.next();
+            parse_print_cmd(cmd_chars, address)
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
+    address.map_or_else(
+        || match cmd_chars.peek() {
+            None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
+            _ => Err(Error::InvalidCmdSuffix),
+        },
+        |_| Err(Error::UnexpectedAddress),
+    )
 }
 
 fn parse_undo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
@@ -1205,5 +1237,55 @@ mod tests {
         let mut input = "/stuff + other_stuff./\n".chars().peekable();
         let res = parse_pattern(&mut input).expect("parsed pattern");
         assert_eq!("stuff + other_stuff.".to_owned(), res);
+    }
+
+    #[test]
+    fn parse_file_cmd_no_filname() {
+        let mut buffers = vec![EditBuffer::new()];
+        let mut input = "f\n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect("a successful parse");
+        assert_eq!(Cmd::File(None), res);
+    }
+
+    #[test]
+    fn parse_file_cmd_blank_filename() {
+        let mut buffers = vec![EditBuffer::new()];
+        let mut input = "f \r\n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("illegal filename");
+        assert_eq!(Error::InvalidFilename, res);
+    }
+
+    #[test]
+    fn parse_file_cmd() {
+        let mut buffers = vec![EditBuffer::new()];
+        let mut input = "f a_filename.txt\r\n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect("a successful parse");
+        assert_eq!(Cmd::File(Some(PathBuf::from("a_filename.txt"))), res);
+    }
+
+    #[test]
+    fn parse_file_cmd_unexpected_address() {
+        let mut buffers = vec![EditBuffer::new()];
+        let mut input = "1234f a_filename.txt\r\n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("unexpected address");
+        assert_eq!(Error::UnexpectedAddress, res);
+    }
+
+    #[test]
+    fn parse_file_cmd_invalid_suffix() {
+        let mut buffers = vec![EditBuffer::new()];
+        let mut input = "f/a/filename".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("invalid suffix");
+        assert_eq!(Error::InvalidCmdSuffix, res);
     }
 }
