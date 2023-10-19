@@ -338,6 +338,8 @@ impl EditBuffer {
             Some(Address::Span(b, e)) => *b..=*e,
         };
 
+        let full_buffer_write = line_span == (1usize..=self.len());
+
         let mut total_bytes_written = 0;
 
         if !line_span.is_empty() {
@@ -355,6 +357,9 @@ impl EditBuffer {
         }
 
         writeln!(output, "{total_bytes_written}").map_err(Error::WriteOutput)?;
+        if full_buffer_write {
+            self.clean_fingerprint = Some(fingerprint(&self.undo_stack));
+        }
         Ok(())
     }
 
@@ -722,6 +727,73 @@ mod tests {
             .write(&mut output, &None, &mut dummy_file)
             .expect("successful write");
         assert_eq!(b"0\n", &output[..]);
+    }
+
+    #[test]
+    fn write_no_addr_leaves_clean_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(!buffer.is_dirty());
+        buffer
+            .do_user_cmd(
+                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                &mut &b"one more line\n.\n"[..],
+                &mut Vec::new(),
+            )
+            .expect("line appended");
+        assert!(buffer.is_dirty());
+        let mut dummy_file = Vec::new();
+        let mut output = Vec::new();
+        let _ = buffer
+            .write(&mut output, &None, &mut dummy_file)
+            .expect("successful write");
+        assert_eq!(b"20\n", &output[..]);
+        assert!(!buffer.is_dirty());
+    }
+
+    #[test]
+    fn write_full_buffer_leaves_clean_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(!buffer.is_dirty());
+        buffer
+            .do_user_cmd(
+                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                &mut &b"one more line\n.\n"[..],
+                &mut Vec::new(),
+            )
+            .expect("line appended");
+        assert!(buffer.is_dirty());
+        let mut dummy_file = Vec::new();
+        let mut output = Vec::new();
+        let _ = buffer
+            .write(
+                &mut output,
+                &Some(Address::Span(1, buffer.len())),
+                &mut dummy_file,
+            )
+            .expect("successful write");
+        assert_eq!(b"20\n", &output[..]);
+        assert!(!buffer.is_dirty());
+    }
+
+    #[test]
+    fn write_partial_buffer_leaves_dirty_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(!buffer.is_dirty());
+        buffer
+            .do_user_cmd(
+                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                &mut &b"one more line\n.\n"[..],
+                &mut Vec::new(),
+            )
+            .expect("line appended");
+        assert!(buffer.is_dirty());
+        let mut dummy_file = Vec::new();
+        let mut output = Vec::new();
+        let _ = buffer
+            .write(&mut output, &Some(Address::Span(1, 2)), &mut dummy_file)
+            .expect("successful write");
+        assert_eq!(b"16\n", &output[..]);
+        assert!(buffer.is_dirty());
     }
 
     /////
