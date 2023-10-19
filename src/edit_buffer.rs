@@ -8,6 +8,7 @@ use core::fmt::{self, Display, Formatter};
 use core::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use core::slice::Iter;
 use std::collections::hash_map::DefaultHasher;
+use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
@@ -38,6 +39,9 @@ pub enum Error {
     WriteOutput(io::Error),
     ReadLines(io::Error),
     InvalidCmd(Cmd),
+    NoFilename,
+    FileOpen(io::Error),
+    WriteLines(io::Error),
 }
 
 impl std::error::Error for Error {}
@@ -54,6 +58,9 @@ impl Display for Error {
             Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
             Error::InvalidCmd(c) => write!(f, "Invalid buffer command {c:?}"),
             Error::ReadLines(e) => write!(f, "Error reading input lines: {e}"),
+            Error::NoFilename => write!(f, "No filename"),
+            Error::FileOpen(e) => write!(f, "Error opening file: {e}"),
+            Error::WriteLines(e) => write!(f, "Error writing lines to file: {e}"),
         }
     }
 }
@@ -315,6 +322,47 @@ impl EditBuffer {
         Ok(self.current_line)
     }
 
+    fn write<W1, W2>(
+        &mut self,
+        output: &mut W1,
+        address: &Option<Address>,
+        destination: &mut W2,
+    ) -> Result<(), Error>
+    where
+        W1: Write,
+        W2: Write,
+    {
+        let line_span = match address {
+            None => 1usize..=self.len(),
+            Some(Address::Line(n)) => *n..=*n,
+            Some(Address::Span(b, e)) => *b..=*e,
+        };
+
+        let full_buffer_write = line_span == (1usize..=self.len());
+
+        let mut total_bytes_written = 0;
+
+        if !line_span.is_empty() {
+            for line in &self[line_span] {
+                let bytes_to_write = line.len();
+                let mut bytes_written = 0;
+                while bytes_written < bytes_to_write {
+                    bytes_written = bytes_written
+                        + destination
+                            .write(line[bytes_written..].as_bytes())
+                            .map_err(Error::WriteLines)?;
+                }
+                total_bytes_written += bytes_written;
+            }
+        }
+
+        writeln!(output, "{total_bytes_written}").map_err(Error::WriteOutput)?;
+        if full_buffer_write {
+            self.clean_fingerprint = Some(fingerprint(&self.undo_stack));
+        }
+        Ok(())
+    }
+
     fn iter(&self) -> Iter<'_, String> {
         self.text.iter()
     }
@@ -353,6 +401,7 @@ impl EditBuffer {
             Cmd::Null(ref address) => self.do_null(output, address),
             Cmd::Print(ref address) => self.do_print(output, address),
             Cmd::Undo => self.do_undo(input, output),
+            Cmd::Write(ref address, ref filename) => self.do_write(output, address, filename),
             _ => Err(Error::InvalidCmd(cmd)),
         }
     }
@@ -512,6 +561,35 @@ impl EditBuffer {
         }
         Ok(None)
     }
+
+    fn do_write<W>(
+        &mut self,
+        output: &mut W,
+        address: &Option<Address>,
+        filename: &Option<PathBuf>,
+    ) -> Result<Option<Revert>, Error>
+    where
+        W: Write,
+    {
+        if self.filename.is_none() {
+            if filename.is_none() {
+                return Err(Error::NoFilename);
+            } else {
+                self.filename = filename.clone();
+            }
+        }
+
+        let filename = filename.as_ref().unwrap_or(self.filename.as_ref().unwrap());
+
+        let mut dest = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(filename)
+            .map_err(Error::FileOpen)?;
+
+        self.write(output, address, &mut dest)?;
+        Ok(None)
+    }
 }
 
 fn compute_native_eol() -> &'static str {
@@ -590,6 +668,132 @@ mod tests {
         fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
             Err(io::Error::from(io::ErrorKind::Other))
         }
+    }
+
+    struct BadWriter {}
+
+    impl Write for BadWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::Other))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::Other))
+        }
+    }
+
+    ////
+    // write() tests
+
+    #[test]
+    fn write_propegates_errors() {
+        let mut buf = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut dummy_file = BadWriter {};
+        let mut output = Vec::new();
+        let _res = buf
+            .write(&mut output, &Some(Address::Span(1, 2)), &mut dummy_file)
+            .expect_err("io error");
+        assert!(matches!(_res, Error::WriteLines(_)));
+    }
+
+    #[test]
+    fn write_one_line() {
+        let mut buf = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut dummy_file = Vec::new();
+        let mut output = Vec::new();
+        let _ = buf
+            .write(&mut output, &Some(Address::Line(2)), &mut dummy_file)
+            .expect("successful write");
+        assert_eq!(b"2\n", &output[..]);
+    }
+
+    #[test]
+    fn write_many_lines() {
+        let mut buf = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut dummy_file = Vec::new();
+        let mut output = Vec::new();
+        let _ = buf
+            .write(&mut output, &Some(Address::Span(1, 6)), &mut dummy_file)
+            .expect("successful write");
+        assert_eq!(b"18\n", &output[..]);
+    }
+
+    #[test]
+    fn write_empty_buffer() {
+        let mut buf = EditBuffer::new();
+        let mut dummy_file = Vec::new();
+        let mut output = Vec::new();
+        let _ = buf
+            .write(&mut output, &None, &mut dummy_file)
+            .expect("successful write");
+        assert_eq!(b"0\n", &output[..]);
+    }
+
+    #[test]
+    fn write_no_addr_leaves_clean_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(!buffer.is_dirty());
+        buffer
+            .do_user_cmd(
+                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                &mut &b"one more line\n.\n"[..],
+                &mut Vec::new(),
+            )
+            .expect("line appended");
+        assert!(buffer.is_dirty());
+        let mut dummy_file = Vec::new();
+        let mut output = Vec::new();
+        let _ = buffer
+            .write(&mut output, &None, &mut dummy_file)
+            .expect("successful write");
+        assert_eq!(b"20\n", &output[..]);
+        assert!(!buffer.is_dirty());
+    }
+
+    #[test]
+    fn write_full_buffer_leaves_clean_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(!buffer.is_dirty());
+        buffer
+            .do_user_cmd(
+                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                &mut &b"one more line\n.\n"[..],
+                &mut Vec::new(),
+            )
+            .expect("line appended");
+        assert!(buffer.is_dirty());
+        let mut dummy_file = Vec::new();
+        let mut output = Vec::new();
+        let _ = buffer
+            .write(
+                &mut output,
+                &Some(Address::Span(1, buffer.len())),
+                &mut dummy_file,
+            )
+            .expect("successful write");
+        assert_eq!(b"20\n", &output[..]);
+        assert!(!buffer.is_dirty());
+    }
+
+    #[test]
+    fn write_partial_buffer_leaves_dirty_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(!buffer.is_dirty());
+        buffer
+            .do_user_cmd(
+                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                &mut &b"one more line\n.\n"[..],
+                &mut Vec::new(),
+            )
+            .expect("line appended");
+        assert!(buffer.is_dirty());
+        let mut dummy_file = Vec::new();
+        let mut output = Vec::new();
+        let _ = buffer
+            .write(&mut output, &Some(Address::Span(1, 2)), &mut dummy_file)
+            .expect("successful write");
+        assert_eq!(b"16\n", &output[..]);
+        assert!(buffer.is_dirty());
     }
 
     /////

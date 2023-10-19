@@ -19,6 +19,7 @@ pub enum Cmd {
     Print(Option<Address>),
     Quit,
     Undo,
+    Write(Option<Address>, Option<PathBuf>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -86,6 +87,7 @@ fn parse_cmd(
         Some('p') => parse_print_cmd(cmd_chars, address),
         Some('q') => parse_quit_cmd(cmd_chars, address),
         Some('u') => parse_undo_cmd(cmd_chars, address),
+        Some('w') => parse_write_cmd(cmd_chars, address),
         Some(c) => Err(Error::Unknown(c)),
     }
 }
@@ -177,6 +179,24 @@ fn parse_undo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> 
         },
         |_| Err(Error::UnexpectedAddress),
     )
+}
+
+fn parse_write_cmd(
+    cmd_chars: &mut Peekable<Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    match cmd_chars.peek() {
+        None | Some('\n') | Some('\r') => Ok(Cmd::Write(address, None)),
+        Some(c) if c.is_blank() => {
+            let filename = parse_filename(cmd_chars);
+            if filename.is_empty() {
+                Err(Error::InvalidFilename)
+            } else {
+                Ok(Cmd::Write(address, Some(PathBuf::from(filename))))
+            }
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
 }
 
 #[derive(Debug, PartialEq, Copy, Clone, Hash)]
@@ -1283,6 +1303,42 @@ mod tests {
     fn parse_file_cmd_invalid_suffix() {
         let mut buffers = vec![EditBuffer::new()];
         let mut input = "f/a/filename".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("invalid suffix");
+        assert_eq!(Error::InvalidCmdSuffix, res);
+    }
+
+    #[test]
+    fn parse_write_cmd_no_addr() {
+        let mut buffers = vec![EditBuffer::new()];
+        let mut input = "w a_filename.txt\r\n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect("a successful parse");
+        assert_eq!(Cmd::Write(None, Some(PathBuf::from("a_filename.txt"))), res);
+    }
+
+    #[test]
+    fn parse_write_cmd_with_addr() {
+        let mut buffers = vec![EditBuffer::new()];
+        let mut input = "1,3w a_filename.txt\r\n".chars().peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect("a successful parse");
+        assert_eq!(
+            Cmd::Write(
+                Some(Address::Span(1, 3)),
+                Some(PathBuf::from("a_filename.txt"))
+            ),
+            res
+        );
+    }
+
+    #[test]
+    fn parse_write_cmd_invalid_suffix() {
+        let mut buffers = vec![EditBuffer::new()];
+        let mut input = "w/a/filename".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect_err("invalid suffix");
