@@ -4,6 +4,7 @@ mod command;
 mod edit_buffer;
 mod iter_utils;
 mod main_loop;
+mod num_utils;
 
 use std::io;
 
