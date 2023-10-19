@@ -322,32 +322,40 @@ impl EditBuffer {
         Ok(self.current_line)
     }
 
-    fn write_lines<W>(
-        &self,
-        line_span: RangeInclusive<usize>,
-        mut writer: W,
-    ) -> Result<usize, Error>
+    fn write<W1, W2>(
+        &mut self,
+        output: &mut W1,
+        address: &Option<Address>,
+        destination: &mut W2,
+    ) -> Result<(), Error>
     where
-        W: Write,
+        W1: Write,
+        W2: Write,
     {
-        if line_span.is_empty() {
-            return Ok(0usize);
-        }
+        let line_span = match address {
+            None => 1usize..=self.len(),
+            Some(Address::Line(n)) => *n..=*n,
+            Some(Address::Span(b, e)) => *b..=*e,
+        };
 
         let mut total_bytes_written = 0;
 
-        for line in &self[line_span] {
-            let bytes_to_write = line.len();
-            let mut bytes_written = 0;
-            while bytes_written < bytes_to_write {
-                bytes_written = bytes_written
-                    + writer
-                        .write(line[bytes_written..].as_bytes())
-                        .map_err(Error::WriteLines)?;
+        if !line_span.is_empty() {
+            for line in &self[line_span] {
+                let bytes_to_write = line.len();
+                let mut bytes_written = 0;
+                while bytes_written < bytes_to_write {
+                    bytes_written = bytes_written
+                        + destination
+                            .write(line[bytes_written..].as_bytes())
+                            .map_err(Error::WriteLines)?;
+                }
+                total_bytes_written += bytes_written;
             }
-            total_bytes_written += bytes_written;
         }
-        Ok(total_bytes_written)
+
+        writeln!(output, "{total_bytes_written}").map_err(Error::WriteOutput)?;
+        Ok(())
     }
 
     fn iter(&self) -> Iter<'_, String> {
@@ -568,35 +576,14 @@ impl EditBuffer {
 
         let filename = filename.as_ref().unwrap_or(self.filename.as_ref().unwrap());
 
-        let dest = OpenOptions::new()
+        let mut dest = OpenOptions::new()
             .write(true)
             .create(true)
             .open(filename)
             .map_err(Error::FileOpen)?;
 
-        self.write(output, address, dest)?;
+        self.write(output, address, &mut dest)?;
         Ok(None)
-    }
-
-    fn write<W1, W2>(
-        &mut self,
-        output: &mut W1,
-        address: &Option<Address>,
-        destination: W2,
-    ) -> Result<(), Error>
-    where
-        W1: Write,
-        W2: Write,
-    {
-        let line_span = match address {
-            None => 1usize..=self.len(),
-            Some(Address::Line(n)) => *n..=*n + 1,
-            Some(Address::Span(b, e)) => *b..=*e + 1,
-        };
-
-        let total_bytes_written = self.write_lines(line_span, destination)?;
-        writeln!(output, "{total_bytes_written}").map_err(Error::WriteOutput)?;
-        Ok(())
     }
 }
 
@@ -694,43 +681,47 @@ mod tests {
     // write() tests
 
     #[test]
-    fn write_lines_propegates_errors() {
-        let buf = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+    fn write_propegates_errors() {
+        let mut buf = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut dummy_file = BadWriter {};
+        let mut output = Vec::new();
         let _res = buf
-            .write_lines(1..=2, &mut dummy_file)
+            .write(&mut output, &Some(Address::Span(1, 2)), &mut dummy_file)
             .expect_err("io error");
         assert!(matches!(_res, Error::WriteLines(_)));
     }
 
     #[test]
-    fn write_lines_one_line() {
-        let buf = EditBuffer::from(vec!["1\n", "2", "3"]);
+    fn write_one_line() {
+        let mut buf = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut dummy_file = Vec::new();
-        let res = buf
-            .write_lines(2..=2, &mut dummy_file)
+        let mut output = Vec::new();
+        let _ = buf
+            .write(&mut output, &Some(Address::Line(2)), &mut dummy_file)
             .expect("successful write");
-        assert_eq!(2usize, res);
+        assert_eq!(b"2\n", &output[..]);
     }
 
     #[test]
-    fn write_lines_many_lines() {
-        let buf = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+    fn write_many_lines() {
+        let mut buf = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let mut dummy_file = Vec::new();
-        let res = buf
-            .write_lines(1..=6, &mut dummy_file)
+        let mut output = Vec::new();
+        let _ = buf
+            .write(&mut output, &Some(Address::Span(1, 6)), &mut dummy_file)
             .expect("successful write");
-        assert_eq!(18usize, res);
+        assert_eq!(b"18\n", &output[..]);
     }
 
     #[test]
-    fn write_lines_empty_buffer() {
-        let buf = EditBuffer::new();
+    fn write_empty_buffer() {
+        let mut buf = EditBuffer::new();
         let mut dummy_file = Vec::new();
-        let res = buf
-            .write_lines(1..=0, &mut dummy_file)
+        let mut output = Vec::new();
+        let _ = buf
+            .write(&mut output, &None, &mut dummy_file)
             .expect("successful write");
-        assert_eq!(0usize, res);
+        assert_eq!(b"0\n", &output[..]);
     }
 
     /////
