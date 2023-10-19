@@ -14,6 +14,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use crate::command::{Address, Cmd};
+use crate::num_utils::NumUtils;
 
 #[derive(Debug, Clone, Hash)]
 pub struct Revert {
@@ -397,12 +398,13 @@ impl EditBuffer {
         match cmd {
             Cmd::Append(ref address, ref mut lines) => self.do_append(input, address, lines),
             Cmd::Delete(ref address) => self.do_delete(address),
+            Cmd::Enumerate(ref address) => self.do_enumerate(output, address),
             Cmd::File(ref filename) => self.do_file(output, filename),
             Cmd::Null(ref address) => self.do_null(output, address),
             Cmd::Print(ref address) => self.do_print(output, address),
+            Cmd::Quit => Err(Error::InvalidCmd(cmd)),
             Cmd::Undo => self.do_undo(input, output),
             Cmd::Write(ref address, ref filename) => self.do_write(output, address, filename),
-            _ => Err(Error::InvalidCmd(cmd)),
         }
     }
 
@@ -466,6 +468,39 @@ impl EditBuffer {
         }))
     }
 
+    fn do_enumerate<W>(
+        &mut self,
+        output: &mut W,
+        address: &Option<Address>,
+    ) -> Result<Option<Revert>, Error>
+    where
+        W: Write,
+    {
+        let span = match address {
+            Some(Address::Line(n)) => *n..=*n,
+            Some(Address::Span(first, last)) => *first..=*last,
+            None => {
+                if self.current_line == 0 {
+                    return Err(Error::InvalidAddress);
+                }
+                self.current_line..=self.current_line
+            }
+        };
+
+        let width = span.end().decimal_digits();
+        let start = *span.start();
+        self.current_line = *span.end();
+
+        for (i, l) in self[span].iter().enumerate() {
+            output
+                .write_all(format!("{:>width$}  {l}", start + i).as_bytes())
+                .map_err(Error::WriteOutput)?;
+        }
+        output.write(b"\n").map_err(Error::WriteOutput)?;
+        output.flush().map_err(Error::WriteOutput)?;
+        Ok(None)
+    }
+
     fn do_file<W>(
         &mut self,
         output: &mut W,
@@ -521,27 +556,18 @@ impl EditBuffer {
     where
         W: Write,
     {
-        match address {
-            Some(Address::Line(n)) => {
-                output
-                    .write_all(self[*n].as_bytes())
-                    .map_err(Error::WriteOutput)?;
-                self.current_line = *n;
-            }
-            Some(Address::Span(first, last)) => {
-                for l in &self[*first..=*last] {
-                    output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
-                }
-                self.current_line = *last;
-            }
+        let span = match address {
+            Some(Address::Line(n)) => *n..=*n,
+            Some(Address::Span(first, last)) => *first..=*last,
             None => {
                 if self.current_line == 0 {
                     return Err(Error::InvalidAddress);
                 }
-                output
-                    .write_all(self[self.current_line].as_bytes())
-                    .map_err(Error::WriteOutput)?;
+                self.current_line..=self.current_line
             }
+        };
+        for l in &self[span] {
+            output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
         }
         output.write(b"\n").map_err(Error::WriteOutput)?;
         output.flush().map_err(Error::WriteOutput)?;
@@ -701,8 +727,7 @@ mod tests {
         let mut buf = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut dummy_file = Vec::new();
         let mut output = Vec::new();
-        let _ = buf
-            .write(&mut output, &Some(Address::Line(2)), &mut dummy_file)
+        buf.write(&mut output, &Some(Address::Line(2)), &mut dummy_file)
             .expect("successful write");
         assert_eq!(b"2\n", &output[..]);
     }
@@ -712,8 +737,7 @@ mod tests {
         let mut buf = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let mut dummy_file = Vec::new();
         let mut output = Vec::new();
-        let _ = buf
-            .write(&mut output, &Some(Address::Span(1, 6)), &mut dummy_file)
+        buf.write(&mut output, &Some(Address::Span(1, 6)), &mut dummy_file)
             .expect("successful write");
         assert_eq!(b"18\n", &output[..]);
     }
@@ -723,8 +747,7 @@ mod tests {
         let mut buf = EditBuffer::new();
         let mut dummy_file = Vec::new();
         let mut output = Vec::new();
-        let _ = buf
-            .write(&mut output, &None, &mut dummy_file)
+        buf.write(&mut output, &None, &mut dummy_file)
             .expect("successful write");
         assert_eq!(b"0\n", &output[..]);
     }
@@ -743,7 +766,7 @@ mod tests {
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let mut output = Vec::new();
-        let _ = buffer
+        buffer
             .write(&mut output, &None, &mut dummy_file)
             .expect("successful write");
         assert_eq!(b"20\n", &output[..]);
@@ -764,7 +787,7 @@ mod tests {
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let mut output = Vec::new();
-        let _ = buffer
+        buffer
             .write(
                 &mut output,
                 &Some(Address::Span(1, buffer.len())),
@@ -789,7 +812,7 @@ mod tests {
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let mut output = Vec::new();
-        let _ = buffer
+        buffer
             .write(&mut output, &Some(Address::Span(1, 2)), &mut dummy_file)
             .expect("successful write");
         assert_eq!(b"16\n", &output[..]);
@@ -1427,7 +1450,7 @@ mod tests {
     }
 
     #[test]
-    fn do_cmdnull_single_line() {
+    fn do_cmd_null_single_line() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
@@ -1442,7 +1465,7 @@ mod tests {
     }
 
     #[test]
-    fn do_cmdnull_span() {
+    fn do_cmd_null_span() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
@@ -1464,6 +1487,82 @@ mod tests {
             .do_cmd(Cmd::Null(None), &mut &b""[..], &mut output)
             .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn do_user_cmd_enumerate_empty_buffer_error() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::new();
+        let _res = buffer
+            .do_user_cmd(Cmd::Enumerate(None), &mut &b""[..], &mut output)
+            .expect_err("invalid address");
+        assert!(matches!(Error::InvalidAddress, _res));
+    }
+
+    #[test]
+    fn do_user_cmd_enumerate_sm_buffer() {
+        let mut output = Vec::new();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        buffer.set_current_line(2);
+        buffer
+            .do_user_cmd(Cmd::Enumerate(None), &mut &b""[..], &mut output)
+            .expect("lines enumerated");
+        assert_eq!(b"2  2\r\n\n", &output[..], "output line 2");
+        assert_eq!(2usize, buffer.current_line(), "current line");
+    }
+
+    #[test]
+    fn do_user_cmd_enumerate_non_undoable() {
+        let mut output = Vec::new();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        buffer.set_current_line(2);
+        let _res = buffer
+            .do_cmd(Cmd::Enumerate(None), &mut &b""[..], &mut output)
+            .expect("lines enumerated");
+        assert!(matches!(None::<Revert>, _res));
+    }
+
+    #[test]
+    fn do_user_cmd_enumerate_lg_buffer() {
+        let mut output = Vec::new();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        let mut line = String::new();
+        for i in 11..=1024 {
+            line.clear();
+            line.push_str(&format!("{i}\r\n.\n"));
+            buffer
+                .do_cmd(
+                    Cmd::Append(Some(Address::Line(buffer.len())), Vec::new()),
+                    &mut line.as_bytes(),
+                    &mut output,
+                )
+                .expect("line appended");
+        }
+        buffer.set_current_line(2);
+        assert_eq!(1024, buffer.len());
+        output.clear();
+        let _res = buffer
+            .do_cmd(
+                Cmd::Enumerate(Some(Address::Span(4, 900))),
+                &mut &b""[..],
+                &mut output,
+            )
+            .expect("lines enumerated");
+        let expected = b"  4  4\r\n";
+        assert_eq!(&expected[..], &output[0..expected.len()]);
+        output.clear();
+        let _ = buffer
+            .do_cmd(
+                Cmd::Enumerate(Some(Address::Line(999))),
+                &mut &b""[..],
+                &mut output,
+            )
+            .expect("Line enumerated");
+        let expected = b"999  999\r\n";
+        assert_eq!(&expected[..], &output[0..expected.len()]);
     }
 
     #[test]
@@ -1747,6 +1846,7 @@ mod tests {
             .expect("lines appended");
         assert!(buffer.is_dirty());
     }
+
     #[test]
     fn do_cmd_undo_append() {
         let mut buffer = EditBuffer::new();

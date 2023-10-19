@@ -14,6 +14,7 @@ use regex::Regex;
 pub enum Cmd {
     Append(Option<Address>, Vec<String>),
     Delete(Option<Address>),
+    Enumerate(Option<Address>),
     File(Option<PathBuf>),
     Null(Option<Address>),
     Print(Option<Address>),
@@ -80,10 +81,11 @@ fn parse_cmd(
 ) -> Result<Cmd, Error> {
     let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
     match cmd {
-        None => Ok(Cmd::Null(address)),
         Some('a') => parse_append_cmd(cmd_chars, address),
         Some('d') => parse_delete_cmd(cmd_chars, address),
         Some('f') => parse_file_cmd(cmd_chars, address),
+        Some('n') => parse_enumerate_cmd(cmd_chars, address),
+        None => Ok(Cmd::Null(address)),
         Some('p') => parse_print_cmd(cmd_chars, address),
         Some('q') => parse_quit_cmd(cmd_chars, address),
         Some('u') => parse_undo_cmd(cmd_chars, address),
@@ -145,6 +147,20 @@ fn parse_filename(cmd_chars: &mut Peekable<Chars>) -> String {
     }
 
     filename.trim().to_owned()
+}
+
+fn parse_enumerate_cmd(
+    cmd_chars: &mut Peekable<Chars>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    match cmd_chars.peek() {
+        None | Some('\n') => Ok(Cmd::Enumerate(address)),
+        Some('\r') => {
+            cmd_chars.next();
+            parse_enumerate_cmd(cmd_chars, address)
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
 }
 
 fn parse_print_cmd(
@@ -556,6 +572,26 @@ mod tests {
     #[test]
     fn print_cmd_with_invald_suffix() {
         let mut input = "p/more/\r\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("invalid suffix");
+        assert_eq!(Error::InvalidCmdSuffix, res);
+    }
+
+    #[test]
+    fn enumerate_cmd() {
+        let mut input = "1,2n\r\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect("parsed enumerate (n) cmd");
+        assert_eq!(Cmd::Enumerate(Some(Address::Span(1, 2))), res);
+    }
+
+    #[test]
+    fn enumerate_cmd_with_invald_suffix() {
+        let mut input = "n/more/\r\n".chars().peekable();
         let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
