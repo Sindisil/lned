@@ -566,6 +566,7 @@ impl EditBuffer {
                 self.current_line..=self.current_line
             }
         };
+        self.current_line = *span.end();
         for l in &self[span] {
             output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
         }
@@ -1480,6 +1481,21 @@ mod tests {
     }
 
     #[test]
+    fn do_cmd_null_sets_current_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        buffer
+            .do_cmd(
+                Cmd::Null(Some(Address::Span(2, 4))),
+                &mut &b""[..],
+                &mut output,
+            )
+            .expect("successful print");
+        assert_eq!(4, buffer.current_line());
+    }
+
+    #[test]
     fn do_cmd_null_empty_buffer_gives_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::new();
@@ -1509,7 +1525,22 @@ mod tests {
             .do_user_cmd(Cmd::Enumerate(None), &mut &b""[..], &mut output)
             .expect("lines enumerated");
         assert_eq!(b"2  2\r\n\n", &output[..], "output line 2");
-        assert_eq!(2usize, buffer.current_line(), "current line");
+    }
+
+    #[test]
+    fn do_user_cmd_enumerate_sets_current_line() {
+        let mut output = Vec::new();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        buffer.set_current_line(2);
+        buffer
+            .do_user_cmd(
+                Cmd::Enumerate(Some(Address::Span(6, 9))),
+                &mut &b""[..],
+                &mut output,
+            )
+            .expect("lines enumerated");
+        assert_eq!(9usize, buffer.current_line(), "current line");
     }
 
     #[test]
@@ -1604,6 +1635,21 @@ mod tests {
             )
             .expect("successful print");
         assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn do_cmd_print_sets_current_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        buffer
+            .do_cmd(
+                Cmd::Print(Some(Address::Span(2, 4))),
+                &mut &b""[..],
+                &mut output,
+            )
+            .expect("successful print");
+        assert_eq!(4, buffer.current_line());
     }
 
     #[test]
