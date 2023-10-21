@@ -68,7 +68,7 @@ where
 
                 // Otherwise must be a buffer command, so delegate to current buffer
                 _ => buffers[current_buffer]
-                    .do_user_cmd(cmd.clone(), &mut input, &mut output)
+                    .do_user_cmd(cmd.clone(), &mut input, &mut output, &prev_command)
                     .map_err(Error::BufferCmd)
                     .and(Ok(false)),
             };
@@ -247,7 +247,7 @@ mod tests {
         let input = b"1\n2\n3\n.\n";
         let cmd = Cmd::Append(None, Vec::new());
         buffers[0]
-            .do_user_cmd(cmd.clone(), &mut &input[..], &mut Vec::new())
+            .do_user_cmd(cmd.clone(), &mut &input[..], &mut Vec::new(), &None)
             .expect("appended lines");
         let mut prev_command = Some(cmd);
         let res = do_quit(&prev_command, &buffers).expect("no error");
