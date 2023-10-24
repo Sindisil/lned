@@ -323,7 +323,7 @@ impl EditBuffer {
         Ok(self.current_line)
     }
 
-    fn edit<W, R>(&mut self, output: &mut W, source: &mut R) -> Result<Option<Revert>, Error>
+    fn edit<W, R>(&mut self, output: &mut W, source: Option<R>) -> Result<Option<Revert>, Error>
     where
         W: Write,
         R: BufRead,
@@ -332,8 +332,10 @@ impl EditBuffer {
         let lines_removed = self.text.clone();
 
         self.text.clear();
-        let bytes_read = self.read(0, source)?;
-        writeln!(output, "{bytes_read}\n").map_err(Error::WriteOutput)?;
+        if let Some(source) = source {
+            let bytes_read = self.read(0, source)?;
+            writeln!(output, "{bytes_read}\n").map_err(Error::WriteOutput)?;
+        }
 
         Ok(Some(Revert {
             current_line: revert_current_line,
@@ -400,10 +402,16 @@ impl EditBuffer {
         R: BufRead,
         W: Write,
     {
+        let is_edit_cmd = matches!(cmd, Cmd::Edit(_));
+        eprintln!("{cmd:?}  {is_edit_cmd}");
         self.do_cmd(cmd, input, output, prev_command)
             .map(|response| {
                 if let Some(undo_record) = response {
                     self.undo_stack.push(undo_record);
+                    if is_edit_cmd {
+                        self.clean_fingerprint = Some(fingerprint(&self.undo_stack));
+                    }
+                    eprintln!("is_dirty {:?}", self.is_dirty());
                 };
             })
     }
@@ -502,23 +510,34 @@ impl EditBuffer {
     where
         W: Write,
     {
-todo!("check if dirty & !second attempt at edit");
-
-todo!("fix filename logic -- always set it specified");
-        if self.filename.is_none() {
-            if filename.is_none() {
-                return Err(Error::NoFilename);
-            } else {
-                self.filename = filename.clone();
-            }
+        if self.is_dirty() && !matches!(prev_command, Some(Cmd::Edit(_))) {
+            write!(
+                output,
+                "Unwritten changes - repeat edit command to discard changes."
+            )
+            .map_err(Error::WriteOutput)?;
+            return Ok(None);
         }
 
-        let filename = filename.as_ref().unwrap_or(self.filename.as_ref().unwrap());
+        if filename.is_some() {
+            self.filename = filename.clone();
+        }
+        let filename = self.filename.as_ref().ok_or(Error::NoFilename)?;
 
-        let f = File::open(filename).map_err(Error::FileOpen)?;
-        let mut source = BufReader::new(f);
+        let f = File::open(filename);
+        let source = match f {
+            Ok(f) => Ok(Some(BufReader::new(f))),
+            Err(e) => match e.kind() {
+                io::ErrorKind::NotFound => {
+                    writeln!(output, "{e}").map_err(Error::WriteOutput)?;
+                    Ok(None)
+                }
+                _ => Err(e),
+            },
+        }
+        .map_err(Error::FileOpen)?;
 
-        self.edit(output, &mut source)
+        self.edit(output, source)
     }
 
     fn do_enumerate<W>(
@@ -2169,5 +2188,77 @@ mod tests {
             .expect("displayed filename");
         assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
         assert_eq!(Some(PathBuf::from(new_filename)), *buffer.filename());
+    }
+
+    #[test]
+    fn do_edit_no_file() {
+        let mut buffer = EditBuffer::new();
+        let mut output = Vec::new();
+        let res = buffer
+            .do_edit(&mut output, &None, &None)
+            .expect_err("no filename");
+        assert!(matches!(res, Error::NoFilename));
+    }
+
+    #[test]
+    fn do_edit_file_not_found() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let file_to_edit = "a_file_that_is_not_there.ext";
+        let mut output = Vec::new();
+        let res = buffer
+            .do_edit(&mut output, &Some(PathBuf::from(file_to_edit)), &None)
+            .expect("edit with message");
+        assert!(res.is_some());
+        assert!(buffer.is_empty());
+        assert!(!buffer.is_dirty());
+        assert_eq!(buffer.filename(), &Some(PathBuf::from(file_to_edit)));
+    }
+    #[test]
+    fn edit_io_error() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let reader = BadReader {};
+        let source = Some(BufReader::new(reader));
+        let mut output = Vec::new();
+        let res = buffer.edit(&mut output, source);
+        assert!(matches!(res, Err(Error::Read(_))));
+    }
+
+    #[test]
+    fn edit_zero_length() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let reader = &b""[..];
+        let source = Some(BufReader::new(reader));
+        let mut output = Vec::new();
+        let res = buffer.edit(&mut output, source).expect("no error");
+        assert!(res.is_some());
+        assert_eq!(buffer[..], Vec::<String>::new());
+    }
+
+    #[test]
+    fn edit_empty_buffer() {
+        let mut buffer = EditBuffer::new();
+        let reader = &b"one\ntwo\nthree\n"[..];
+        let source = Some(BufReader::new(reader));
+        let mut output = Vec::new();
+        assert_eq!(buffer.current_line(), 0);
+
+        let res = buffer.edit(&mut output, source).expect("no error");
+        assert!(res.is_some());
+        assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
+        assert_eq!(buffer.current_line(), 3usize);
+    }
+
+    #[test]
+    fn edit_non_empty_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4"]);
+        let reader = &b"one\ntwo\nthree\n"[..];
+        let source = Some(BufReader::new(reader));
+        let mut output = Vec::new();
+        assert_eq!(buffer.current_line(), 4);
+
+        let res = buffer.edit(&mut output, source).expect("no error");
+        assert!(res.is_some());
+        assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
+        assert_eq!(buffer.current_line(), 3usize);
     }
 }
