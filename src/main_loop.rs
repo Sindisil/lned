@@ -64,11 +64,11 @@ where
         .and_then(|cmd| {
             let res = match cmd {
                 // dispatch editor commands
-                Cmd::Quit => do_quit(&prev_command, &buffers),
+                Cmd::Quit => do_quit(&mut output, &buffers, &prev_command),
 
                 // Otherwise must be a buffer command, so delegate to current buffer
                 _ => buffers[current_buffer]
-                    .do_user_cmd(cmd.clone(), &mut input, &mut output)
+                    .do_user_cmd(cmd.clone(), &mut input, &mut output, &prev_command)
                     .map_err(Error::BufferCmd)
                     .and(Ok(false)),
             };
@@ -76,26 +76,37 @@ where
             res
         })
         .or_else(|e| {
-            eprintln!("{e}");
+            write!(output, "{e}").map_err(Error::WriteOutput)?;
             Ok(false)
         })?;
     }
     Ok(())
 }
 
-fn do_quit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> Result<bool, Error> {
-    Ok(ok_to_exit(prev_command, buffers))
+fn do_quit<W>(
+    output: &mut W,
+    buffers: &[EditBuffer],
+    prev_command: &Option<Cmd>,
+) -> Result<bool, Error>
+where
+    W: Write,
+{
+    let ok = ok_to_exit(prev_command, buffers);
+    if !ok {
+        writeln!(
+            output,
+            "Unwritten changes - repeat quit command to discard changes."
+        )
+        .map_err(Error::WriteOutput)?;
+    }
+    Ok(ok)
 }
 
 fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
-    let ok = match prev_command {
+    match prev_command {
         Some(Cmd::Quit) => true,
         _ => !buffers.iter().any(|buf| buf.is_dirty()),
-    };
-    if !ok {
-        eprintln!("Unwritten changes - a second quit will exit w/o saving.");
     }
-    ok
 }
 
 fn write_prompt<W>(output: &mut W) -> Result<(), Error>
@@ -242,18 +253,25 @@ mod tests {
     // Cmd tests
 
     #[test]
-    fn do_quit_twice_is_done() {
-        let mut buffers = vec![EditBuffer::new()];
-        let input = b"1\n2\n3\n.\n";
-        let cmd = Cmd::Append(None, Vec::new());
-        buffers[0]
-            .do_user_cmd(cmd.clone(), &mut &input[..], &mut Vec::new())
-            .expect("appended lines");
-        let mut prev_command = Some(cmd);
-        let res = do_quit(&prev_command, &buffers).expect("no error");
-        prev_command = Some(Cmd::Quit);
-        assert!(!res);
-        let res = do_quit(&prev_command, &buffers).expect("no error");
-        assert!(res);
+    fn do_quit_twice_exits() {
+        let input = b"a\n1\n2\n3\n.\nq\nq\n";
+        let mut output = Vec::new();
+
+        run(&mut &input[..], &mut output, &Default::default()).expect("no error");
+        assert_eq!(
+            &b"::Unwritten changes - repeat quit command to discard changes.\n:"[..],
+            &output[..]
+        );
+    }
+
+    #[test]
+    fn do_edit_twice_overrides_warning() {
+        let input =
+            b"a\n1\n2\n3\n.\ne a_file_that_is_not_there.ext\ne a_file_that_is_not_there.ext\nq\n";
+        let mut output = Vec::new();
+
+        run(&mut &input[..], &mut output, &Default::default()).expect("no error");
+        assert!(&output[..]
+            .starts_with(b"::Unwritten changes - repeat edit command to discard changes.:"));
     }
 }
