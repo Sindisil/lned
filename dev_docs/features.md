@@ -1,170 +1,130 @@
-# Feature summary
 
-This document describes lned's feature set. It is split into two main
-sections: MVP (minimum viable product) and Enhancements.
+# Features and tasks
 
-# MVP Feature Set
+## Create "what_why_how" doc in dev_docs
 
-This section describes the minimum features to allow lned to be used
-(albeit painfully) for its own continued development. Once these
-features are complete I could (and will try to) dogfood lned development.
+Status: planned
+Issue: 71
 
-* launch, with optional file path to read in
-  - If no file is specified, create empty edit buffer reading file.
-* Simple Prompt (":")
+Create a document to provide context to anyone reading the code:
 
-## Line Addressing
+1. What does 'lned' do?
+2. Why does it exist?
+3. How is it constructed (overall design, design & development philosophy, etc.)
 
-A line address specifies a line in a buffer. *lned* keeps track of the
-_current line_, which commands typically use if no address is
-specified. When a file is read into a buffer, the current line is
-the last line read. After a command executes, the current line
-is set to the last line affected by a command.
+A bare bones version is acceptable for the first milestone, and the expectation is
+that the 'how' section may be extended or edited as development proceeds.
 
-A line address is specified by one of:
+Readme.md should also contain at least a short version of "what" & "why", along
+with a pointer to the w-w-h file, basic build instructions, and a pointer to user docs.
 
-.        The current line.
-$        The last line in the buffer.
-_n_      The _n_th line in the buffer, in the range [1,$]
-0        Before the first line, where that makes sense (i.e., append or insert).
+##  Create a feature tracking document in dev_docs
 
-An line span is a closed range, represented by two line
-addresses separated by a comma or semicolon. The value of the first
-address must not exceed the value  of the second. If only one address
-is given where a span is expected, it is treated as if the specified
-line was given as both the beginning and end of the span.
-If a line span is given where a command expects a single line
-address, the last line specified by the span is used.
+Status: Complete
+Issue: 70
 
-Two special shortcuts for common spans exist:
+Create dev_docs/features.md so that it's possible to track proposed features not
+yet worth entering as issues, as well as to allow work when GitHub is inaccessable.
+It should contain (issue number(when known) & status, as well as other information such a
 
-, or %   All the lines in the buffer; equivalent to the span 1,$.
-;        The current through last lines in the buffer; equivalent to
-         the span .,$.
+Status is one of:
+    * Proposed: Would like to do feature, but not defined well enough to open a task
+      or enhancement issue yet
+    * Planned: Issue has been opened and at least a first cut at syntax and
+      behavior has been defined
+    * Functional: Code & most tests written and committed
+    * Complete: All tests written and passing, docs updated, tracking issue closed
 
-When multiple buffer support is added, both addresses and spans may be prefixed
-by a buffer specifier, which is separated from the line address or span by a colon (':').
-The buffer specifier will initially be the buffer number.
+## Commenting pass
 
-## Commands
+Status: planned
+Issue: 69
 
-Commands are listed with the default address or address range
-(in parentheses) used if none is given. Possible arguements are shown
-as applicable.
+Go over existing code and add comments as appropriate. Intent is for this to
+be roughly production quality code (within my current mastery of idiomatic Rust, anyway).
 
-There are two main types of commands understood by lned: edit commands,
-which may be undone, and immediate commands, which may not. Immediate
-commands which will have destructive side effects will not take effect
-the first time they are given, and instead warning text explaining the
-potential data loss will be written to stdout. Issuing the same
-immediate command a second time with no other commands intervening will
-actually execute the command. This will also be documented for each
-such command.
+## Read command line specified file into buffer
 
-### Edit Commands
-(.)a            Appends text entered in input mode after the specified
-                line, setting the current line to the last line entered.
+Status: planned
+Issue: 4
 
-(.,.)c          Change the specified lines by deleting them and appending
-                text entered in input mode in their place. The buffer's current
-                line is set to the last line enterd.
+Accept a single filename (path) on the command line.
+Acts essentially as if an edit (e) command was issued as part of
+launching lned, but w/o adding a Revert record to the undo stack.
 
-(.,.)m(.,.)     Move lines
+## Rework error messages
 
-                If a single line is specified as the destination, the addressed lines are
-                moved to after the specified line.
+Status: planned
+Issue: 22
 
-                If a line span is specified as the destination, the addressed lines overwrite
-                the destination span, as if by a "change" command.
+1. Wording doesn't match API guidelines (i.e., no need for word "error", etc)
+2. Should probably populate source field as appropriate
+3. Add test coverage for error message formatting.
 
-                In either case, the current_line is set to the last line moved.
+## Basic global (g) command
 
-                It is an error if the source and destination lines overlap.
+Status: planned
+Issue: 46
 
-//TODO - fill out descriptions of insert, join, Justify
-(.)i
+Syntax:
 
-(.,.)t(.,.)     Transfer (i.e., copy) lines.
+(1,$)g/RE/command
 
-                If a single line is specified as the destination, the addressed lines are
-                copied to after the specified line.
+Behavior:
 
-                If a line span is specified as the destination, the addressed lines overwrite
-                the destination span, as if by a "change" command.
+A subset of the full global command implementing essentially a "print matching lines" command.
+Only '/' delimiters supported for search expression, and only a single
+command accepted, which must e one of 'n', 'p', or the null command.
 
-                In either case, the current_line is set to the last line copied.
+## U (redo) command
 
-                It is an error if the source and destination lines overlap.
+Status: planned
+Issue: 53
 
-(.,.+1)j <"join string">
+Syntax:
 
-(.,.+1)J_w_
+U
 
-(.,.)d          Delete the specified lines. The current line is set to the line
-                after the deleted lines, if there is one, otherwise to the line
-                before them.
+Behavior:
 
-### Immediate Commands
+Reverts the most recently undone command (i.e., redoes the command).
 
-e _file_        Edit _file_ in the current buffer.
+## Refactor, clean up, and extend unit tests
 
-                The buffer's default filename is set to the filename specified. If
-                no file is specified, the buffer's default filename is unchanged.
-                
-                All lines in the buffer are deleted, with a warning if there are
-                unwritten changes.
+Status: planned
+Issue: 60
 
-                If the buffer has a deafault filename set, the contents of that file
-                are read into the buffer, and the current_line is set to the last
-                line read.
+1. I believe excessive redundancy has crept into the unit test coverage. Especially worth looking at tests for Address and read().
+2. EditBuffer tests are crying for refactoring WRT boilerplate.
+    a. Probably add a builder
+    b. Maybe add setup functions as well.
+3. None of the Display implementations for Errors are checked.
 
-E _file_        Edit _file_ in a new buffer.
+# Bugs
 
-                A new buffer is created and it's default filename is set to the filename
-                specified. If no file is specified, the bufer's default filename is left
-                unset.
+## Null cmd isn't parsed correctly
 
-                If the buffer has a deafault filename set, the contents of that file
-                are read into the buffer, and the current_line is set to the last
-                line read.
+Status: planned
+Issue: 62
 
-f _file_        Set the current buffer's default filename to _file_.
-                If no _file_ is given, prints the buffer's default filename.
+No parse function to catch invalid suffix.
 
-(.,.)n          Write the specified lines to stdout, prefixed with line numbers.
-                The buffer's current line is set to the last line written.
+## d command shouldn't allow span beginning with 0 
 
-(.,.)p          Write the specified lines to stdout. The buffer's current line
-                is set to the last line written.
+Status: planned
+Issue: 38
 
-q               Quits lned. If there are unwritten changes in any
-                buffer, a warning to stdout. A second consecutive quit command
-                will exit unconditionally, discarding unwritten changes.
+0,5d for example, should give an "invalid address" error.
 
-(.+1)z_n_       Display _n_ lines starting at the specified line. If _n_ is not
-                specified, then the current terminal window height is used. If
-                it isn't possible to fetch the current terminal windown height,
-                the configured scroll_window_size is used as the final fallback
-                (defaulting to 25).
+Starting to think it would be easier to just always use spans internally,
+and represent line actions as a span over a single line.
 
-(1,$)w _file_   Write the specified lines to _file_, overwriting
-                previous contents without warning. If there is no
-                default filename, it is set to _file_, otherwise it
-                is unchanged. If _file_ is not given, the default
-                filename is used if it is set, otherwise an error is given.
+## Errors don't appear to be propegated out of EditBuffer::do_user_cmd()
 
-## Input Mode
+Status: planned
+Issue: 66
 
-When edit commands that take user input (such as *a*) are given,
-lned enters Input Mode. When in Input Mode, commands are not
-available -- standard input is instead collected until input mode is
-terminated by a single period alone on a line. Lines of input are
-terminated by CR or CRLF.
-
-The interrupt signal (usually CTRL-c) will also exit Input Mode, but
-will discard the input text.
-
-# Planned features & commands
+# Proposed work items
 
 There are several features and commands planned for lned that will
 differ from the basic __ed__ functionality which serves as the
