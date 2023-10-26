@@ -20,7 +20,7 @@ with a pointer to the w-w-h file, basic build instructions, and a pointer to use
 
 ##  Create a feature tracking document in dev_docs
 
-Status: planned
+Status: Complete
 Issue: 70
 
 Create dev_docs/features.md so that it's possible to track proposed features not
