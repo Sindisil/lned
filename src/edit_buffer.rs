@@ -274,7 +274,7 @@ impl EditBuffer {
     ///    (e.g., as described above, or similarly when first lines are appended
     ///    or inserted).
     ///
-    /// Returns index of last line read, or an error if read fails
+    /// Returns number of bytes read, or an error if read fails
     pub fn read<R>(&mut self, at_line: usize, mut reader: R) -> Result<usize, Error>
     where
         R: BufRead,
@@ -284,11 +284,13 @@ impl EditBuffer {
         }
         let mut lines = Vec::new();
         let mut line = String::new();
+        let mut bytes_read = 0;
         loop {
             let len = reader.read_line(&mut line).map_err(Error::Read)?;
             if len == 0 {
                 break;
             }
+            bytes_read += len;
             lines.push(line);
             line = String::new();
         }
@@ -320,7 +322,7 @@ impl EditBuffer {
         // actually add new lines to buffer
         self.text.splice(at_line..at_line, lines);
         self.current_line = at_line + lines_added;
-        Ok(self.current_line)
+        Ok(bytes_read)
     }
 
     fn edit<W, R>(&mut self, output: &mut W, source: Option<R>) -> Result<Option<Revert>, Error>
@@ -1045,14 +1047,15 @@ mod tests {
         added: $added:expr,
         at: $at:expr,
         expect: $expect:expr,
-        last line read: $last_read:expr$(,)? } => {
+        bytes read: $bytes_read:expr,
+        current line after: $current_line:expr$(,)? } => {
             #[test]
             fn $name() {
                 let initial = $initial;
                 let mut buffer = EditBuffer::from(initial);
                 let added = $added;
                 let input = new_input_buf(&added[..]);
-                let last_read = buffer
+                let bytes_read = buffer
                     .read($at, &input[..])
                     .expect("Error reading added lines");
 
@@ -1060,13 +1063,13 @@ mod tests {
                         buffer.text,
                         "expected text: {:?}, got {:?}", $expect, &buffer.text
                 );
-                assert_eq!($last_read,
-                        last_read,
-                        "expected last_read {}, got {}", $last_read, last_read
+                assert_eq!($bytes_read,
+                        bytes_read,
+                        "expected bytes_read {}, got {}", $bytes_read, bytes_read
                 );
-                assert_eq!($last_read,
+                assert_eq!($current_line,
                         buffer.current_line(),
-                        "expected current_line: {}, got {}", $last_read, buffer.current_line()
+                        "expected current_line: {}, got {}", $current_line, buffer.current_line()
                 );
             }
         };
@@ -1078,7 +1081,8 @@ mod tests {
         added: ["Line1\n", "Line2\n", "Line3\n",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3\n",],
-        last line read: 3,
+        bytes read: 18,
+        current line after: 3,
     }
 
     read_test! {
@@ -1087,7 +1091,8 @@ mod tests {
         added: ["Line1\n", "Line2\n", "Line3",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3",],
-        last line read: 3,
+        bytes read: 17,
+        current line after: 3,
     }
 
     read_test! {
@@ -1098,7 +1103,8 @@ mod tests {
         expect: vec![
             "New1\n", "New2\n", "New3\n", "1\r\n", "2\r\n", "3\r\n",
         ],
-        last line read: 3,
+        bytes read: 15,
+        current line after: 3,
     }
 
     read_test! {
@@ -1109,7 +1115,8 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
         ],
-        last line read: 6,
+        bytes read: 15,
+        current line after: 6,
     }
 
     read_test! {
@@ -1120,7 +1127,8 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\r\n", "Line3\n", "Line4\n", "New1\n", "New2\n", "New3",
         ],
-        last line read: 7,
+        bytes read: 14,
+        current line after: 7,
     }
 
     read_test! {
@@ -1131,7 +1139,8 @@ mod tests {
         expect: vec![
             "Line1\r\n", "Line2\r\n", "Line3\n", "Line4\r\n", "New1\r\n", "New2\n", "New3",
         ],
-        last line read: 7,
+        bytes read: 15,
+        current line after: 7,
     }
 
     read_test! {
@@ -1142,7 +1151,8 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
         ],
-        last line read: 6,
+        bytes read: 15,
+        current line after: 6,
     }
 
     read_test! {
@@ -1153,7 +1163,8 @@ mod tests {
         expect: vec![
             "Line1\r\n", "Line2\r\n", "Line3\r\n", "New1\r\n", "New2\r\n", "New3\r\n",
         ],
-        last line read: 6,
+        bytes read: 18,
+        current line after: 6,
     }
 
     #[test]
@@ -1164,7 +1175,7 @@ mod tests {
         let at = 3;
         let added = ["New1\n", "New2\r\n", "New3"];
         let input = new_input_buf(&added[..]);
-        let last_read = buffer
+        let bytes_read = buffer
             .read(at, &input[..])
             .expect("Error reading added lines");
 
@@ -1179,7 +1190,8 @@ mod tests {
             "New3",
         ];
         assert_eq!(expect, buffer.text);
-        assert_eq!(6, last_read);
+        assert_eq!(6, buffer.current_line());
+        assert_eq!(bytes_read, 15);
     }
 
     read_test! {
@@ -1190,7 +1202,8 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
         ],
-        last line read: 5,
+        bytes read: 15,
+        current line after: 5,
     }
 
     read_test! {
@@ -1207,7 +1220,8 @@ mod tests {
             "Line3\n",
             "Line4\n",
         ],
-        last line read: 5,
+        bytes read: 14,
+        current line after: 5,
     }
 
     read_test! {
@@ -1224,7 +1238,8 @@ mod tests {
             "Line3\n",
             "Line4\r\n",
         ],
-        last line read: 5,
+        bytes read: 15,
+        current line after: 5,
     }
 
     read_test! {
@@ -1241,7 +1256,8 @@ mod tests {
             "Line3\n",
             "Line4\n",
         ],
-        last line read: 5,
+        bytes read: 14,
+        current line after: 5,
     }
 
     read_test! {
@@ -1258,7 +1274,8 @@ mod tests {
             "Line3\r\n",
             "Line4\r\n",
         ],
-        last line read: 5,
+        bytes read: 16,
+        current line after: 5,
     }
 
     #[test]
@@ -1269,7 +1286,7 @@ mod tests {
         let at = 2;
         let added = ["New1\r\n", "New2\r\n", "New3"];
         let input = new_input_buf(&added[..]);
-        let last_read = buffer
+        let bytes_read = buffer
             .read(at, &input[..])
             .expect("Error reading added lines");
 
@@ -1285,7 +1302,8 @@ mod tests {
             "Line4\r\n",
         ];
         assert_eq!(expect, buffer.text);
-        assert_eq!(5, last_read);
+        assert_eq!(bytes_read, 16);
+        assert_eq!(5, buffer.current_line());
     }
 
     #[test]
@@ -2255,5 +2273,18 @@ mod tests {
         assert!(res.is_some());
         assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
         assert_eq!(buffer.current_line(), 3usize);
+    }
+
+    #[test]
+    fn edit_prints_chars_read() {
+        let mut buffer = EditBuffer::new();
+        let reader = &b"one\ntwo\nthree\n"[..];
+        let source = Some(BufReader::new(reader));
+        let mut output = Vec::new();
+        assert_eq!(buffer.current_line(), 0);
+
+        let res = buffer.edit(&mut output, source).expect("no error");
+        assert!(res.is_some());
+        assert_eq!(&output[..], &b"14\n"[..]);
     }
 }
