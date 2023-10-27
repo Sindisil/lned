@@ -76,7 +76,7 @@ where
             res
         })
         .or_else(|e| {
-            write!(output, "{e}").map_err(Error::WriteOutput)?;
+            writeln!(output, "{e}").map_err(Error::WriteOutput)?;
             Ok(false)
         })?;
     }
@@ -273,5 +273,17 @@ mod tests {
         run(&mut &input[..], &mut output, &Default::default()).expect("no error");
         assert!(&output[..]
             .starts_with(b"::Unwritten changes - repeat edit command to discard changes.:"));
+    }
+
+    #[test]
+    fn new_prompt_on_line_after_error_message() {
+        let input = b"1p\nq\n";
+        let mut output = Vec::new();
+
+        run(&mut &input[..], &mut output, &Default::default()).expect("no error");
+        assert_eq!(
+            &output[..],
+            &b":buffer command error: invalid address\n:"[..],
+        );
     }
 }
