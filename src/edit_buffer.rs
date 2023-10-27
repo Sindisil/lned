@@ -334,7 +334,7 @@ impl EditBuffer {
         self.text.clear();
         if let Some(source) = source {
             let bytes_read = self.read(0, source)?;
-            writeln!(output, "{bytes_read}\n").map_err(Error::WriteOutput)?;
+            writeln!(output, "{bytes_read}").map_err(Error::WriteOutput)?;
         }
 
         Ok(Some(Revert {
@@ -403,7 +403,6 @@ impl EditBuffer {
         W: Write,
     {
         let is_edit_cmd = matches!(cmd, Cmd::Edit(_));
-        eprintln!("{cmd:?}  {is_edit_cmd}");
         self.do_cmd(cmd, input, output, prev_command)
             .map(|response| {
                 if let Some(undo_record) = response {
@@ -411,7 +410,6 @@ impl EditBuffer {
                     if is_edit_cmd {
                         self.clean_fingerprint = Some(fingerprint(&self.undo_stack));
                     }
-                    eprintln!("is_dirty {:?}", self.is_dirty());
                 };
             })
     }
@@ -568,7 +566,6 @@ impl EditBuffer {
                 .write_all(format!("{:>width$}  {l}", start + i).as_bytes())
                 .map_err(Error::WriteOutput)?;
         }
-        output.write(b"\n").map_err(Error::WriteOutput)?;
         output.flush().map_err(Error::WriteOutput)?;
         Ok(None)
     }
@@ -642,7 +639,6 @@ impl EditBuffer {
         for l in &self[span] {
             output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
         }
-        output.write(b"\n").map_err(Error::WriteOutput)?;
         output.flush().map_err(Error::WriteOutput)?;
         Ok(None)
     }
@@ -781,7 +777,6 @@ mod tests {
         }
     }
 
-    ////
     // write() tests
 
     #[test]
@@ -1522,7 +1517,7 @@ mod tests {
         buffer
             .do_cmd(Cmd::Null(None), &mut &b""[..], &mut output, &None)
             .expect("successful print");
-        assert_eq!(b"3\r\n\n", &output[..]);
+        assert_eq!(&output[..], b"3\r\n");
     }
 
     #[test]
@@ -1538,7 +1533,7 @@ mod tests {
                 &None,
             )
             .expect("successful print");
-        assert_eq!(b"3\r\n\n", &output[..]);
+        assert_eq!(&output[..], b"3\r\n");
     }
 
     #[test]
@@ -1554,7 +1549,7 @@ mod tests {
                 &None,
             )
             .expect("successful print");
-        assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
+        assert_eq!(&output[..], b"2\r\n3\r\n4\r\n");
     }
 
     #[test]
@@ -1602,7 +1597,7 @@ mod tests {
         buffer
             .do_user_cmd(Cmd::Enumerate(None), &mut &b""[..], &mut output, &None)
             .expect("lines enumerated");
-        assert_eq!(b"2  2\r\n\n", &output[..], "output line 2");
+        assert_eq!(&output[..], b"2  2\r\n", "output line 2");
     }
 
     #[test]
@@ -1686,7 +1681,7 @@ mod tests {
         buffer
             .do_cmd(Cmd::Print(None), &mut &b""[..], &mut output, &None)
             .expect("successful print");
-        assert_eq!(b"2\r\n\n", &output[..]);
+        assert_eq!(&output[..], b"2\r\n");
     }
 
     #[test]
@@ -1702,7 +1697,7 @@ mod tests {
                 &None,
             )
             .expect("successful print");
-        assert_eq!(b"3\r\n\n", &output[..]);
+        assert_eq!(&output[..], b"3\r\n");
     }
 
     #[test]
@@ -1718,7 +1713,7 @@ mod tests {
                 &None,
             )
             .expect("successful print");
-        assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
+        assert_eq!(&output[..], b"2\r\n3\r\n4\r\n");
     }
 
     #[test]
