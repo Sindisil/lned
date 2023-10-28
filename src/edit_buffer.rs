@@ -342,7 +342,7 @@ impl EditBuffer {
         Ok(Some(Revert {
             current_line: revert_current_line,
             commands: vec![
-                Cmd::Append(Some(Address::Line(0)), lines_removed),
+                Cmd::Append(Some(Address::Line(0)), Some(lines_removed)),
                 Cmd::Delete(Some(Address::Span(1, self.len()))),
             ],
         }))
@@ -445,14 +445,21 @@ impl EditBuffer {
         &mut self,
         input: &mut R,
         address: &Option<Address>,
-        lines: &mut Vec<String>,
+        lines: &mut Option<Vec<String>>,
     ) -> Result<Option<Revert>, Error>
     where
         R: BufRead,
     {
-        if lines.is_empty() {
-            read_lines(input, lines)?;
-        }
+        let lines = match lines {
+            Some(ref l) => l,
+            None => {
+                let mut l = Vec::new();
+                read_lines(input, &mut l)?;
+                *lines = Some(l);
+                lines.as_ref().unwrap()
+            }
+        };
+
         let lines_to_add = lines.len();
 
         let undo_current_line = self.current_line;
@@ -500,7 +507,10 @@ impl EditBuffer {
 
         Ok(Some(Revert {
             current_line: undo_current_line,
-            commands: vec![Cmd::Append(Some(Address::Line(line_before)), lines_removed)],
+            commands: vec![Cmd::Append(
+                Some(Address::Line(line_before)),
+                Some(lines_removed),
+            )],
         }))
     }
 
@@ -848,7 +858,7 @@ mod tests {
         assert!(!buffer.is_dirty());
         buffer
             .do_user_cmd(
-                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                Cmd::Append(Some(Address::Line(0)), None),
                 &mut &b"one more line\n.\n"[..],
                 &mut Vec::new(),
                 &None,
@@ -870,7 +880,7 @@ mod tests {
         assert!(!buffer.is_dirty());
         buffer
             .do_user_cmd(
-                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                Cmd::Append(Some(Address::Line(0)), None),
                 &mut &b"one more line\n.\n"[..],
                 &mut Vec::new(),
                 &None,
@@ -896,7 +906,7 @@ mod tests {
         assert!(!buffer.is_dirty());
         buffer
             .do_user_cmd(
-                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                Cmd::Append(Some(Address::Line(0)), None),
                 &mut &b"one more line\n.\n"[..],
                 &mut Vec::new(),
                 &None,
@@ -1696,7 +1706,7 @@ mod tests {
             line.push_str(&format!("{i}\r\n.\n"));
             buffer
                 .do_cmd(
-                    Cmd::Append(Some(Address::Line(buffer.len())), Vec::new()),
+                    Cmd::Append(Some(Address::Line(buffer.len())), None),
                     &mut line.as_bytes(),
                     &mut output,
                     &None,
@@ -1810,7 +1820,7 @@ mod tests {
     #[test]
     fn do_cmd_append_one_to_empty_buffer() {
         let mut buffer = EditBuffer::new();
-        let cmd = Cmd::Append(Some(Address::Line(0)), Vec::new());
+        let cmd = Cmd::Append(Some(Address::Line(0)), None);
         let input = b"one\n.\n";
         let expected = EditBuffer::from(vec!["one\n"]);
         buffer
@@ -1824,7 +1834,7 @@ mod tests {
     #[test]
     fn do_cmd_append_empty_buffer() {
         let mut buffer = EditBuffer::new();
-        let cmd = Cmd::Append(Some(Address::Line(0)), Vec::new());
+        let cmd = Cmd::Append(Some(Address::Line(0)), None);
         let input = b"a\nb\nc\n.\n";
         let expected = EditBuffer::from(vec!["a\n", "b", "c"]);
         buffer
@@ -1842,7 +1852,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["a\n", "b", "c", "1", "2", "3"]);
         buffer
             .do_cmd(
-                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                Cmd::Append(Some(Address::Line(0)), None),
                 &mut &input[..],
                 &mut Vec::new(),
                 &None,
@@ -1860,7 +1870,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3"]);
         buffer
             .do_cmd(
-                Cmd::Append(Some(Address::Line(2)), Vec::new()),
+                Cmd::Append(Some(Address::Line(2)), None),
                 &mut &input[..],
                 &mut Vec::new(),
                 &None,
@@ -1878,7 +1888,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["1\n", "2", "3", "a", "b", "c", "4", "5", "6"]);
         buffer
             .do_cmd(
-                Cmd::Append(Some(Address::Span(2, 3)), Vec::new()),
+                Cmd::Append(Some(Address::Span(2, 3)), None),
                 &mut &input[..],
                 &mut Vec::new(),
                 &None,
@@ -1896,7 +1906,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["1\n", "2", "3", "a", "b", "c"]);
         buffer
             .do_cmd(
-                Cmd::Append(Some(Address::Line(3)), Vec::new()),
+                Cmd::Append(Some(Address::Line(3)), None),
                 &mut &input[..],
                 &mut Vec::new(),
                 &None,
@@ -1915,7 +1925,7 @@ mod tests {
         assert_eq!(3, buffer.current_line());
         buffer
             .do_cmd(
-                Cmd::Append(Some(Address::Line(2)), Vec::new()),
+                Cmd::Append(Some(Address::Line(2)), None),
                 &mut &input[..],
                 &mut Vec::new(),
                 &None,
@@ -2054,7 +2064,7 @@ mod tests {
         assert!(!buffer.is_dirty());
         buffer
             .do_user_cmd(
-                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                Cmd::Append(Some(Address::Line(0)), None),
                 &mut &b"1\n2\n3\n.\n"[..],
                 &mut Vec::new(),
                 &None,
@@ -2068,7 +2078,7 @@ mod tests {
         let mut buffer = EditBuffer::new();
         buffer
             .do_user_cmd(
-                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                Cmd::Append(Some(Address::Line(0)), None),
                 &mut &b"1\n2\n3\n.\n"[..],
                 &mut Vec::new(),
                 &None,
@@ -2108,7 +2118,7 @@ mod tests {
 
         buffer
             .do_user_cmd(
-                Cmd::Append(Some(Address::Line(2)), Vec::new()),
+                Cmd::Append(Some(Address::Line(2)), None),
                 &mut &b"a\nb\nc\n.\n"[..],
                 &mut Vec::new(),
                 &None,
@@ -2146,7 +2156,7 @@ mod tests {
 
         buffer
             .do_user_cmd(
-                Cmd::Append(Some(Address::Line(2)), Vec::new()),
+                Cmd::Append(Some(Address::Line(2)), None),
                 &mut &b"a\nb\nc\n.\n"[..],
                 &mut Vec::new(),
                 &None,
@@ -2164,7 +2174,7 @@ mod tests {
 
         buffer
             .do_user_cmd(
-                Cmd::Append(Some(Address::Line(0)), Vec::new()),
+                Cmd::Append(Some(Address::Line(0)), None),
                 &mut &b"x\ny\nz\n.\n"[..],
                 &mut Vec::new(),
                 &None,
