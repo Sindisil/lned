@@ -488,6 +488,9 @@ impl EditBuffer {
                 return Err(Error::InvalidAddress);
             }
             Some(Address::Line(n)) => (self.remove(*n), *n - 1),
+            Some(Address::Span(0, _)) => {
+                return Err(Error::InvalidAddress);
+            }
             Some(Address::Span(b, e)) => (self.remove(*b..=*e), *b - 1),
             None if self.current_line() == 0 => {
                 return Err(Error::InvalidAddress);
@@ -2011,7 +2014,7 @@ mod tests {
     #[test]
     fn do_cmd_delete_line_zero() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let _res = buffer
+        let res = buffer
             .do_cmd(
                 Cmd::Delete(Some(Address::Line(0))),
                 &mut &b""[..],
@@ -2019,7 +2022,21 @@ mod tests {
                 &None,
             )
             .expect_err("invalid address");
-        assert!(matches!(Error::InvalidAddress, _res));
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn do_cmd_delete_span_starting_at_zero() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5"]);
+        let res = buffer
+            .do_cmd(
+                Cmd::Delete(Some(Address::Span(0, 3))),
+                &mut &b""[..],
+                &mut Vec::new(),
+                &None,
+            )
+            .expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
