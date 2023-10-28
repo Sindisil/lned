@@ -524,7 +524,7 @@ impl EditBuffer {
         W: Write,
     {
         if self.is_dirty() && !matches!(prev_command, Some(Cmd::Edit(_))) {
-            write!(
+            writeln!(
                 output,
                 "Unwritten changes - repeat edit command to discard changes."
             )

@@ -272,7 +272,7 @@ mod tests {
 
         run(&mut &input[..], &mut output, &Default::default()).expect("no error");
         assert!(&output[..]
-            .starts_with(b"::Unwritten changes - repeat edit command to discard changes.:"));
+            .starts_with(b"::Unwritten changes - repeat edit command to discard changes.\n:"));
     }
 
     #[test]
