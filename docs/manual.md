@@ -164,6 +164,7 @@ e [file]
 #### Behavior
 
 If buffer not empty, delete contents, then read specified file into buffer.
+If the last line of the file isn't terminated, a line terminator will be appended.
 
 The current line number will be set to the address of the last line in the buffer.
 

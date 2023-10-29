@@ -275,7 +275,7 @@ impl EditBuffer {
     ///    or inserted).
     ///
     /// Returns number of bytes read, or an error if read fails
-    pub fn read<R>(&mut self, at_line: usize, mut reader: R) -> Result<usize, Error>
+    pub fn read<R>(&mut self, at_line: usize, mut reader: R) -> Result<(usize, bool), Error>
     where
         R: BufRead,
     {
@@ -297,32 +297,23 @@ impl EditBuffer {
         let lines_added = lines.len();
 
         // set default_eol if neccessary
-        if self.default_eol.is_none() {
-            self.default_eol = Some(compute_default_eol(&lines));
-        }
-
-        // Add in missing eol as needed
         let default_eol = self
             .default_eol
-            .as_ref()
-            .expect("default_eol should have been set");
-        if !self.is_empty() {
-            let last_line = if at_line == self.len() {
-                let i = self.len() - 1;
-                &mut self.text[i]
-            } else {
-                let i = lines.len() - 1;
-                &mut lines[i]
-            };
-            if !(last_line.ends_with("\r\n") || last_line.ends_with('\n')) {
-                last_line.push_str(default_eol.as_ref());
+            .get_or_insert_with(|| compute_default_eol(&lines));
+
+        // Add in missing eol as needed
+        let eol_added = match lines.last_mut() {
+            Some(last) if !(last.ends_with("\r\n") || last.ends_with('\n')) => {
+                last.push_str(default_eol);
+                true
             }
-        }
+            _ => false,
+        };
 
         // actually add new lines to buffer
         self.text.splice(at_line..at_line, lines);
         self.current_line = at_line + lines_added;
-        Ok(bytes_read)
+        Ok((bytes_read, eol_added))
     }
 
     fn edit<W, R>(&mut self, output: &mut W, source: Option<R>) -> Result<Option<Revert>, Error>
@@ -335,7 +326,10 @@ impl EditBuffer {
 
         self.text.clear();
         if let Some(source) = source {
-            let bytes_read = self.read(0, source)?;
+            let (bytes_read, eol_added) = self.read(0, source)?;
+            if eol_added {
+                writeln!(output, "missing line terminator appended").map_err(Error::WriteOutput)?;
+            }
             writeln!(output, "{bytes_read}").map_err(Error::WriteOutput)?;
         }
 
@@ -1078,14 +1072,14 @@ mod tests {
         at: $at:expr,
         expect: $expect:expr,
         bytes read: $bytes_read:expr,
+        eol added: $eol_added:expr,
         current line after: $current_line:expr$(,)? } => {
             #[test]
             fn $name() {
-                let initial = $initial;
-                let mut buffer = EditBuffer::from(initial);
+                let mut buffer = $initial;
                 let added = $added;
                 let input = new_input_buf(&added[..]);
-                let bytes_read = buffer
+                let (bytes_read, eol_added) = buffer
                     .read($at, &input[..])
                     .expect("Error reading added lines");
 
@@ -1096,6 +1090,10 @@ mod tests {
                 assert_eq!($bytes_read,
                         bytes_read,
                         "expected bytes_read {}, got {}", $bytes_read, bytes_read
+                    );
+                assert_eq!($eol_added,
+                        eol_added,
+                        "expected eol_added {}, got {}", $eol_added, eol_added,
                 );
                 assert_eq!($current_line,
                         buffer.current_line(),
@@ -1107,93 +1105,101 @@ mod tests {
 
     read_test! {
         read_to_empty_buf_all_lf,
-        initial: Vec::<&str>::new(),
+        initial: EditBuffer::new(),
         added: ["Line1\n", "Line2\n", "Line3\n",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3\n",],
         bytes read: 18,
+        eol added: false,
         current line after: 3,
     }
 
     read_test! {
         read_to_empty_buf_all_lf_no_final,
-        initial: Vec::<&str>::new(),
+        initial: EditBuffer::new(),
         added: ["Line1\n", "Line2\n", "Line3",],
         at: 0,
-        expect: vec!["Line1\n", "Line2\n", "Line3",],
+        expect: vec!["Line1\n", "Line2\n", "Line3\n",],
         bytes read: 17,
+        eol added: true,
         current line after: 3,
     }
 
     read_test! {
         read_insert_at_start,
-        initial: vec!["1\r\n", "2", "3",],
+        initial: EditBuffer::from(vec!["1\r\n", "2", "3",]),
         added: ["New1\n", "New2\n", "New3\n"],
         at: 0,
         expect: vec![
             "New1\n", "New2\n", "New3\n", "1\r\n", "2\r\n", "3\r\n",
         ],
         bytes read: 15,
+        eol added: false,
         current line after: 3,
     }
 
     read_test! {
         read_append_all_lf,
-        initial: vec!["Line1\n", "Line2\n", "Line3\n",],
+        initial: EditBuffer::from(vec!["Line1\n", "Line2\n", "Line3\n",]),
         added: ["New1\n", "New2\n", "New3\n"],
         at: 3,
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
         ],
         bytes read: 15,
+        eol added: false,
         current line after: 6,
     }
 
     read_test! {
         read_append_most_lf_no_final,
-        initial: vec!["Line1\n", "Line2\r\n", "Line3\n", "Line4",],
+        initial: EditBuffer::from(vec!["Line1\n", "Line2\r\n", "Line3\n", "Line4",]),
         added: ["New1\n", "New2\n", "New3"],
         at: 4,
         expect: vec![
-            "Line1\n", "Line2\r\n", "Line3\n", "Line4\n", "New1\n", "New2\n", "New3",
+            "Line1\n", "Line2\r\n", "Line3\n", "Line4\n", "New1\n", "New2\n", "New3\n",
         ],
         bytes read: 14,
+        eol added: true,
         current line after: 7,
     }
 
     read_test! {
         read_append_most_crlf_no_final,
-        initial: vec!["Line1\r\n", "Line2\r\n", "Line3\n", "Line4",],
+        initial: EditBuffer::from(vec!["Line1\r\n", "Line2\r\n", "Line3\n", "Line4",]),
         added: ["New1\r\n", "New2\n", "New3"],
         at: 4,
         expect: vec![
-            "Line1\r\n", "Line2\r\n", "Line3\n", "Line4\r\n", "New1\r\n", "New2\n", "New3",
+            "Line1\r\n", "Line2\r\n", "Line3\n", "Line4\r\n", "New1\r\n", "New2\n", "New3\r\n",
         ],
         bytes read: 15,
+        eol added: true,
         current line after: 7,
     }
 
     read_test! {
         read_append_all_lf_no_final,
-        initial: vec!["Line1\n", "Line2\n", "Line3",],
+        initial: EditBuffer::from(vec!["Line1\n", "Line2\n", "Line3",]),
         added: ["New1\n", "New2\n", "New3\n"],
         at: 3,
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
         ],
         bytes read: 15,
+        eol added: false,
         current line after: 6,
     }
 
     read_test! {
         read_append_all_crlf_no_final,
-        initial: vec!["Line1\r\n", "Line2\r\n", "Line3",],
+        initial: EditBuffer::from(vec!["Line1\r\n", "Line2\r\n", "Line3",]),
         added: ["New1\r\n", "New2\r\n", "New3\r\n"],
         at: 3,
         expect: vec![
             "Line1\r\n", "Line2\r\n", "Line3\r\n", "New1\r\n", "New2\r\n", "New3\r\n",
         ],
         bytes read: 18,
+        eol added: false,
         current line after: 6,
     }
 
@@ -1201,44 +1207,53 @@ mod tests {
     fn read_append_equal_eol_no_final() {
         let initial = vec!["Line1\n", "Line2\r\n", "Line3"];
         let mut buffer = EditBuffer::from(initial);
+        assert!(buffer
+            .default_eol
+            .is_some_and(|eol| eol == compute_native_eol()));
+        let def_eol = buffer.default_eol.unwrap();
+        assert!(buffer[..].last().expect("last line").ends_with(def_eol));
 
         let at = 3;
         let added = ["New1\n", "New2\r\n", "New3"];
         let input = new_input_buf(&added[..]);
-        let bytes_read = buffer
+        let (bytes_read, eol_added) = buffer
             .read(at, &input[..])
             .expect("Error reading added lines");
 
         let mut line3 = "Line3".to_string();
-        line3.push_str(compute_native_eol());
+        line3.push_str(def_eol);
+        let mut new3 = added[2].to_owned();
+        new3.push_str(def_eol);
         let expect = vec![
             "Line1\n",
             "Line2\r\n",
             &line3[..],
             "New1\n",
             "New2\r\n",
-            "New3",
+            &new3[..],
         ];
-        assert_eq!(expect, buffer.text);
-        assert_eq!(6, buffer.current_line());
+        assert_eq!(buffer.text, expect);
+        assert_eq!(buffer.current_line(), 6);
+        assert!(eol_added);
         assert_eq!(bytes_read, 15);
     }
 
     read_test! {
         read_insert_all_lf,
-        initial: vec!["Line1\n", "Line2\n", "Line3\n",],
+        initial: EditBuffer::from(vec!["Line1\n", "Line2\n", "Line3\n",]),
         added: ["New1\n", "New2\n", "New3\n"],
         at: 2,
         expect: vec![
             "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
         ],
         bytes read: 15,
+        eol added: false,
         current line after: 5,
     }
 
     read_test! {
         read_insert_most_lf_no_final,
-        initial: vec!["Line1\n", "Line2\r\n", "Line3\n", "Line4\n",],
+        initial: EditBuffer::from(vec!["Line1\n", "Line2\r\n", "Line3\n", "Line4\n",]),
         added: ["New1\n", "New2\n", "New3"],
         at: 2,
         expect: vec![
@@ -1251,12 +1266,13 @@ mod tests {
             "Line4\n",
         ],
         bytes read: 14,
+        eol added: true,
         current line after: 5,
     }
 
     read_test! {
         read_insert_most_crlf_no_final,
-        initial: vec!["Line1\r\n", "Line2\r\n", "Line3\n", "Line4\r\n",],
+        initial: EditBuffer::from(vec!["Line1\r\n", "Line2\r\n", "Line3\n", "Line4\r\n",]),
         added: ["New1\r\n", "New2\n", "New3"],
         at: 2,
         expect: vec![
@@ -1269,12 +1285,13 @@ mod tests {
             "Line4\r\n",
         ],
         bytes read: 15,
+        eol added: true,
         current line after: 5,
     }
 
     read_test! {
         read_insert_all_lf_no_final,
-        initial: vec!["Line1\n", "Line2\n", "Line3\n", "Line4\n",],
+        initial: EditBuffer::from(vec!["Line1\n", "Line2\n", "Line3\n", "Line4\n",]),
         added: ["New1\n", "New2\n", "New3"],
         at: 2,
         expect: vec![
@@ -1287,12 +1304,13 @@ mod tests {
             "Line4\n",
         ],
         bytes read: 14,
+        eol added: true,
         current line after: 5,
     }
 
     read_test! {
         read_insert_all_crlf_no_final,
-        initial: vec!["Line1\r\n", "Line2\r\n", "Line3\r\n", "Line4\r\n",],
+        initial: EditBuffer::from(vec!["Line1\r\n", "Line2\r\n", "Line3\r\n", "Line4\r\n",]),
         added: ["New1\r\n", "New2\r\n", "New3"],
         at: 2,
         expect: vec![
@@ -1305,6 +1323,7 @@ mod tests {
             "Line4\r\n",
         ],
         bytes read: 16,
+        eol added: true,
         current line after: 5,
     }
 
@@ -1316,7 +1335,7 @@ mod tests {
         let at = 2;
         let added = ["New1\r\n", "New2\r\n", "New3"];
         let input = new_input_buf(&added[..]);
-        let bytes_read = buffer
+        let (bytes_read, eol_added) = buffer
             .read(at, &input[..])
             .expect("Error reading added lines");
 
@@ -1333,7 +1352,8 @@ mod tests {
         ];
         assert_eq!(expect, buffer.text);
         assert_eq!(bytes_read, 16);
-        assert_eq!(5, buffer.current_line());
+        assert!(eol_added);
+        assert_eq!(buffer.current_line(), 5);
     }
 
     #[test]
@@ -1341,8 +1361,8 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let content = vec!["Line1\n"];
         let input = new_input_buf(&content);
-        let _res = buffer.read(999, &input[..]);
-        assert!(matches!(Err::<Error, _>(Error::ReadBadIndex), _res));
+        let res = buffer.read(999, &input[..]).expect_err("bad index");
+        assert!(matches!(res, Error::ReadBadIndex(0, 999)));
     }
 
     #[test]
@@ -1350,8 +1370,8 @@ mod tests {
         let reader = BadReader {};
         let mut input = BufReader::new(reader);
         let mut buffer = EditBuffer::new();
-        let _res = buffer.read(0, &mut input);
-        assert!(matches!(Err::<Error, _>(Error::Read), _res));
+        let res = buffer.read(0, &mut input).expect_err("IO error");
+        assert!(matches!(res, Error::Read(_)));
     }
 
     /////
