@@ -16,10 +16,11 @@ use std::path::PathBuf;
 use crate::command::{Address, Cmd};
 use crate::num_utils::NumUtils;
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone, Hash, Default)]
 pub struct Revert {
     current_line: usize,
     commands: Vec<Cmd>,
+    clean_fingerprint: Option<Option<u64>>,
 }
 
 #[derive(Debug, Clone)]
@@ -339,6 +340,7 @@ impl EditBuffer {
                 Cmd::Append(Some(Address::Line(0)), Some(lines_removed)),
                 Cmd::Delete(Some(Address::Span(1, self.len()))),
             ],
+            clean_fingerprint: Some(self.clean_fingerprint),
         }))
     }
 
@@ -398,6 +400,10 @@ impl EditBuffer {
         R: BufRead,
         W: Write,
     {
+        eprintln!(
+            "do_user_cmd entry\n\tfingerprint: {:?}",
+            self.clean_fingerprint
+        );
         let is_edit_cmd = matches!(cmd, Cmd::Edit(_));
         self.do_cmd(cmd, input, output, prev_command)
             .map(|response| {
@@ -407,6 +413,10 @@ impl EditBuffer {
                         self.clean_fingerprint = Some(fingerprint(&self.undo_stack));
                     }
                 };
+                eprintln!(
+                    "do_user_cmd exit\n\tfingerprint: {:?}",
+                    self.clean_fingerprint
+                );
             })
     }
 
@@ -479,6 +489,7 @@ impl EditBuffer {
                     line_before + n,
                 )))],
             },
+            ..Default::default()
         }))
     }
 
@@ -505,6 +516,7 @@ impl EditBuffer {
                 Some(Address::Line(line_before)),
                 Some(lines_removed),
             )],
+            ..Default::default()
         }))
     }
 
@@ -679,6 +691,9 @@ impl EditBuffer {
                 self.do_cmd(cmd, input, output, &None)?;
             }
             self.current_line = revert.current_line;
+            if let Some(fingerprint) = revert.clean_fingerprint {
+                self.clean_fingerprint = fingerprint;
+            }
         }
         Ok(None)
     }
