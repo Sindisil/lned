@@ -12,7 +12,7 @@ use regex::Regex;
 
 #[derive(Debug, PartialEq, Clone, Hash)]
 pub enum Cmd {
-    Append(Option<Address>, Option<Vec<String>>),
+    Append(Option<Address>),
     Delete(Option<Address>),
     Edit(Option<PathBuf>),
     Enumerate(Option<Address>),
@@ -101,7 +101,7 @@ fn parse_append_cmd(
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
-        None | Some('\n') => Ok(Cmd::Append(address, None)),
+        None | Some('\n') => Ok(Cmd::Append(address)),
         Some('\r') => {
             cmd_chars.next();
             parse_append_cmd(cmd_chars, address)
@@ -626,7 +626,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
-        assert_eq!(Cmd::Append(None, None), res);
+        assert_eq!(Cmd::Append(None), res);
     }
 
     #[test]

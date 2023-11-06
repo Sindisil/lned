@@ -11,6 +11,7 @@ pub enum Error {
     /// I/O Error reading command input
     ReadCommand(io::Error),
     /// I/O Error reading input lines
+    ReadLines(io::Error),
     ParseCmd(command::Error),
     BufferCmd(edit_buffer::Error),
 }
@@ -20,8 +21,9 @@ impl std::error::Error for Error {}
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::ReadCommand(e) => write!(f, "Error reading command: {e}"),
             Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
+            Error::ReadCommand(e) => write!(f, "Error reading command: {e}"),
+            Error::ReadLines(e) => write!(f, "{e} reading input lines"),
             Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
             Error::BufferCmd(e) => write!(f, "buffer command error: {e}"),
         }
@@ -54,7 +56,7 @@ where
 
         let mut cmd_chars = cmd_buf.chars().peekable();
 
-        done = Cmd::parse(
+        Cmd::parse(
             &mut cmd_chars,
             &mut buffers,
             current_buffer,
@@ -64,21 +66,43 @@ where
         .and_then(|cmd| {
             let res = match cmd {
                 // dispatch editor commands
-                Cmd::Quit => do_quit(&mut output, &buffers, &prev_command),
-
-                // Otherwise must be a buffer command, so delegate to current buffer
-                _ => buffers[current_buffer]
-                    .do_user_cmd(cmd.clone(), &mut input, &mut output, &prev_command)
-                    .map_err(Error::BufferCmd)
-                    .and(Ok(false)),
+                Cmd::Append(address) => {
+                    let mut lines = Vec::new();
+                    let _line_count = read_lines(&mut input, &mut lines)?;
+                    buffers[current_buffer]
+                        .do_append(&mut output, address, lines)
+                        .map_err(Error::BufferCmd)
+                }
+                Cmd::Delete(address) => buffers[current_buffer]
+                    .do_delete(&mut output, address)
+                    .map_err(Error::BufferCmd),
+                Cmd::Edit(ref file) => buffers[current_buffer]
+                    .do_edit(&mut output, file, &prev_command)
+                    .map_err(Error::BufferCmd),
+                Cmd::Enumerate(address) => buffers[current_buffer]
+                    .do_enumerate(&mut output, address)
+                    .map_err(Error::BufferCmd),
+                Cmd::File(ref filename) => buffers[current_buffer]
+                    .do_file(&mut output, filename)
+                    .map_err(Error::BufferCmd),
+                Cmd::Null(address) => buffers[current_buffer]
+                    .do_null(&mut output, address)
+                    .map_err(Error::BufferCmd),
+                Cmd::Print(address) => buffers[current_buffer]
+                    .do_print(&mut output, address)
+                    .map_err(Error::BufferCmd),
+                Cmd::Quit => do_quit(&mut output, &buffers, &prev_command).map(|ok_to_exit| {
+                    done = ok_to_exit;
+                }),
+                Cmd::Write(address, ref filename) => buffers[current_buffer]
+                    .do_write(&mut output, address, filename)
+                    .map_err(Error::BufferCmd),
+                Cmd::Undo => todo!(),
             };
             prev_command = Some(cmd);
             res
         })
-        .or_else(|e| {
-            writeln!(output, "{e}").map_err(Error::WriteOutput)?;
-            Ok(false)
-        })?;
+        .or_else(|e| writeln!(output, "{e}").map_err(Error::WriteOutput))?;
     }
     Ok(())
 }
@@ -152,6 +176,23 @@ fn initialize_buffers(args: &cli::CmdArgs) -> Result<Vec<EditBuffer>, Error> {
 // Clears previous content of buffer, but doesn't shrink capacity.
 // Returns a Vec of all lines entered *except* the terminating line
 // containing a single dot.
+fn read_lines<R>(reader: &mut R, buf: &mut Vec<String>) -> Result<usize, Error>
+where
+    R: BufRead,
+{
+    let mut line = String::new(); // single line input buffer
+    buf.clear(); // get rid of any old input
+
+    loop {
+        reader.read_line(&mut line).map_err(Error::ReadLines)?;
+        if line == ".\n" || line == ".\r\n" {
+            return Ok(buf.len());
+        }
+        buf.push(line);
+        line = String::new();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +255,54 @@ mod tests {
         let len = read_command(&input[..], &mut cmd_ret).expect("Error reading command string");
         assert_eq!(2, len);
         assert_eq!(cmd_input.trim(), cmd_ret.trim());
+    }
+
+    #[test]
+    fn read_line_io_error_gives_correct_error() {
+        let input = BadReader {};
+        let mut input = BufReader::new(input);
+        let mut lines = Vec::new();
+        let _line_count = read_lines(&mut input, &mut lines);
+        assert!(matches!(Err::<Error, _>(Error::ReadLines), _line_count));
+    }
+
+    #[test]
+    fn read_lines_with_no_input_gives_zero_lines() {
+        let input = b".\n";
+        let mut lines = Vec::new();
+        let line_count = read_lines(&mut &input[..], &mut lines).expect("Error reading lines");
+        assert_eq!(0, line_count);
+        assert_eq!(0, lines.len());
+    }
+
+    #[test]
+    fn read_lines_returns_lines_entered() {
+        let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\n"];
+        let mut input = Vec::new();
+        for line in &three_lines {
+            input.extend(line.as_bytes());
+        }
+        let mut lines = Vec::new();
+        let line_count = read_lines(&mut &input[..], &mut lines).expect("Error reading lines");
+
+        assert_eq!(3, line_count);
+        assert_eq!(3, lines.len());
+        assert_eq!(three_lines[..3], lines);
+    }
+
+    #[test]
+    fn read_lines_returns_lines_entered_crlf() {
+        let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\r\n"];
+        let mut input = Vec::new();
+        for line in &three_lines {
+            input.extend(line.as_bytes());
+        }
+        let mut lines = Vec::new();
+        let line_count = read_lines(&mut &input[..], &mut lines).expect("Error reading lines");
+
+        assert_eq!(3, line_count);
+        assert_eq!(3, lines.len());
+        assert_eq!(three_lines[..3], lines);
     }
 
     /////
