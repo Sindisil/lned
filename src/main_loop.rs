@@ -100,6 +100,9 @@ where
                 Cmd::Undo => buffers[current_buffer]
                     .do_undo(&mut output)
                     .map_err(Error::BufferCmd),
+                Cmd::Redo => buffers[current_buffer]
+                    .do_redo(&mut output)
+                    .map_err(Error::BufferCmd),
             };
             prev_command = Some(cmd);
             res

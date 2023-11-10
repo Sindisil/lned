@@ -628,6 +628,17 @@ impl EditBuffer {
         }
     }
 
+    pub fn do_redo(&mut self, output: &mut impl Write) -> Result<(), Error> {
+        match self.redo_stack.pop() {
+            Some(mut op) => {
+                let res = self.execute(output, &mut op);
+                self.undo_stack.push(op);
+                res
+            }
+            None => Ok(()),
+        }
+    }
+
     pub fn do_write<W>(
         &mut self,
         output: &mut W,
