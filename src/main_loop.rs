@@ -97,7 +97,9 @@ where
                 Cmd::Write(address, ref filename) => buffers[current_buffer]
                     .do_write(&mut output, address, filename)
                     .map_err(Error::BufferCmd),
-                Cmd::Undo => todo!(),
+                Cmd::Undo => buffers[current_buffer]
+                    .do_undo(&mut output)
+                    .map_err(Error::BufferCmd),
             };
             prev_command = Some(cmd);
             res

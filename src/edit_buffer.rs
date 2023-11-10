@@ -617,7 +617,7 @@ impl EditBuffer {
         Ok(())
     }
 
-    fn do_undo(&mut self, output: &mut impl Write) -> Result<(), Error> {
+    pub fn do_undo(&mut self, output: &mut impl Write) -> Result<(), Error> {
         match self.undo_stack.pop() {
             Some(mut op) => {
                 let res = self.revert(output, &mut op);
