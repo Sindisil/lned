@@ -77,13 +77,13 @@ where
                     .do_delete(&mut output, address)
                     .map_err(Error::BufferCmd),
                 Cmd::Edit(ref file) => buffers[current_buffer]
-                    .do_edit(&mut output, file, &prev_command)
+                    .do_edit(&mut output, file.as_ref(), prev_command.as_ref())
                     .map_err(Error::BufferCmd),
                 Cmd::Enumerate(address) => buffers[current_buffer]
                     .do_enumerate(&mut output, address)
                     .map_err(Error::BufferCmd),
                 Cmd::File(ref filename) => buffers[current_buffer]
-                    .do_file(&mut output, filename)
+                    .do_file(&mut output, filename.as_ref())
                     .map_err(Error::BufferCmd),
                 Cmd::Null(address) => buffers[current_buffer]
                     .do_null(&mut output, address)
@@ -95,7 +95,7 @@ where
                     done = ok_to_exit;
                 }),
                 Cmd::Write(address, ref filename) => buffers[current_buffer]
-                    .do_write(&mut output, address, filename)
+                    .do_write(&mut output, address, filename.as_ref())
                     .map_err(Error::BufferCmd),
                 Cmd::Undo => buffers[current_buffer]
                     .do_undo(&mut output)

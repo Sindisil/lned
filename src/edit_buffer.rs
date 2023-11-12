@@ -18,13 +18,6 @@ use crate::command::{Address, Cmd};
 use crate::edit_buffer::operation::{AppendData, DeleteData, EditData, Op};
 use crate::num_utils::NumUtils;
 
-#[derive(Debug, Clone, Hash, Default)]
-pub struct Revert {
-    current_line: usize,
-    commands: Vec<Cmd>,
-    clean_fingerprint: Option<Option<u64>>,
-}
-
 #[derive(Debug, Clone)]
 pub struct EditBuffer {
     text: Vec<String>,
@@ -222,8 +215,8 @@ impl EditBuffer {
         }
     }
 
-    pub fn filename(&self) -> &Option<PathBuf> {
-        &self.filename
+    pub fn filename(&self) -> Option<&PathBuf> {
+        self.filename.as_ref()
     }
 
     pub fn get(&self, index: usize) -> Option<&String> {
@@ -241,9 +234,8 @@ impl EditBuffer {
     ///     sequence.
     ///
     /// EOL Correction:
-    ///    If the final line read lacks an EOL, it will not be corrected
-    ///    if it is the last line of the buffer. Otherwise missing EOLs
-    ///    will be added. Added EOLs will be the default EOL for the
+    /// If the final line read has no line terminator, one will be added.
+    ///     Added EOLs will be the default EOL for the
     ///    buffer. This is determined either by configuration, or auto-detected
     ///    (e.g., as described above, or similarly when first lines are appended
     ///    or inserted).
@@ -279,6 +271,7 @@ impl EditBuffer {
         let eol_added = match lines.last_mut() {
             Some(last) if !(last.ends_with("\r\n") || last.ends_with('\n')) => {
                 last.push_str(default_eol);
+                bytes_read += default_eol.len();
                 true
             }
             _ => false,
@@ -487,8 +480,8 @@ impl EditBuffer {
     pub fn do_edit(
         &mut self,
         output: &mut impl Write,
-        filename: &Option<PathBuf>,
-        prev_command: &Option<Cmd>,
+        filename: Option<&PathBuf>,
+        prev_command: Option<&Cmd>,
     ) -> Result<(), Error> {
         if self.is_dirty() && !matches!(prev_command, Some(Cmd::Edit(_))) {
             writeln!(
@@ -500,7 +493,7 @@ impl EditBuffer {
         }
 
         if filename.is_some() {
-            self.filename = filename.clone();
+            self.filename = filename.cloned();
         }
         let filename = self.filename.as_ref().ok_or(Error::NoFilename)?;
 
@@ -553,12 +546,12 @@ impl EditBuffer {
         Ok(())
     }
 
-    pub fn do_file<W>(&mut self, output: &mut W, filename: &Option<PathBuf>) -> Result<(), Error>
+    pub fn do_file<W>(&mut self, output: &mut W, filename: Option<&PathBuf>) -> Result<(), Error>
     where
         W: Write,
     {
         if filename.is_some() {
-            self.filename = filename.clone();
+            self.filename = filename.cloned();
         }
 
         match &self.filename {
@@ -643,7 +636,7 @@ impl EditBuffer {
         &mut self,
         output: &mut W,
         address: Option<Address>,
-        filename: &Option<PathBuf>,
+        filename: Option<&PathBuf>,
     ) -> Result<(), Error>
     where
         W: Write,
@@ -652,16 +645,14 @@ impl EditBuffer {
             if filename.is_none() {
                 return Err(Error::NoFilename);
             } else {
-                self.filename = filename.clone();
+                self.filename = filename.cloned();
             }
         }
-
-        let filename = filename.as_ref().unwrap_or(self.filename.as_ref().unwrap());
 
         let mut dest = OpenOptions::new()
             .write(true)
             .create(true)
-            .open(filename)
+            .open(self.filename.as_ref().unwrap())
             .map_err(Error::FileOpen)?;
 
         self.write(output, address, &mut dest)?;
@@ -965,18 +956,18 @@ mod tests {
         current line after: $current_line:expr$(,)? } => {
             #[test]
             fn $name() {
-                let expected_read_result = if $eol_added {
-                    ReadResult::EOLAdded($bytes_read)
-                } else {
-                    ReadResult::AsIs($bytes_read)
-                };
-
                 let mut buffer = $initial;
                 let added = $added;
                 let input = new_input_buf(&added[..]);
                 let read_result = buffer
                     .read($at, &input[..])
                     .expect("lines read");
+
+                let expected_read_result = if $eol_added {
+                    ReadResult::EOLAdded($bytes_read + buffer.default_eol.unwrap().len())
+                } else {
+                    ReadResult::AsIs($bytes_read)
+                };
 
                 assert_eq!(read_result, expected_read_result);
 
@@ -1123,7 +1114,11 @@ mod tests {
         ];
         assert_eq!(buffer.text, expect);
         assert_eq!(buffer.current_line(), 6);
-        assert!(matches!(ret, ReadResult::EOLAdded(15)));
+        assert!(if let ReadResult::EOLAdded(bytes) = ret {
+            bytes == 15 + def_eol.len()
+        } else {
+            false
+        });
     }
 
     read_test! {
@@ -1239,7 +1234,11 @@ mod tests {
             "Line4\r\n",
         ];
         assert_eq!(expect, buffer.text);
-        assert!(matches!(ret, ReadResult::EOLAdded(16)));
+        assert!(if let ReadResult::EOLAdded(bytes) = ret {
+            bytes == 16 + buffer.default_eol.unwrap().len()
+        } else {
+            false
+        });
         assert_eq!(buffer.current_line(), 5);
     }
 
@@ -1784,7 +1783,7 @@ mod tests {
     }
 
     #[test]
-    fn do_undo_append() {
+    fn do_undo_append_line() {
         let mut buffer = EditBuffer::new();
         buffer
             .do_append(
@@ -1799,13 +1798,83 @@ mod tests {
     }
 
     #[test]
-    fn do_undo_delete() {
+    fn do_undo_append_span() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        let expected_final = buffer.clone();
+        buffer
+            .do_append(
+                &mut Vec::new(),
+                Some(Address::Span(2, 3)),
+                vec!["1\n".to_owned(), "2\n".to_owned(), "3\n".to_owned()],
+            )
+            .expect("lines appended");
+        assert_eq!(
+            &EditBuffer::from(vec!["one\n", "two", "three", "1\n", "2", "3"])[..],
+            &buffer[..]
+        );
+        buffer.do_undo(&mut Vec::new()).expect("append undone");
+        assert_eq!(&expected_final[..], &buffer[..]);
+    }
+
+    #[test]
+    fn do_undo_append_current_line() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        buffer.set_current_line(2);
+        let expected_final = buffer.clone();
+        buffer
+            .do_append(
+                &mut Vec::new(),
+                None,
+                vec!["1\n".to_owned(), "2\n".to_owned(), "3\n".to_owned()],
+            )
+            .expect("lines appended");
+        assert_eq!(
+            &EditBuffer::from(vec!["one\n", "two", "1\n", "2", "3", "three"])[..],
+            &buffer[..]
+        );
+        buffer.do_undo(&mut Vec::new()).expect("append undone");
+        assert_eq!(&expected_final[..], &buffer[..]);
+    }
+
+    #[test]
+    fn do_undo_delete_span() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let expected = buffer.clone();
         buffer
             .do_delete(&mut Vec::new(), Some(Address::Span(1, 4)))
             .expect("lines deleted");
         assert_eq!(&EditBuffer::from(vec!["5\n", "6"])[..], &buffer[..]);
+        buffer.do_undo(&mut Vec::new()).expect("undone Delete");
+        assert_eq!(&expected[..], &buffer[..]);
+    }
+
+    #[test]
+    fn do_undo_delete_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let expected = buffer.clone();
+        buffer
+            .do_delete(&mut Vec::new(), Some(Address::Line(3)))
+            .expect("line deleted");
+        assert_eq!(
+            &EditBuffer::from(vec!["1\n", "2", "4", "5", "6"])[..],
+            &buffer[..]
+        );
+        buffer.do_undo(&mut Vec::new()).expect("undone Delete");
+        assert_eq!(&expected[..], &buffer[..]);
+    }
+
+    #[test]
+    fn do_undo_delete_current_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(4);
+        let expected = buffer.clone();
+        buffer
+            .do_delete(&mut Vec::new(), None)
+            .expect("line deleted");
+        assert_eq!(
+            &EditBuffer::from(vec!["1\n", "2", "3", "5", "6"])[..],
+            &buffer[..]
+        );
         buffer.do_undo(&mut Vec::new()).expect("undone Delete");
         assert_eq!(&expected[..], &buffer[..]);
     }
@@ -1871,6 +1940,47 @@ mod tests {
         buffer.do_undo(&mut Vec::new()).expect("undone Append");
 
         assert!(!buffer.is_dirty());
+
+        buffer
+            .do_undo(&mut Vec::new())
+            .expect("no error with empty undo stack");
+        assert!(!buffer.is_dirty()); // still not dirty
+    }
+
+    #[test]
+    fn do_redo_multi() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(6, buffer.current_line());
+
+        buffer
+            .do_append(
+                &mut Vec::new(),
+                Some(Address::Line(2)),
+                vec!["a\n".to_owned(), "b\n".to_owned(), "c\n".to_owned()],
+            )
+            .expect("3 lines appended");
+        let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
+        assert_eq!(&expected_1[..], &buffer[..]);
+        assert_eq!(5, buffer.current_line());
+
+        buffer
+            .do_delete(&mut Vec::new(), Some(Address::Span(4, 7)))
+            .expect("lines deleted");
+        let expected_final = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
+        assert_eq!(&expected_final[..], &buffer[..]);
+
+        buffer.do_undo(&mut Vec::new()).expect("undone Delete");
+        buffer.do_undo(&mut Vec::new()).expect("undone Append");
+        buffer.do_redo(&mut Vec::new()).expect("redo Append");
+        assert_eq!(&expected_1[..], &buffer[..]);
+
+        buffer.do_redo(&mut Vec::new()).expect("redo Delete");
+        assert_eq!(&expected_final[..], &buffer[..]);
+
+        buffer
+            .do_redo(&mut Vec::new())
+            .expect("no error with empty redo stack");
+        assert_eq!(&expected_final[..], &buffer[..]); // buffer unchanged
     }
 
     #[test]
@@ -1878,10 +1988,10 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut output = Vec::new();
         buffer
-            .do_file(&mut output, &None)
+            .do_file(&mut output, None)
             .expect("notice of no current filename");
         assert_eq!(b"No current filename\n", &output[..]);
-        assert_eq!(None, *buffer.filename());
+        assert_eq!(None, buffer.filename());
     }
 
     #[test]
@@ -1889,12 +1999,12 @@ mod tests {
         let new_filename = "a_new_filename.txt";
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut output = Vec::new();
-        assert_eq!(None, *buffer.filename());
+        assert_eq!(None, buffer.filename());
         buffer
-            .do_file(&mut output, &Some(PathBuf::from(new_filename)))
+            .do_file(&mut output, Some(&PathBuf::from(new_filename)))
             .expect("successful setting of filename");
         assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
-        assert_eq!(Some(PathBuf::from(new_filename)), *buffer.filename());
+        assert_eq!(Some(&PathBuf::from(new_filename)), buffer.filename());
     }
 
     #[test]
@@ -1902,14 +2012,14 @@ mod tests {
         let new_filename = "a_new_filename.txt";
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut output = Vec::new();
-        assert_eq!(None, *buffer.filename());
+        assert_eq!(None, buffer.filename());
         buffer
-            .do_file(&mut output, &Some(PathBuf::from(new_filename)))
+            .do_file(&mut output, Some(&PathBuf::from(new_filename)))
             .expect("successful setting of filename");
-        assert_eq!(Some(PathBuf::from(new_filename)), *buffer.filename());
+        assert_eq!(Some(&PathBuf::from(new_filename)), buffer.filename());
         output.clear();
         buffer
-            .do_file(&mut output, &None)
+            .do_file(&mut output, None)
             .expect("displayed filename");
         assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
     }
@@ -1921,14 +2031,14 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut output = Vec::new();
         buffer
-            .do_file(&mut output, &Some(PathBuf::from(orig_filename)))
+            .do_file(&mut output, Some(&PathBuf::from(orig_filename)))
             .expect("successful setting of filename");
         output.clear();
         buffer
-            .do_file(&mut output, &Some(PathBuf::from(new_filename)))
+            .do_file(&mut output, Some(&PathBuf::from(new_filename)))
             .expect("displayed filename");
         assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
-        assert_eq!(Some(PathBuf::from(new_filename)), *buffer.filename());
+        assert_eq!(Some(&PathBuf::from(new_filename)), buffer.filename());
     }
 
     #[test]
@@ -1936,7 +2046,7 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let mut output = Vec::new();
         let res = buffer
-            .do_edit(&mut output, &None, &None)
+            .do_edit(&mut output, None, None)
             .expect_err("no filename");
         assert!(matches!(res, Error::NoFilename));
     }
@@ -1947,11 +2057,50 @@ mod tests {
         let file_to_edit = "a_file_that_is_not_there.ext";
         let mut output = Vec::new();
         buffer
-            .do_edit(&mut output, &Some(PathBuf::from(file_to_edit)), &None)
+            .do_edit(&mut output, Some(&PathBuf::from(file_to_edit)), None)
             .expect("edit with message");
         assert!(buffer.is_empty());
         assert!(!buffer.is_dirty());
-        assert_eq!(buffer.filename(), &Some(PathBuf::from(file_to_edit)));
+        assert_eq!(buffer.filename(), Some(&PathBuf::from(file_to_edit)));
+    }
+
+    #[test]
+    fn do_edit_default_filename() {
+        let filename = PathBuf::from(r"test\assets\text_with_final_eol.txt");
+        let mut buffer = EditBuffer::new();
+        let mut output = Vec::new();
+        buffer
+            .do_file(&mut output, Some(&filename))
+            .expect("filename set");
+        assert_eq!(buffer.filename(), Some(&filename));
+        output.clear();
+        buffer
+            .do_edit(&mut output, None, None)
+            .expect("successful edit of file");
+        assert_eq!(&b"312\n"[..], &output[..]);
+    }
+
+    #[test]
+    fn do_edit() {
+        let filename = PathBuf::from(r"test\assets\text_with_final_eol.txt");
+        let mut buffer = EditBuffer::new();
+        let mut output = Vec::new();
+        buffer
+            .do_edit(&mut output, Some(&filename), None)
+            .expect("successful edit of file");
+        assert_eq!(&b"312\n"[..], &output[..]);
+    }
+
+    #[test]
+    fn do_edit_no_final_eol() {
+        let filename = PathBuf::from(r"test\assets\text_with_no_final_eol.txt");
+        let mut buffer = EditBuffer::new();
+        let mut output = Vec::new();
+        buffer
+            .do_edit(&mut output, Some(&filename), None)
+            .expect("successful edit of file");
+        let expected = b"missing line terminator appended\n319\n";
+        assert_eq!(&output[..], &expected[..]);
     }
 
     #[test]
