@@ -3,19 +3,19 @@
 // is responsible for translating into the 0 based indexing of the Vec<String>
 // containing the lines of text.
 mod operation;
+mod undo_stack;
 
 use core::cmp::Ordering;
 use core::fmt::{self, Display, Formatter};
 use core::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use core::slice::Iter;
-use std::collections::hash_map::DefaultHasher;
 use std::fs::{File, OpenOptions};
-use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use crate::command::{Address, Cmd};
 use crate::edit_buffer::operation::{AppendData, DeleteData, EditData, Op};
+use crate::edit_buffer::undo_stack::{UndoStack, Undoable};
 use crate::num_utils::NumUtils;
 
 #[derive(Debug, Clone)]
@@ -24,8 +24,7 @@ pub struct EditBuffer {
     current_line: usize,
     filename: Option<PathBuf>,
     default_eol: Option<&'static str>,
-    undo_stack: Vec<Op>,
-    redo_stack: Vec<Op>,
+    undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
 }
 
@@ -153,8 +152,7 @@ impl EditBuffer {
             current_line: 0,
             filename: None,
             default_eol: None,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
+            undo_stack: UndoStack::new(),
             clean_fingerprint: None,
         }
     }
@@ -199,7 +197,7 @@ impl EditBuffer {
     pub fn is_dirty(&self) -> bool {
         self.clean_fingerprint.map_or_else(
             || !self.undo_stack.is_empty(),
-            |f| f != fingerprint(&self.undo_stack),
+            |f| f != self.undo_stack.fingerprint(),
         )
     }
 
@@ -323,7 +321,7 @@ impl EditBuffer {
 
         writeln!(output, "{total_bytes_written}").map_err(Error::WriteOutput)?;
         if full_buffer_write {
-            self.clean_fingerprint = Some(fingerprint(&self.undo_stack));
+            self.clean_fingerprint = Some(self.undo_stack.fingerprint());
         }
         Ok(())
     }
@@ -452,7 +450,7 @@ impl EditBuffer {
             current_line: self.current_line,
         });
         let res = self.execute(output, &mut op);
-        self.undo_stack.push(op);
+        self.undo_stack.push_undo(Undoable::new(op));
         res
     }
 
@@ -473,7 +471,7 @@ impl EditBuffer {
             current_line: self.current_line,
         });
         let res = self.execute(output, &mut op);
-        self.undo_stack.push(op);
+        self.undo_stack.push_undo(Undoable::new(op));
         res
     }
 
@@ -505,8 +503,8 @@ impl EditBuffer {
         });
 
         let res = self.execute(output, &mut op);
-        self.undo_stack.push(op);
-        self.clean_fingerprint = Some(fingerprint(&self.undo_stack));
+        self.undo_stack.push_undo(Undoable::new(op));
+        self.clean_fingerprint = Some(self.undo_stack.fingerprint());
         res
     }
 
@@ -611,10 +609,10 @@ impl EditBuffer {
     }
 
     pub fn do_undo(&mut self, output: &mut impl Write) -> Result<(), Error> {
-        match self.undo_stack.pop() {
-            Some(mut op) => {
-                let res = self.revert(output, &mut op);
-                self.redo_stack.push(op);
+        match self.undo_stack.pop_undo() {
+            Some(mut item) => {
+                let res = self.revert(output, item.op());
+                self.undo_stack.push_redo(item);
                 res
             }
             None => Ok(()),
@@ -622,10 +620,10 @@ impl EditBuffer {
     }
 
     pub fn do_redo(&mut self, output: &mut impl Write) -> Result<(), Error> {
-        match self.redo_stack.pop() {
-            Some(mut op) => {
-                let res = self.execute(output, &mut op);
-                self.undo_stack.push(op);
+        match self.undo_stack.pop_redo() {
+            Some(mut item) => {
+                let res = self.execute(output, item.op());
+                self.undo_stack.push_undo(item);
                 res
             }
             None => Ok(()),
@@ -695,15 +693,6 @@ where
         Ordering::Less => "\n",
         _ => native_eol,
     }
-}
-
-fn fingerprint<T>(t: &T) -> u64
-where
-    T: Hash,
-{
-    let mut h = DefaultHasher::new();
-    t.hash(&mut h);
-    h.finish()
 }
 
 #[cfg(test)]
@@ -1987,7 +1976,9 @@ mod tests {
         let mut output = Vec::new();
         let filename = Path::new("test/assets/text_with_no_trailing_eol.txt");
 
-        buffer.do_edit(&mut output, Some(filename), None).expect("editied file");
+        buffer
+            .do_edit(&mut output, Some(filename), None)
+            .expect("editied file");
         assert!(buffer[..] != original[..]);
         let from_file = buffer.clone();
 
