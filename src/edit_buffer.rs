@@ -340,7 +340,19 @@ impl EditBuffer {
                 };
 
                 if !data.lines.is_empty() {
-                    self.text.splice(b..b, data.lines.iter().cloned());
+                    // set default_eol if neccessary
+                    let default_eol = self
+                        .default_eol
+                        .get_or_insert_with(|| compute_default_eol(&data.lines));
+                    self.text.splice(
+                        b..b,
+                        data.lines.iter().cloned().map(|mut line| {
+                            if !(line.ends_with('\n') || line.ends_with("\r\n")) {
+                                line.push_str(default_eol);
+                            }
+                            line
+                        }),
+                    );
                 }
                 self.current_line = b + data.lines.len();
                 Ok(())
@@ -1929,6 +1941,58 @@ mod tests {
 
         buffer.do_undo(&mut Vec::new()).expect("undone Append");
         assert_eq!(&expected_final[..], &buffer[..]);
+    }
+
+    #[test]
+    fn do_undo_redo_multi() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let expected_final = buffer.clone();
+        let mut output = Vec::new();
+        assert_eq!(6, buffer.current_line());
+
+        buffer
+            .do_append(
+                &mut output,
+                Some(Address::Line(2)),
+                vec!["a\n".to_owned(), "b\n".to_owned(), "c\n".to_owned()],
+            )
+            .expect("3 lines appended");
+        let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
+        assert_eq!(&expected_1[..], &buffer[..]);
+        assert_eq!(5, buffer.current_line());
+
+        buffer
+            .do_delete(&mut output, Some(Address::Span(4, 7)))
+            .expect("lines deleted");
+        let expected_2 = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
+        assert_eq!(&expected_2[..], &buffer[..]);
+
+        buffer.do_undo(&mut output).expect("undone Delete");
+        assert_eq!(&expected_1[..], &buffer[..]);
+
+        buffer
+            .do_append(
+                &mut output,
+                Some(Address::Span(4, 5)),
+                vec!["spam!".to_owned()],
+            )
+            .expect("one more line appended");
+        let expected_3 =
+            EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "spam!", "3", "4", "5", "6"]);
+        assert_eq!(&buffer[..], &expected_3[..]);
+
+        buffer.do_undo(&mut output).expect("undone Append");
+        assert_eq!(&expected_1[..], &buffer[..]);
+
+        buffer.do_undo(&mut output).expect("undone Append");
+        assert_eq!(&expected_2[..], &buffer[..]);
+
+        buffer.do_undo(&mut output).expect("undone Append");
+        assert_eq!(&expected_1[..], &buffer[..]);
+
+        buffer.do_undo(&mut output).expect("undone Append");
+        assert_eq!(&expected_final[..], &buffer[..]);
+        assert!(buffer.undo_stack.is_empty());
     }
 
     #[test]
