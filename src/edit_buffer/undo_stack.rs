@@ -71,7 +71,7 @@ impl UndoStack {
 
                 for item in self.redo.drain(..) {
                     self.undo.push(Undoable {
-                        op: Op::Inverse(Box::new(item.undo.op)),
+                        op: item.undo.op.inverse(),
                         is_new: false,
                     });
                 }

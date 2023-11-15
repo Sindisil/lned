@@ -32,7 +32,7 @@ pub struct EditData {
 }
 
 impl Op {
-    fn inverse(&self) -> Op {
+    pub fn inverse(&self) -> Op {
         match self {
             Op::Inverse(op) => *op.clone(),
             _ => Op::Inverse(Box::new(self.clone())),
