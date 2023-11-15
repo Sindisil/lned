@@ -332,7 +332,7 @@ impl EditBuffer {
 
     fn execute(&mut self, output: &mut impl Write, op: &mut Op) -> Result<(), Error> {
         match op {
-            Op::Append(ref mut data) => {
+            Op::Append(data) => {
                 let b = match data.address {
                     Some(Address::Line(line)) => line,
                     Some(Address::Span(_, last)) => last,
@@ -357,7 +357,7 @@ impl EditBuffer {
                 self.current_line = b + data.lines.len();
                 Ok(())
             }
-            Op::Delete(ref mut data) => {
+            Op::Delete(data) => {
                 let (b, e) = match data.address {
                     Some(Address::Line(line)) => (line, line),
                     Some(Address::Span(b, e)) => (b, e),
@@ -372,7 +372,7 @@ impl EditBuffer {
                 self.current_line = usize::min(self.text.len(), b);
                 Ok(())
             }
-            Op::Edit(ref mut data) => {
+            Op::Edit(data) => {
                 let f = File::open(&data.filename);
                 let source = match f {
                     Ok(f) => Ok(Some(BufReader::new(f))),
@@ -394,7 +394,7 @@ impl EditBuffer {
 
     fn revert(&mut self, output: &mut impl Write, op: &mut Op) -> Result<(), Error> {
         match op {
-            Op::Append(ref mut data) => {
+            Op::Append(data) => {
                 let b = match data.address {
                     Some(Address::Line(line)) => line,
                     Some(Address::Span(_, last)) => last,
@@ -404,7 +404,7 @@ impl EditBuffer {
                 self.current_line = data.current_line;
                 Ok(())
             }
-            Op::Delete(ref data) => {
+            Op::Delete(data) => {
                 let b = match data.address {
                     Some(Address::Line(line)) => line,
                     Some(Address::Span(b, _)) => b,
@@ -414,7 +414,7 @@ impl EditBuffer {
                 self.current_line = b + data.lines_removed.len();
                 Ok(())
             }
-            Op::Edit(ref data) => {
+            Op::Edit(data) => {
                 self.text.splice(.., data.lines_removed.iter().cloned());
                 self.current_line = data.current_line;
                 Ok(())
@@ -623,7 +623,7 @@ impl EditBuffer {
     pub fn do_undo(&mut self, output: &mut impl Write) -> Result<(), Error> {
         match self.undo_stack.pop_undo() {
             Some(mut item) => {
-                let res = self.revert(output, item.op());
+                let res = self.revert(output, &mut item);
                 self.undo_stack.push_redo(item);
                 res
             }
@@ -634,7 +634,7 @@ impl EditBuffer {
     pub fn do_redo(&mut self, output: &mut impl Write) -> Result<(), Error> {
         match self.undo_stack.pop_redo() {
             Some(mut item) => {
-                let res = self.execute(output, item.op());
+                let res = self.execute(output, &mut item);
                 self.undo_stack.push_undo(item);
                 res
             }
