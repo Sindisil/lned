@@ -1,0 +1,10 @@
+This is a test file with several lines of
+text. It is for unit testing, so it's not long,
+but it will suffice to test commands that
+read
+and
+edit files. The lines
+are of various lengths, and
+end and begin with 
+"special" characters (i.e., non-alpha characters).
+Critically, it doesn't end with a final line terminator.

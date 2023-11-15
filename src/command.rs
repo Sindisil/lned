@@ -12,7 +12,7 @@ use regex::Regex;
 
 #[derive(Debug, PartialEq, Clone, Hash)]
 pub enum Cmd {
-    Append(Option<Address>, Option<Vec<String>>),
+    Append(Option<Address>),
     Delete(Option<Address>),
     Edit(Option<PathBuf>),
     Enumerate(Option<Address>),
@@ -20,6 +20,7 @@ pub enum Cmd {
     Null(Option<Address>),
     Print(Option<Address>),
     Quit,
+    Redo,
     Undo,
     Write(Option<Address>, Option<PathBuf>),
 }
@@ -91,6 +92,7 @@ fn parse_cmd(
         Some('p') => parse_print_cmd(cmd_chars, address),
         Some('q') => parse_quit_cmd(cmd_chars, address),
         Some('u') => parse_undo_cmd(cmd_chars, address),
+        Some('U') => parse_redo_cmd(cmd_chars, address),
         Some('w') => parse_write_cmd(cmd_chars, address),
         Some(c) => Err(Error::Unknown(c)),
     }
@@ -101,7 +103,7 @@ fn parse_append_cmd(
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
-        None | Some('\n') => Ok(Cmd::Append(address, None)),
+        None | Some('\n') => Ok(Cmd::Append(address)),
         Some('\r') => {
             cmd_chars.next();
             parse_append_cmd(cmd_chars, address)
@@ -201,6 +203,16 @@ fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> 
     address.map_or_else(
         || match cmd_chars.peek() {
             None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
+            _ => Err(Error::InvalidCmdSuffix),
+        },
+        |_| Err(Error::UnexpectedAddress),
+    )
+}
+
+fn parse_redo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
+    address.map_or_else(
+        || match cmd_chars.peek() {
+            None | Some('\n') | Some('\r') => Ok(Cmd::Redo),
             _ => Err(Error::InvalidCmdSuffix),
         },
         |_| Err(Error::UnexpectedAddress),
@@ -626,7 +638,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
-        assert_eq!(Cmd::Append(None, None), res);
+        assert_eq!(Cmd::Append(None), res);
     }
 
     #[test]
@@ -652,6 +664,26 @@ mod tests {
     #[test]
     fn delete_cmd_with_invalid_suffix() {
         let mut input = "d/this is invalid/\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+            .expect_err("invalid suffix");
+        assert!(matches!(res, Error::InvalidCmdSuffix))
+    }
+
+    #[test]
+    fn redo_cmd() {
+        let mut input = "U\r\n".chars().peekable();
+        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
+        assert_eq!(Cmd::Redo, res);
+    }
+
+    #[test]
+    fn redo_cmd_with_invalid_suffix() {
+        let mut input = "U/this is invalid/\n".chars().peekable();
         let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
