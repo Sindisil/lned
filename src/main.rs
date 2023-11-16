@@ -1,3 +1,4 @@
+#![warn(clippy::all, clippy::pedantic)]
 mod char_utils;
 mod cli;
 mod command;

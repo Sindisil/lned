@@ -64,38 +64,38 @@ where
         )
         .map_err(Error::ParseCmd)
         .and_then(|cmd| {
-            let res = match cmd {
+            let res = match &cmd {
                 // dispatch editor commands
                 Cmd::Append(address) => {
                     let mut lines = Vec::new();
                     let _line_count = read_lines(&mut input, &mut lines)?;
                     buffers[current_buffer]
-                        .do_append(&mut output, address, lines)
+                        .do_append(&mut output, *address, lines)
                         .map_err(Error::BufferCmd)
                 }
                 Cmd::Delete(address) => buffers[current_buffer]
-                    .do_delete(&mut output, address)
+                    .do_delete(&mut output, *address)
                     .map_err(Error::BufferCmd),
-                Cmd::Edit(ref file) => buffers[current_buffer]
+                Cmd::Edit(file) => buffers[current_buffer]
                     .do_edit(&mut output, file.as_deref(), prev_command.as_ref())
                     .map_err(Error::BufferCmd),
                 Cmd::Enumerate(address) => buffers[current_buffer]
-                    .do_enumerate(&mut output, address)
+                    .do_enumerate(&mut output, *address)
                     .map_err(Error::BufferCmd),
-                Cmd::File(ref filename) => buffers[current_buffer]
+                Cmd::File(filename) => buffers[current_buffer]
                     .do_file(&mut output, filename.as_deref())
                     .map_err(Error::BufferCmd),
                 Cmd::Null(address) => buffers[current_buffer]
-                    .do_null(&mut output, address)
+                    .do_null(&mut output, *address)
                     .map_err(Error::BufferCmd),
                 Cmd::Print(address) => buffers[current_buffer]
-                    .do_print(&mut output, address)
+                    .do_print(&mut output, *address)
                     .map_err(Error::BufferCmd),
                 Cmd::Quit => do_quit(&mut output, &buffers, &prev_command).map(|ok_to_exit| {
                     done = ok_to_exit;
                 }),
-                Cmd::Write(address, ref filename) => buffers[current_buffer]
-                    .do_write(&mut output, address, filename.as_ref())
+                Cmd::Write(address, filename) => buffers[current_buffer]
+                    .do_write(&mut output, *address, filename.as_deref())
                     .map_err(Error::BufferCmd),
                 Cmd::Undo => buffers[current_buffer]
                     .do_undo(&mut output)
@@ -134,7 +134,7 @@ where
 fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
     match prev_command {
         Some(Cmd::Quit) => true,
-        _ => !buffers.iter().any(|buf| buf.is_dirty()),
+        _ => !buffers.iter().any(EditBuffer::is_dirty),
     }
 }
 

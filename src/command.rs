@@ -131,7 +131,7 @@ fn parse_edit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> 
         return Err(Error::UnexpectedAddress);
     }
     match cmd_chars.peek() {
-        None | Some('\n') | Some('\r') => Ok(Cmd::Edit(None)),
+        None | Some('\n' | '\r') => Ok(Cmd::Edit(None)),
         Some(c) if c.is_blank() => {
             let filename = parse_filename(cmd_chars);
             if filename.is_empty() {
@@ -149,7 +149,7 @@ fn parse_file_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> 
         return Err(Error::UnexpectedAddress);
     }
     match cmd_chars.peek() {
-        None | Some('\n') | Some('\r') => Ok(Cmd::File(None)),
+        None | Some('\n' | '\r') => Ok(Cmd::File(None)),
         Some(c) if c.is_blank() => {
             let filename = parse_filename(cmd_chars);
             if filename.is_empty() {
@@ -202,7 +202,7 @@ fn parse_print_cmd(
 fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
     address.map_or_else(
         || match cmd_chars.peek() {
-            None | Some('\n') | Some('\r') => Ok(Cmd::Quit),
+            None | Some('\n' | '\r') => Ok(Cmd::Quit),
             _ => Err(Error::InvalidCmdSuffix),
         },
         |_| Err(Error::UnexpectedAddress),
@@ -212,7 +212,7 @@ fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> 
 fn parse_redo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
     address.map_or_else(
         || match cmd_chars.peek() {
-            None | Some('\n') | Some('\r') => Ok(Cmd::Redo),
+            None | Some('\n' | '\r') => Ok(Cmd::Redo),
             _ => Err(Error::InvalidCmdSuffix),
         },
         |_| Err(Error::UnexpectedAddress),
@@ -222,7 +222,7 @@ fn parse_redo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> 
 fn parse_undo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
     address.map_or_else(
         || match cmd_chars.peek() {
-            None | Some('\n') | Some('\r') => Ok(Cmd::Undo),
+            None | Some('\n' | '\r') => Ok(Cmd::Undo),
             _ => Err(Error::InvalidCmdSuffix),
         },
         |_| Err(Error::UnexpectedAddress),
@@ -234,7 +234,7 @@ fn parse_write_cmd(
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
-        None | Some('\n') | Some('\r') => Ok(Cmd::Write(address, None)),
+        None | Some('\n' | '\r') => Ok(Cmd::Write(address, None)),
         Some(c) if c.is_blank() => {
             let filename = parse_filename(cmd_chars);
             if filename.is_empty() {
@@ -290,9 +290,8 @@ fn eval_addr_chain(
         if separator == Separator::Semicolon {
             if left == 0 || left > buffer.len() {
                 return Err(Error::InvalidLineNumber);
-            } else {
-                buffer.set_current_line(left);
             }
+            buffer.set_current_line(left);
         }
     }
 
@@ -389,7 +388,7 @@ fn eval_line_addr(
             let line = if buffer.current_line() == 1 {
                 (1..=buffer.len()).rev().find(|&i| re.is_match(&buffer[i]))
             } else {
-                (1..=buffer.current_line() - 1)
+                (1..buffer.current_line())
                     .rev()
                     .find(|&i| re.is_match(&buffer[i]))
                     .or_else(|| {
@@ -406,7 +405,7 @@ fn eval_line_addr(
         }
         Some('0'..='9') => {
             let num = cmd_chars
-                .peeking_take_while(|c| c.is_ascii_digit())
+                .peeking_take_while(char::is_ascii_digit)
                 .try_fold(0usize, |acc, c| {
                     c.to_digit(10)
                         .and_then(|d| acc.checked_mul(10).and_then(|n| n.checked_add(d as usize)))
@@ -470,10 +469,11 @@ fn eval_addr_offsets(cmd_chars: &mut Peekable<Chars>) -> Result<isize, Error> {
                 Some(cmp::max(
                     1,
                     cmd_chars
-                        .peeking_take_while(|c| c.is_ascii_digit())
+                        .peeking_take_while(char::is_ascii_digit)
                         .try_fold(0isize, |acc, c| {
                             c.to_digit(10).and_then(|d| {
-                                acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
+                                acc.checked_mul(10)
+                                    .and_then(|n| n.checked_add_unsigned(d.try_into().unwrap()))
                             })
                         })
                         .ok_or(Error::OffsetTooLarge)?,
@@ -484,10 +484,11 @@ fn eval_addr_offsets(cmd_chars: &mut Peekable<Chars>) -> Result<isize, Error> {
                 Some(cmp::min(
                     -1,
                     cmd_chars
-                        .peeking_take_while(|c| c.is_ascii_digit())
+                        .peeking_take_while(char::is_ascii_digit)
                         .try_fold(0isize, |acc, c| {
                             c.to_digit(10).and_then(|d| {
-                                acc.checked_mul(10).and_then(|n| n.checked_sub(d as isize))
+                                acc.checked_mul(10)
+                                    .and_then(|n| n.checked_sub_unsigned(d.try_into().unwrap()))
                             })
                         })
                         .ok_or(Error::OffsetTooSmall)?,
@@ -495,10 +496,11 @@ fn eval_addr_offsets(cmd_chars: &mut Peekable<Chars>) -> Result<isize, Error> {
             }
             '0'..='9' => Some(
                 cmd_chars
-                    .peeking_take_while(|c| c.is_ascii_digit())
+                    .peeking_take_while(char::is_ascii_digit)
                     .try_fold(0isize, |acc, c| {
                         c.to_digit(10).and_then(|d| {
-                            acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
+                            acc.checked_mul(10)
+                                .and_then(|n| n.checked_add_unsigned(d.try_into().unwrap()))
                         })
                     })
                     .ok_or(Error::OffsetTooLarge)?,

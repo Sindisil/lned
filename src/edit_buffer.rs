@@ -9,6 +9,7 @@ use core::cmp::Ordering;
 use core::fmt::{self, Display, Formatter};
 use core::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use core::slice::Iter;
+use std::borrow::ToOwned;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -72,7 +73,7 @@ impl From<Vec<&str>> for EditBuffer {
         let mut value = value
             .iter()
             .map(|v| {
-                let mut line = v.to_string();
+                let mut line = (*v).to_string();
                 if !(line.ends_with("\r\n") || line.ends_with('\n')) {
                     line.push_str(default_eol.as_ref());
                 }
@@ -110,7 +111,7 @@ impl Index<RangeInclusive<usize>> for EditBuffer {
     #[inline]
     fn index(&self, index: RangeInclusive<usize>) -> &[String] {
         assert!(*index.start() > 0 && *index.end() > 0, "Invalid range");
-        &self.text[*index.start() - 1..=*index.end() - 1]
+        &self.text[(*index.start() - 1)..(*index.end())]
     }
 }
 
@@ -440,10 +441,10 @@ impl EditBuffer {
             match ret {
                 ReadResult::EOLAdded(bytes_read) => {
                     writeln!(output, "missing line terminator appended\n{bytes_read}")
-                        .map_err(Error::WriteOutput)?
+                        .map_err(Error::WriteOutput)?;
                 }
                 ReadResult::AsIs(bytes_read) => {
-                    writeln!(output, "{bytes_read}").map_err(Error::WriteOutput)?
+                    writeln!(output, "{bytes_read}").map_err(Error::WriteOutput)?;
                 }
             }
         }
@@ -472,7 +473,7 @@ impl EditBuffer {
         address: Option<Address>,
     ) -> Result<(), Error> {
         let address = match address {
-            Some(Address::Line(0)) | Some(Address::Span(0, _)) => Err(Error::InvalidAddress),
+            Some(Address::Line(0) | Address::Span(0, _)) => Err(Error::InvalidAddress),
             None if self.current_line == 0 => Err(Error::InvalidAddress),
             _ => Ok(address),
         }?;
@@ -646,7 +647,7 @@ impl EditBuffer {
         &mut self,
         output: &mut W,
         address: Option<Address>,
-        filename: Option<&PathBuf>,
+        filename: Option<&Path>,
     ) -> Result<(), Error>
     where
         W: Write,
@@ -654,9 +655,8 @@ impl EditBuffer {
         if self.filename.is_none() {
             if filename.is_none() {
                 return Err(Error::NoFilename);
-            } else {
-                self.filename = filename.cloned();
             }
+            self.filename = filename.map(ToOwned::to_owned);
         }
 
         let mut dest = OpenOptions::new()
@@ -703,7 +703,7 @@ where
     match crlf.cmp(&lf) {
         Ordering::Greater => "\r\n",
         Ordering::Less => "\n",
-        _ => native_eol,
+        Ordering::Equal => native_eol,
     }
 }
 

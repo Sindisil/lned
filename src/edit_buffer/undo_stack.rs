@@ -1,11 +1,12 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-/// UndoStack ecapsulates the undo and redo stacks, with methods that
+
+/// `UndoStack` ecapsulates the undo and redo stacks, with methods that
 /// maintain the correct invarients.
 ///
 /// Namely, that we must be able to distinguish a new Undoable getting
-/// pushd from a do_*() method in EditBuffer (driven by a user command)
-/// from one getting pushed from EditBuffer::do_redo(). If the
+/// pushed from a do_*() method in `EditBuffer` (driven by a user command)
+/// from one getting pushed from `EditBuffer::do_redo()`. If the
 /// redo stack is non-empty, the former will cause a flush of the
 /// redo stack onto the undo stack (both verbatum and inversed) in
 /// order to allow "undoing the undos" (i.e., not losing any edit
@@ -54,7 +55,7 @@ impl UndoStack {
     /// If the pushed Undoable is new (i.e., hadn't previously
     /// been pushed to the undo stack), it must be coming from
     /// a user command. In that case, if the redo stack is not
-    /// empty, push_undo() will walk the items on the undo stack
+    /// empty, `push_undo()` will walk the items on the undo stack
     /// in reverse, pushing a clone of each onto the undo stack,
     /// then drain the redo stack, pushing Undoables of
     /// their Inverse action onto the undo stack.
@@ -115,7 +116,7 @@ impl UndoStack {
     /// Return hash of entire undo stack.
     ///
     /// Used to determine if undo stack has changed,
-    /// as a proxy for an EditBuffer with changes
+    /// as a proxy for an `EditBuffer` with changes
     /// that have not been written.
     pub fn fingerprint(&self) -> u64 {
         let mut h = DefaultHasher::new();

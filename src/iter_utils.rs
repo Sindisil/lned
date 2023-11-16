@@ -1,4 +1,3 @@
-use core::fmt::{self, Debug, Formatter};
 use core::iter::Peekable;
 
 pub trait Peeking: Iterator + Sized {
@@ -7,21 +6,10 @@ pub trait Peeking: Iterator + Sized {
         P: Fn(&Self::Item) -> bool;
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PeekingTakeWhile<I, P> {
     iter: I,
     pred: P,
-}
-
-impl<I, P> Debug for PeekingTakeWhile<I, P>
-where
-    I: Debug,
-{
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PeekingTakeWhile")
-            .field("iter", &self.iter)
-            .finish()
-    }
 }
 
 impl<I, P> PeekingTakeWhile<&mut Peekable<I>, P>
