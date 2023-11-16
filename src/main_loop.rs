@@ -203,6 +203,8 @@ mod tests {
     use super::*;
     use io::BufReader;
 
+    use crate::cli::CmdArgs;
+
     struct BadWriter {}
 
     impl Write for BadWriter {
@@ -351,7 +353,7 @@ mod tests {
         let input = b"a\n1\n2\n3\n.\nq\nq\n";
         let mut output = Vec::new();
 
-        run(&mut &input[..], &mut output, &Default::default()).expect("no error");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).expect("no error");
         assert_eq!(
             &b"::Unwritten changes - repeat quit command to discard changes.\n:"[..],
             &output[..]
@@ -364,7 +366,7 @@ mod tests {
             b"a\n1\n2\n3\n.\ne a_file_that_is_not_there.ext\ne a_file_that_is_not_there.ext\nq\n";
         let mut output = Vec::new();
 
-        run(&mut &input[..], &mut output, &Default::default()).expect("no error");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).expect("no error");
         assert!(&output[..]
             .starts_with(b"::Unwritten changes - repeat edit command to discard changes.\n:"));
     }
@@ -374,7 +376,7 @@ mod tests {
         let input = b"1p\nq\n";
         let mut output = Vec::new();
 
-        run(&mut &input[..], &mut output, &Default::default()).expect("no error");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).expect("no error");
         assert_eq!(
             &output[..],
             &b":buffer command error: invalid address\n:"[..],

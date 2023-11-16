@@ -55,7 +55,7 @@ mod tests {
         let s = "12345abcde";
         let mut piter = s.chars().peekable();
         let numbers = piter
-            .peeking_take_while(|c| c.is_ascii_digit())
+            .peeking_take_while(char::is_ascii_digit)
             .collect::<String>();
         assert_eq!("12345", numbers);
         assert_eq!('a', *piter.peek().expect("peeked character"));

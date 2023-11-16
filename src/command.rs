@@ -670,7 +670,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect_err("invalid suffix");
-        assert!(matches!(res, Error::InvalidCmdSuffix))
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
@@ -690,7 +690,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect_err("invalid suffix");
-        assert!(matches!(res, Error::InvalidCmdSuffix))
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
@@ -710,7 +710,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect_err("invalid suffix");
-        assert!(matches!(res, Error::InvalidCmdSuffix))
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
@@ -1074,24 +1074,24 @@ mod tests {
     #[test]
     fn comma_addr_separator() {
         let mut input = ",n".chars().peekable();
-        let _res = parse_separator(&mut input);
-        assert_eq!(Some(Separator::Comma), _res);
+        let res = parse_separator(&mut input);
+        assert_eq!(res, Some(Separator::Comma));
         assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
     fn semicolon_addr_separator() {
         let mut input = ";n".chars().peekable();
-        let _res = parse_separator(&mut input);
-        assert_eq!(Some(Separator::Semicolon), _res);
+        let res = parse_separator(&mut input);
+        assert_eq!(res, Some(Separator::Semicolon));
         assert_eq!("n", input.collect::<String>());
     }
 
     #[test]
     fn semicolon_addr_separator_with_spaces() {
         let mut input = "  ;n".chars().peekable();
-        let _res = parse_separator(&mut input);
-        assert_eq!(Some(Separator::Semicolon), _res);
+        let res = parse_separator(&mut input);
+        assert_eq!(res, Some(Separator::Semicolon));
         assert_eq!("n", input.collect::<String>());
     }
 

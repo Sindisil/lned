@@ -741,10 +741,10 @@ mod tests {
         let mut buf = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut dummy_file = BadWriter {};
         let mut output = Vec::new();
-        let _res = buf
+        let res = buf
             .write(&mut output, Some(Address::Span(1, 2)), &mut dummy_file)
             .expect_err("io error");
-        assert!(matches!(_res, Error::WriteLines(_)));
+        assert!(matches!(res, Error::WriteLines(_)));
     }
 
     #[test]
@@ -1272,14 +1272,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "Out of bounds access"]
     fn zero_index_panics() {
         let buffer = EditBuffer::from(vec!["1"]);
         let _ = &buffer[0];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "Out of bounds access"]
     fn index_too_large_panics() {
         let buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let _ = &buffer[4];
@@ -1310,21 +1310,21 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "Invalid range"]
     fn zero_based_range_panics() {
         let buffer = EditBuffer::from(vec!["1", "2"]);
         let _ = &buffer[0..2];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "Invalid range"]
     fn zero_based_range_inclusive_panics() {
         let buffer = EditBuffer::from(vec!["1", "2"]);
         let _ = &buffer[0..=1];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "Invalid range"]
     #[allow(clippy::reversed_empty_ranges)]
     fn zero_terminated_range_panics() {
         let buffer = EditBuffer::from(vec!["1", "2"]);
@@ -1332,7 +1332,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "Invalid range"]
     #[allow(clippy::reversed_empty_ranges)]
     fn zero_terminated_range_inclusive_panics() {
         let buffer = EditBuffer::from(vec!["1", "2"]);
@@ -1340,14 +1340,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "range end index 4 out of range for slice of length 3"]
     fn range_too_far_beyond_end_panics() {
         let buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let _ = &buffer[3..5];
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "range end index 4 out of range for slice of length 3"]
     fn range_inclusive_beyond_end_panics() {
         let buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let _ = &buffer[3..=4];
@@ -1362,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "Invalid range"]
     fn zero_based_range_from_panics() {
         let buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let _ = &buffer[0..];
@@ -1376,14 +1376,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "0 is an invalid index (1-3)"]
     fn set_current_line_bad_index() {
         let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         buffer.set_current_line(0);
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic = "99 is an invalid index (1-3)"]
     fn set_current_line_beyond_end() {
         let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         buffer.set_current_line(99);
@@ -2109,7 +2109,7 @@ mod tests {
         buffer
             .do_file(&mut output, Some(Path::new(new_filename)))
             .expect("successful setting of filename");
-        assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
+        assert_eq!(format!("{new_filename}\n").as_bytes(), &output[..]);
         assert_eq!(Some(Path::new(new_filename)), buffer.filename());
     }
 
@@ -2127,7 +2127,7 @@ mod tests {
         buffer
             .do_file(&mut output, None)
             .expect("displayed filename");
-        assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
+        assert_eq!(format!("{new_filename}\n").as_bytes(), &output[..]);
     }
 
     #[test]
@@ -2143,7 +2143,7 @@ mod tests {
         buffer
             .do_file(&mut output, Some(Path::new(new_filename)))
             .expect("displayed filename");
-        assert_eq!(format!("{}\n", new_filename).as_bytes(), &output[..]);
+        assert_eq!(format!("{new_filename}\n").as_bytes(), &output[..]);
         assert_eq!(Some(Path::new(new_filename)), buffer.filename());
     }
 
