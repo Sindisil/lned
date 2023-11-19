@@ -1,7 +1,7 @@
 use crate::command::Address;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub enum Op {
     Inverse(Box<Op>),
     Append(AppendData),
@@ -9,21 +9,21 @@ pub enum Op {
     Edit(EditData),
 }
 
-#[derive(Debug, Clone, Hash, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct AppendData {
     pub address: Option<Address>,
     pub current_line: usize,
     pub lines: Vec<String>,
 }
 
-#[derive(Debug, Clone, Hash, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct DeleteData {
     pub address: Option<Address>,
     pub lines_removed: Vec<String>,
     pub current_line: usize,
 }
 
-#[derive(Debug, Clone, Hash, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct EditData {
     pub filename: PathBuf,
     pub current_line: usize,

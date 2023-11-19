@@ -1,5 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// `UndoStack` ecapsulates the undo and redo stacks, with methods that
 /// maintain the correct invarients.
@@ -15,10 +14,10 @@ use std::ops::{Deref, DerefMut};
 
 use crate::edit_buffer::operation::Op;
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct Undoable {
+    id: Option<u64>,
     op: Op,
-    is_new: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -32,11 +31,7 @@ pub struct UndoStack {
     redo: Vec<Redoable>,
 }
 
-impl Undoable {
-    pub fn new(op: Op) -> Self {
-        Undoable { op, is_new: true }
-    }
-}
+static INST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl UndoStack {
     pub fn new() -> Self {
@@ -52,9 +47,10 @@ impl UndoStack {
 
     /// Push the supplied Undoable onto the undo stack.
     ///
-    /// If the pushed Undoable is new (i.e., hadn't previously
-    /// been pushed to the undo stack), it must be coming from
-    /// a user command. In that case, if the redo stack is not
+    /// If the pushed item doesn't yet have an id value, it
+    /// must be a new operation, rather than a redone operation.
+    ///
+    /// In that case, if the redo stack is not
     /// empty, `push_undo()` will walk the items on the undo stack
     /// in reverse, pushing a clone of each onto the undo stack,
     /// then drain the redo stack, pushing Undoables of
@@ -62,20 +58,22 @@ impl UndoStack {
     ///
     /// This will preserve full history, including the undo
     /// commands issued before the current change.
-    pub fn push_undo(&mut self, mut item: Undoable) {
-        if item.is_new {
-            item.is_new = false;
+    pub fn push_undo<T: Into<Undoable>>(&mut self, item: T) {
+        let mut item = item.into();
+        if item.id.is_none() {
+            item.id = Some(INST_COUNTER.fetch_add(1, Ordering::SeqCst));
             if !self.redo.is_empty() {
-                for item in self.redo.iter().rev() {
-                    self.undo.push(item.undo.clone());
+                let mut inv: Vec<Undoable> = self
+                    .redo
+                    .iter()
+                    .map(Redoable::to_inverse_undoable)
+                    .collect();
+
+                for item in self.redo.drain(..).rev() {
+                    self.undo.push(item.undo);
                 }
 
-                for item in self.redo.drain(..) {
-                    self.undo.push(Undoable {
-                        op: item.undo.op.inverse(),
-                        is_new: false,
-                    });
-                }
+                self.undo.append(&mut inv);
             }
         }
         self.undo.push(item);
@@ -113,15 +111,32 @@ impl UndoStack {
         self.redo.pop().map(|redo| redo.undo)
     }
 
-    /// Return hash of entire undo stack.
+    /// Return the id of the top item in the undo stack,
+    /// or None if the stack is empty.
     ///
     /// Used to determine if undo stack has changed,
     /// as a proxy for an `EditBuffer` with changes
     /// that have not been written.
-    pub fn fingerprint(&self) -> u64 {
-        let mut h = DefaultHasher::new();
-        self.undo.hash(&mut h);
-        h.finish()
+    pub fn fingerprint(&self) -> Option<u64> {
+        self.undo.last().and_then(|i| i.id)
+    }
+}
+
+impl Redoable {
+    fn to_inverse_undoable(&self) -> Undoable {
+        Undoable {
+            id: Some(INST_COUNTER.fetch_add(1, Ordering::SeqCst)),
+            op: self.undo.op.inverse(),
+        }
+    }
+}
+
+impl From<Op> for Undoable {
+    fn from(value: Op) -> Self {
+        Undoable {
+            id: None,
+            op: value,
+        }
     }
 }
 
@@ -183,9 +198,9 @@ mod tests {
         assert!(s.is_empty());
         assert!(s.pop_undo().is_none());
         assert!(s.pop_redo().is_none());
-        s.push_undo(Undoable::new(o_app));
+        s.push_undo(o_app);
         assert!(!s.is_empty());
-        s.push_undo(Undoable::new(o_del));
+        s.push_undo(o_del);
         assert!(!s.is_empty());
         let ret1 = s.pop_undo();
         assert!(!s.is_empty());

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use crate::command::{Address, Cmd};
 use crate::edit_buffer::operation::{AppendData, DeleteData, EditData, Op};
-use crate::edit_buffer::undo_stack::{UndoStack, Undoable};
+use crate::edit_buffer::undo_stack::UndoStack;
 use crate::num_utils::NumUtils;
 
 #[derive(Debug, Clone)]
@@ -196,10 +196,7 @@ impl EditBuffer {
 
     /// Returns true if buffer has been changed since last write.
     pub fn is_dirty(&self) -> bool {
-        self.clean_fingerprint.map_or_else(
-            || !self.undo_stack.is_empty(),
-            |f| f != self.undo_stack.fingerprint(),
-        )
+        self.clean_fingerprint != self.undo_stack.fingerprint()
     }
 
     pub fn current_line(&self) -> usize {
@@ -322,7 +319,7 @@ impl EditBuffer {
 
         writeln!(output, "{total_bytes_written}").map_err(Error::WriteOutput)?;
         if full_buffer_write {
-            self.clean_fingerprint = Some(self.undo_stack.fingerprint());
+            self.clean_fingerprint = self.undo_stack.fingerprint();
         }
         Ok(())
     }
@@ -463,7 +460,7 @@ impl EditBuffer {
             current_line: self.current_line,
         });
         let res = self.execute(output, &mut op);
-        self.undo_stack.push_undo(Undoable::new(op));
+        self.undo_stack.push_undo(op);
         res
     }
 
@@ -484,7 +481,7 @@ impl EditBuffer {
             current_line: self.current_line,
         });
         let res = self.execute(output, &mut op);
-        self.undo_stack.push_undo(Undoable::new(op));
+        self.undo_stack.push_undo(op);
         res
     }
 
@@ -516,8 +513,8 @@ impl EditBuffer {
         });
 
         let res = self.execute(output, &mut op);
-        self.undo_stack.push_undo(Undoable::new(op));
-        self.clean_fingerprint = Some(self.undo_stack.fingerprint());
+        self.undo_stack.push_undo(op);
+        self.clean_fingerprint = self.undo_stack.fingerprint();
         res
     }
 

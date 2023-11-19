@@ -10,7 +10,7 @@ use crate::iter_utils::Peeking;
 
 use regex::Regex;
 
-#[derive(Debug, PartialEq, Clone, Hash)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Cmd {
     Append(Option<Address>),
     Delete(Option<Address>),
@@ -247,7 +247,7 @@ fn parse_write_cmd(
     }
 }
 
-#[derive(Debug, PartialEq, Copy, Clone, Hash)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Address {
     Line(usize),
     Span(usize, usize),
