@@ -141,6 +141,7 @@ impl From<Op> for Undoable {
 }
 
 impl DerefMut for Undoable {
+    #[cfg(not(tarpaulin_include))]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.op
     }
@@ -149,12 +150,14 @@ impl DerefMut for Undoable {
 impl Deref for Undoable {
     type Target = Op;
 
+    #[cfg(not(tarpaulin_include))]
     fn deref(&self) -> &Self::Target {
         &self.op
     }
 }
 
 impl DerefMut for Redoable {
+    #[cfg(not(tarpaulin_include))]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.undo.op
     }
@@ -163,6 +166,7 @@ impl DerefMut for Redoable {
 impl Deref for Redoable {
     type Target = Op;
 
+    #[cfg(not(tarpaulin_include))]
     fn deref(&self) -> &Self::Target {
         &self.undo.op
     }
@@ -171,6 +175,7 @@ impl Deref for Redoable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::edit_buffer::{AppendData, DeleteData};
 
     #[test]
     fn create_new_undo_stack() {
@@ -179,9 +184,36 @@ mod tests {
     }
 
     #[test]
-    fn push_and_pop() {
+    fn undo_stack_empty_fingerprint() {
+        let s = UndoStack::new();
+        assert!(s.is_empty());
+        assert!(s.fingerprint().is_none());
+    }
+
+    #[test]
+    fn undo_stack_non_empty_fingerprint() {
+        let mut s = UndoStack::new();
+        s.push_undo(Op::Append(AppendData {
+            ..AppendData::default()
+        }));
+        let fp1 = s.fingerprint();
+        assert!(fp1.is_some());
+        s.push_undo(Op::Append(AppendData {
+            ..AppendData::default()
+        }));
+        let fp2 = s.fingerprint();
+        assert!(fp2.is_some() && fp1 != fp2);
+        assert!(!s.is_empty());
+        s.pop_undo();
+        assert!(s.fingerprint() == fp1);
+        s.pop_undo();
+        assert!(s.fingerprint().is_none());
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn undo_stack_push_and_pop() {
         use crate::command::Address;
-        use crate::edit_buffer::{AppendData, DeleteData};
 
         let mut s = UndoStack::new();
         let o_app = Op::Append(AppendData {
@@ -198,19 +230,29 @@ mod tests {
         assert!(s.is_empty());
         assert!(s.pop_undo().is_none());
         assert!(s.pop_redo().is_none());
-        s.push_undo(o_app);
+        s.push_undo(o_app.clone());
         assert!(!s.is_empty());
-        s.push_undo(o_del);
+        s.push_undo(o_del.clone());
         assert!(!s.is_empty());
         let ret1 = s.pop_undo();
         assert!(!s.is_empty());
         let u1 = ret1.unwrap();
         assert!(matches!(*u1, Op::Delete(_)));
         s.push_redo(u1);
+
+        s.push_undo(o_del.clone());
+        // redo_stack now empty
+        assert!(s.pop_redo().is_none());
+
+        let ret3 = s.pop_undo();
+        s.push_redo(ret3.unwrap());
+
         let ret2 = s.pop_redo();
         let u2 = ret2.unwrap();
         assert!(matches!(*u2, Op::Delete(_)));
         assert!(s.pop_redo().is_none());
+        assert!(s.pop_undo().is_some());
+        assert!(s.pop_undo().is_some());
         assert!(s.pop_undo().is_some());
         assert!(s.pop_undo().is_none());
         assert!(s.is_empty());

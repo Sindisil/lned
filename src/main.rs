@@ -1,4 +1,5 @@
 #![warn(clippy::all, clippy::pedantic)]
+#[cfg(target_has_atomic = "64")]
 mod char_utils;
 mod cli;
 mod command;
