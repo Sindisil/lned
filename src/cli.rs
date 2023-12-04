@@ -27,10 +27,9 @@ The first edit buffer will initially be the active buffer.
 
 #[derive(Debug)]
 pub enum Error {
-    ParsingFilename(lexopt::Error), // Error parsing filename from cmd line
-    WroteMessage,                   // Wrote message to ouput and should exit with no error
-    NextArg(lexopt::Error),         // Error reading next argument
-    UnexpectedArg(lexopt::Error),   // Unexpected cmd line argument
+    WroteMessage,                 // Wrote message to ouput and should exit with no error
+    NextArg(lexopt::Error),       // Error reading next argument
+    UnexpectedArg(lexopt::Error), // Unexpected cmd line argument
 }
 
 #[derive(Debug, Default)]
@@ -74,7 +73,6 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Error::WroteMessage => write!(f, "message output, no error"),
-            Error::ParsingFilename(_) => write!(f, "error parsing filame from command line"),
             Error::NextArg(_) => write!(f, "Error parsing next command line argument"),
             Error::UnexpectedArg(e) => write!(f, "{e}"),
         }

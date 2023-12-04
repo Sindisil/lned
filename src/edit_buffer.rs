@@ -710,6 +710,7 @@ mod tests {
 
     use std::io::{BufReader, Read};
     use std::ops::Deref;
+    use std::str;
 
     struct BadReader {}
 
@@ -2093,44 +2094,47 @@ mod tests {
         buffer
             .do_file(&mut output, None)
             .expect("notice of no current filename");
-        assert_eq!(b"No current filename\n", &output[..]);
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "No current filename\n"
+        );
         assert_eq!(None, buffer.filename());
     }
 
     #[test]
     fn set_filename() {
-        let new_filename = "a_new_filename.txt";
+        let new_filename = "a_new_filename.txt\n";
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut output = Vec::new();
         assert_eq!(None, buffer.filename());
         buffer
-            .do_file(&mut output, Some(Path::new(new_filename)))
+            .do_file(&mut output, Some(Path::new(new_filename.trim())))
             .expect("successful setting of filename");
-        assert_eq!(format!("{new_filename}\n").as_bytes(), &output[..]);
-        assert_eq!(Some(Path::new(new_filename)), buffer.filename());
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
+        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
 
     #[test]
     fn print_filename() {
-        let new_filename = "a_new_filename.txt";
+        let new_filename = "a_new_filename.txt\n";
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut output = Vec::new();
         assert_eq!(None, buffer.filename());
         buffer
-            .do_file(&mut output, Some(Path::new(new_filename)))
+            .do_file(&mut output, Some(Path::new(new_filename.trim())))
             .expect("successful setting of filename");
-        assert_eq!(Some(Path::new(new_filename)), buffer.filename());
+        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
         output.clear();
         buffer
             .do_file(&mut output, None)
             .expect("displayed filename");
-        assert_eq!(format!("{new_filename}\n").as_bytes(), &output[..]);
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
     }
 
     #[test]
     fn change_filename() {
         let orig_filename = "a_filename.md";
-        let new_filename = "a_new_filename.txt";
+        let new_filename = "a_new_filename.txt\n";
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut output = Vec::new();
         buffer
@@ -2138,10 +2142,10 @@ mod tests {
             .expect("successful setting of filename");
         output.clear();
         buffer
-            .do_file(&mut output, Some(Path::new(new_filename)))
+            .do_file(&mut output, Some(Path::new(new_filename.trim())))
             .expect("displayed filename");
-        assert_eq!(format!("{new_filename}\n").as_bytes(), &output[..]);
-        assert_eq!(Some(Path::new(new_filename)), buffer.filename());
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
+        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
 
     #[test]
