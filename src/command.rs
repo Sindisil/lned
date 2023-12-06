@@ -67,11 +67,10 @@ impl Display for Error {
 impl Cmd {
     pub fn parse(
         cmd_chars: &mut Peekable<Chars>,
-        buffers: &mut [EditBuffer],
-        current_buffer: usize,
+        buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
-        let address = eval_address(cmd_chars, &mut buffers[current_buffer], previous_pattern)?;
+        let address = eval_address(cmd_chars, buffer, previous_pattern)?;
         parse_cmd(cmd_chars, previous_pattern, address)
     }
 }
@@ -525,20 +524,20 @@ mod tests {
     #[test]
     fn unknown_command_gives_error() {
         let mut input = "~n".chars().peekable();
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("an error indicating an unknown command");
         assert!(matches!(res, Error::Unknown(_)));
     }
 
     #[test]
     fn null_cmd() {
-        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
-        buffers[0].set_current_line(2);
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        buffer.set_current_line(2);
         let mut previous_pattern: Option<Regex> = None;
         let mut input = "\n".chars().peekable();
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("a successful parse");
         assert!(matches!(res, Cmd::Null(None)));
     }
@@ -546,31 +545,31 @@ mod tests {
     #[test]
     fn null_cmd_crlf() {
         let mut input = "\r\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"])];
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
         let mut previous_pattern: Option<Regex> = None;
-        buffers[0].set_current_line(2);
+        buffer.set_current_line(2);
         let res =
-            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed command");
+            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed command");
         assert!(matches!(res, Cmd::Null(None)));
     }
 
     #[test]
     fn offset_only_null_cmd() {
         let mut input = "-\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
-        assert_eq!(3, buffers[0].current_line());
+        assert_eq!(3, buffer.current_line());
         let res =
-            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed command");
+            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed command");
         assert!(matches!(res, Cmd::Null(Some(a)) if a == Address::Line(2)));
     }
 
     #[test]
     fn quit() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "q\n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("a successful parse");
         assert!(matches!(res, Cmd::Quit));
     }
@@ -578,9 +577,9 @@ mod tests {
     #[test]
     fn quit_with_illegal_addr() {
         let mut input = "2,3q\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3", "4"])];
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("unexpected addr on quit");
         assert!(matches!(res, Error::UnexpectedAddress));
     }
@@ -588,9 +587,9 @@ mod tests {
     #[test]
     fn quit_with_invalid_suffix() {
         let mut input = "q/more/\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3", "4"])];
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3", "4"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid command suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
@@ -598,9 +597,9 @@ mod tests {
     #[test]
     fn print_cmd() {
         let mut input = "p\r\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("parsed print cmd");
         assert!(matches!(res, Cmd::Print(None)));
     }
@@ -608,9 +607,9 @@ mod tests {
     #[test]
     fn print_cmd_with_invald_suffix() {
         let mut input = "p/more/\r\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
@@ -618,9 +617,9 @@ mod tests {
     #[test]
     fn enumerate_cmd() {
         let mut input = "1,2n\r\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("parsed enumerate (n) cmd");
         assert!(matches!(res, Cmd::Enumerate(Some(Address::Span(1, 2)))));
     }
@@ -628,9 +627,9 @@ mod tests {
     #[test]
     fn enumerate_cmd_with_invald_suffix() {
         let mut input = "n/more/\r\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
@@ -638,19 +637,19 @@ mod tests {
     #[test]
     fn append_cmd() {
         let mut input = "a\r\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
         let res =
-            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
+            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed cmd");
         assert!(matches!(res, Cmd::Append(None)));
     }
 
     #[test]
     fn append_cmd_with_invalid_suffix() {
         let mut input = "a/this is invalid/\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
@@ -658,19 +657,19 @@ mod tests {
     #[test]
     fn delete_cmd() {
         let mut input = "d\r\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
         let res =
-            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
+            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed cmd");
         assert!(matches!(res, Cmd::Delete(None)));
     }
 
     #[test]
     fn delete_cmd_with_invalid_suffix() {
         let mut input = "d/this is invalid/\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
@@ -678,19 +677,19 @@ mod tests {
     #[test]
     fn redo_cmd() {
         let mut input = "U\r\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
         let res =
-            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
+            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed cmd");
         assert!(matches!(res, Cmd::Redo));
     }
 
     #[test]
     fn redo_cmd_with_invalid_suffix() {
         let mut input = "U/this is invalid/\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
@@ -698,19 +697,19 @@ mod tests {
     #[test]
     fn undo_cmd() {
         let mut input = "u\r\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
         let res =
-            Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
+            Cmd::parse(&mut input, &mut buffer, &mut previous_pattern).expect("parsed cmd");
         assert!(matches!(res, Cmd::Undo));
     }
 
     #[test]
     fn undo_cmd_with_invalid_suffix() {
         let mut input = "u/this is invalid/\n".chars().peekable();
-        let mut buffers = vec![EditBuffer::from(vec!["1\r\n", "2", "3"])];
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
@@ -1353,120 +1352,120 @@ mod tests {
 
     #[test]
     fn parse_edit_cmd_no_filename() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "e\n".chars().peekable();
         let mut previous_pattern = None::<Regex>;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("parsed edit cmd");
         assert!(matches!(res, Cmd::Edit(None)));
     }
 
     #[test]
     fn parse_edit_cmd_blank_filename() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "e \n".chars().peekable();
         let mut previous_pattern = None::<Regex>;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid filename");
         assert!(matches!(res, Error::InvalidFilename));
     }
 
     #[test]
     fn parse_edit_cmd() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "e a\\filename.txt\n".chars().peekable();
         let mut previous_pattern = None::<Regex>;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("parsed edit cmd");
         assert!(matches!(res, Cmd::Edit(Some(b)) if b == Path::new(r"a\filename.txt")));
     }
 
     #[test]
     fn parse_edit_cmd_invalid_suffix() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "e/a/filename".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
     fn parse_edit_cmd_unexpected_address() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "1234e a_filename.txt\r\n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("unexpected address");
         assert!(matches!(res, Error::UnexpectedAddress));
     }
 
     #[test]
     fn parse_file_cmd_no_filname() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "f\n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("a successful parse");
         assert!(matches!(res, Cmd::File(None)));
     }
 
     #[test]
     fn parse_file_cmd_blank_filename() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "f \r\n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("illegal filename");
         assert!(matches!(res, Error::InvalidFilename));
     }
 
     #[test]
     fn parse_file_cmd() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "f a_filename.txt\r\n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("a successful parse");
         assert!(matches!(res, Cmd::File(Some(p)) if p == Path::new("a_filename.txt")));
     }
 
     #[test]
     fn parse_file_cmd_unexpected_address() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "1234f a_filename.txt\r\n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("unexpected address");
         assert!(matches!(res, Error::UnexpectedAddress));
     }
 
     #[test]
     fn parse_file_cmd_invalid_suffix() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "f/a/filename".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
     fn parse_write_cmd_no_addr() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "w a_filename.txt\r\n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("a successful parse");
         assert!(matches!(res, Cmd::Write(None, Some(p)) if p == Path::new("a_filename.txt")));
     }
 
     #[test]
     fn parse_write_cmd_with_addr() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "1,3w a_filename.txt\r\n".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect("a successful parse");
         assert!(
             matches!(res, Cmd::Write(Some(Address::Span(1, 3)), Some(p)) if p == Path::new("a_filename.txt"))
@@ -1475,10 +1474,10 @@ mod tests {
 
     #[test]
     fn parse_write_cmd_invalid_suffix() {
-        let mut buffers = vec![EditBuffer::new()];
+        let mut buffer = EditBuffer::new();
         let mut input = "w/a/filename".chars().peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
+        let res = Cmd::parse(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
