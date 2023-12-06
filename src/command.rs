@@ -10,7 +10,7 @@ use crate::iter_utils::Peeking;
 
 use regex::Regex;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub enum Cmd {
     Append(Option<Address>),
     Delete(Option<Address>),
@@ -520,6 +520,8 @@ fn eval_addr_offsets(cmd_chars: &mut Peekable<Chars>) -> Result<isize, Error> {
 mod tests {
     use super::*;
 
+    use std::path::Path;
+
     #[test]
     fn unknown_command_gives_error() {
         let mut input = "~n".chars().peekable();
@@ -538,7 +540,7 @@ mod tests {
         let mut input = "\n".chars().peekable();
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("a successful parse");
-        assert_eq!(Cmd::Null(None), res);
+        assert!(matches!(res, Cmd::Null(None)));
     }
 
     #[test]
@@ -549,7 +551,7 @@ mod tests {
         buffers[0].set_current_line(2);
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed command");
-        assert_eq!(Cmd::Null(None), res);
+        assert!(matches!(res, Cmd::Null(None)));
     }
 
     #[test]
@@ -560,7 +562,7 @@ mod tests {
         assert_eq!(3, buffers[0].current_line());
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed command");
-        assert_eq!(Cmd::Null(Some(Address::Line(2))), res);
+        assert!(matches!(res, Cmd::Null(Some(a)) if a == Address::Line(2)));
     }
 
     #[test]
@@ -570,7 +572,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("a successful parse");
-        assert_eq!(Cmd::Quit, res);
+        assert!(matches!(res, Cmd::Quit));
     }
 
     #[test]
@@ -600,7 +602,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("parsed print cmd");
-        assert_eq!(Cmd::Print(None), res);
+        assert!(matches!(res, Cmd::Print(None)));
     }
 
     #[test]
@@ -620,7 +622,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("parsed enumerate (n) cmd");
-        assert_eq!(Cmd::Enumerate(Some(Address::Span(1, 2))), res);
+        assert!(matches!(res, Cmd::Enumerate(Some(Address::Span(1, 2)))));
     }
 
     #[test]
@@ -640,7 +642,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
-        assert_eq!(Cmd::Append(None), res);
+        assert!(matches!(res, Cmd::Append(None)));
     }
 
     #[test]
@@ -660,7 +662,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
-        assert_eq!(Cmd::Delete(None), res);
+        assert!(matches!(res, Cmd::Delete(None)));
     }
 
     #[test]
@@ -680,7 +682,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
-        assert_eq!(Cmd::Redo, res);
+        assert!(matches!(res, Cmd::Redo));
     }
 
     #[test]
@@ -700,7 +702,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
-        assert_eq!(Cmd::Undo, res);
+        assert!(matches!(res, Cmd::Undo));
     }
 
     #[test]
@@ -1356,7 +1358,7 @@ mod tests {
         let mut previous_pattern = None::<Regex>;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("parsed edit cmd");
-        assert_eq!(Cmd::Edit(None), res);
+        assert!(matches!(res, Cmd::Edit(None)));
     }
 
     #[test]
@@ -1376,7 +1378,7 @@ mod tests {
         let mut previous_pattern = None::<Regex>;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("parsed edit cmd");
-        assert_eq!(Cmd::Edit(Some(PathBuf::from(r"a\filename.txt"))), res);
+        assert!(matches!(res, Cmd::Edit(Some(b)) if b == Path::new(r"a\filename.txt")));
     }
 
     #[test]
@@ -1406,7 +1408,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("a successful parse");
-        assert_eq!(Cmd::File(None), res);
+        assert!(matches!(res, Cmd::File(None)));
     }
 
     #[test]
@@ -1426,7 +1428,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("a successful parse");
-        assert_eq!(Cmd::File(Some(PathBuf::from("a_filename.txt"))), res);
+        assert!(matches!(res, Cmd::File(Some(p)) if p == Path::new("a_filename.txt")));
     }
 
     #[test]
@@ -1456,7 +1458,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("a successful parse");
-        assert_eq!(Cmd::Write(None, Some(PathBuf::from("a_filename.txt"))), res);
+        assert!(matches!(res, Cmd::Write(None, Some(p)) if p == Path::new("a_filename.txt")));
     }
 
     #[test]
@@ -1466,12 +1468,8 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("a successful parse");
-        assert_eq!(
-            Cmd::Write(
-                Some(Address::Span(1, 3)),
-                Some(PathBuf::from("a_filename.txt"))
-            ),
-            res
+        assert!(
+            matches!(res, Cmd::Write(Some(Address::Span(1, 3)), Some(p)) if p == Path::new("a_filename.txt"))
         );
     }
 
