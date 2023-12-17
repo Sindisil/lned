@@ -31,7 +31,7 @@ pub enum Cmd {
 
 #[derive(Debug)]
 pub enum Error {
-    Unknown(String),
+    Unknown(char),
     UnexpectedAddress,
     OffsetTooLarge,
     OffsetTooSmall,
@@ -99,29 +99,25 @@ impl Parser {
             .read_line(&mut self.line)
             .map_err(Error::ReadCommand)?;
         let mut cmd_line = self.line.as_mut_str().graphemes(true);
-        let (address, cmd) = eval_address(&cmd_line, buffer, previous_pattern)?;
+        let (address, cmd) = eval_address(&mut cmd_line, buffer, previous_pattern)?;
         match cmd {
-            Some("a") => parse_no_args_cmd(&mut cmd_line, Cmd::Append(address)),
-            Some("d") => parse_no_args_cmd(&mut cmd_line, Cmd::Delete(address)),
-            //            Some("e") => parse_edit_cmd(&mut cmd_line, address),
-            //            Some("f") => parse_file_cmd(input, address),
-            Some("n") => parse_no_args_cmd(&mut cmd_line, Cmd::Enumerate(address)),
+            Some('a') => parse_no_args_cmd(cmd_line, Cmd::Append(address)),
+            Some('d') => parse_no_args_cmd(cmd_line, Cmd::Delete(address)),
+            //            Some('e') => parse_edit_cmd(cmd_line, address),
+            //            Some('f') => parse_file_cmd(mut cmd_line, address),
+            Some('n') => parse_no_args_cmd(cmd_line, Cmd::Enumerate(address)),
             None => Ok(Cmd::Null(address)),
-            Some("p") => parse_no_args_cmd(&mut cmd_line, Cmd::Print(address)),
-            Some("q") => parse_lone_cmd(&mut cmd_line, address, Cmd::Quit),
-            Some("u") => parse_lone_cmd(&mut cmd_line, address, Cmd::Undo),
-            Some("U") => parse_lone_cmd(&mut cmd_line, address, Cmd::Redo),
-            //            Some("w") => parse_write_cmd(input, address),
-            Some(s) => Err(Error::Unknown(s.to_owned())),
+            Some('p') => parse_no_args_cmd(cmd_line, Cmd::Print(address)),
+            Some('q') => parse_lone_cmd(cmd_line, address, Cmd::Quit),
+            Some('u') => parse_lone_cmd(cmd_line, address, Cmd::Undo),
+            Some('U') => parse_lone_cmd(cmd_line, address, Cmd::Redo),
+            //            Some('w') => parse_write_cmd(cmd_line, address),
+            Some(c) => Err(Error::Unknown(c)),
         }
     }
 }
 
-fn parse_lone_cmd<'a, I>(
-    cmd_line: &'a mut I,
-    address: Option<Address>,
-    cmd: Cmd,
-) -> Result<Cmd, Error>
+fn parse_lone_cmd<'a, I>(cmd_line: I, address: Option<Address>, cmd: Cmd) -> Result<Cmd, Error>
 where
     I: Iterator<Item = &'a str>,
 {
@@ -132,22 +128,24 @@ where
     }
 }
 
-fn parse_no_args_cmd<'a, I>(cmd_line: &'a mut I, cmd: Cmd) -> Result<Cmd, Error>
+fn parse_no_args_cmd<'a, I>(mut cmd_line: I, cmd: Cmd) -> Result<Cmd, Error>
 where
     I: Iterator<Item = &'a str>,
 {
     match cmd_line.next() {
-        None | Some("\n") => Ok(cmd),
-        Some("\r") => parse_no_args_cmd(cmd_line, cmd),
+        None | Some("\n" | "\r\n") => Ok(cmd),
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
 
-fn eval_address<'a>(
-    _cmd_line: &'a impl Iterator,
+fn eval_address<'a, 'b, I>(
+    _cmd_line: &'a mut I,
     _buffer: &mut EditBuffer,
     _previous_pattern: &mut Option<Regex>,
-) -> Result<(Option<Address>, Option<&'a str>), Error> {
+) -> Result<(Option<Address>, Option<char>), Error>
+where
+    I: Iterator<Item = &'b str>,
+{
     todo!();
 }
 
