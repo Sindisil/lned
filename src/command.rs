@@ -472,6 +472,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_valid_lone_cmd() {
+        let mut cmd_line = "\n".graphemes(true);
+        let res = parse_lone_cmd(&mut cmd_line, None, Cmd::Quit).expect("good parse");
+        assert!(matches!(res, Cmd::Quit));
+    }
+
+    #[test]
     fn parse_lone_cmd_error_with_address() {
         let mut cmd_line = "\n".graphemes(true);
         let res = parse_lone_cmd(&mut cmd_line, Some(Address::Line(1)), Cmd::Quit)
