@@ -1,10 +1,10 @@
-pub trait CharUtils {
+pub trait StrUtils {
     fn is_blank(&self) -> bool;
 }
 
-impl CharUtils for char {
+impl StrUtils for str {
     fn is_blank(&self) -> bool {
-        *self == ' ' || *self == '\t'
+        self == " " || self == "\t"
     }
 }
 
