@@ -105,7 +105,7 @@ impl Parser {
         match cmd {
             Some('a') => parse_no_args_cmd(cmd_line, Cmd::Append(address)),
             Some('d') => parse_no_args_cmd(cmd_line, Cmd::Delete(address)),
-            //            Some('e') => parse_edit_cmd(cmd_line, address),
+            Some('e') => parse_edit_cmd(cmd_line, address),
             //            Some('f') => parse_file_cmd(mut cmd_line, address),
             Some('n') => parse_no_args_cmd(cmd_line, Cmd::Enumerate(address)),
             None => Ok(Cmd::Null(address)),
@@ -136,6 +136,31 @@ where
 {
     match cmd_line.next() {
         None | Some("\n" | "\r\n") => Ok(cmd),
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_edit_cmd<'a, I>(mut cmd_line: I, address: Option<Address>) -> Result<Cmd, Error>
+where
+    I: Iterator<Item = &'a str>,
+{
+    if address.is_some() {
+        return Err(Error::UnexpectedAddress);
+    }
+    match cmd_line.next() {
+        None | Some("\n" | "\r\n") => Ok(Cmd::Edit(None)),
+        Some(s) if s.is_blank() => {
+            let filename = cmd_line
+                .take_while(|s| *s != "\n" && *s != "\r\n")
+                .collect::<String>()
+                .trim()
+                .to_owned();
+            if filename.is_empty() {
+                Err(Error::InvalidFilename)
+            } else {
+                Ok(Cmd::Edit(Some(PathBuf::from(filename))))
+            }
+        }
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
@@ -672,5 +697,30 @@ mod tests {
             matches!(res, Error::Unknown('O')),
             "{res:?} didn't match Error::Unknown('O')"
         );
+    }
+
+    #[test]
+    fn parse_edit_with_address() {
+        todo!();
+    }
+
+    #[test]
+    fn parse_edit_no_filename() {
+        todo!();
+    }
+
+    #[test]
+    fn parse_edit_bad_filename() {
+        todo!();
+    }
+
+    #[test]
+    fn parse_edit_with_filename() {
+        todo!();
+    }
+
+    #[test]
+    fn parse_edit_invalid_suffix() {
+        todo!();
     }
 }
