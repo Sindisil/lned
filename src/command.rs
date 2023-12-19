@@ -49,10 +49,7 @@ pub enum Error {
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
-pub enum Address {
-    Line(usize),
-    Span(usize, usize),
-}
+pub struct Address(pub usize, pub usize);
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Separator {
@@ -514,7 +511,7 @@ mod tests {
     #[test]
     fn parse_lone_cmd_error_with_address() {
         let mut cmd_line = "\n".graphemes(true);
-        let res = parse_lone_cmd(&mut cmd_line, Some(Address::Line(1)), Cmd::Quit)
+        let res = parse_lone_cmd(&mut cmd_line, Some(Address(1, 1)), Cmd::Quit)
             .expect_err("unexpected address");
         assert!(matches!(res, Error::UnexpectedAddress));
     }

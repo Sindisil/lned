@@ -217,12 +217,12 @@ mod tests {
 
         let mut s = UndoStack::new();
         let o_app = Op::Append(AppendData {
-            address: Some(Address::Line(1)),
+            address: Some(Address(1, 1)),
             lines: vec!["spam".to_owned()],
             current_line: 0,
         });
         let o_del = Op::Delete(DeleteData {
-            address: Some(Address::Line(1)),
+            address: Some(Address(1, 1)),
             lines_removed: Vec::new(),
             current_line: 1,
         });
