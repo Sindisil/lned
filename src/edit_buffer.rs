@@ -510,14 +510,13 @@ impl EditBuffer {
     where
         W: Write,
     {
-        let span = match address {
-            Some(Address(b, e)) => b..=e,
-            None => {
-                if self.current_line == 0 {
-                    return Err(Error::InvalidAddress);
-                }
-                self.current_line..=self.current_line
+        let span = if let Some(Address(b, e)) = address {
+            b..=e
+        } else {
+            if self.current_line == 0 {
+                return Err(Error::InvalidAddress);
             }
+            self.current_line..=self.current_line
         };
 
         if *span.start() < 1
@@ -581,14 +580,13 @@ impl EditBuffer {
     where
         W: Write,
     {
-        let span = match address {
-            Some(Address(b, e)) => b..=e,
-            None => {
-                if self.current_line == 0 {
-                    return Err(Error::InvalidAddress);
-                }
-                self.current_line..=self.current_line
+        let span = if let Some(Address(b, e)) = address {
+            b..=e
+        } else {
+            if self.current_line == 0 {
+                return Err(Error::InvalidAddress);
             }
+            self.current_line..=self.current_line
         };
 
         if *span.start() < 1

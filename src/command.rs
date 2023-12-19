@@ -211,21 +211,33 @@ where
 
 fn eval_address<'a, 'b, I>(
     cmd_line: &'a mut I,
-    _buffer: &mut EditBuffer,
+    buffer: &mut EditBuffer,
     _previous_pattern: &mut Option<Regex>,
 ) -> Result<(Option<Address>, Option<char>), Error>
 where
     I: Iterator<Item = &'b str>,
 {
-    let mut left_addr: Option<Address> = None;
+    let mut left = None;
+    let mut right = None;
+    let mut cmd_chr = None;
+
     loop {
         match cmd_line.next() {
             Some(s) if s.is_blank() => (),
-            Some(s) if s == "\r\n" || s == "\n" => return Ok((None, None)),
-            Some(s) => return Ok((None, s.chars().next())),
+            Some(s) if s == "\r\n" || s == "\n" => break,
+            Some(".") => right = Some(buffer.current_line()),
+            Some("$") => right = Some(buffer.len()),
+            Some(s) => {
+                cmd_chr = s.chars().next();
+                break;
+            }
             None => return Err(Error::MissingEol),
         }
     }
+
+    let address = right.map(|r| Address(left.map_or(r, |l| l), r));
+
+    Ok((address, cmd_chr))
 }
 
 //impl Cmd {
@@ -591,6 +603,28 @@ mod tests {
             eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(address.is_none());
         assert!(matches!(cmd, Some('q')));
+    }
+
+    #[test]
+    fn eval_dot_addr() {
+        let mut cmd_line = ".d\r\n".graphemes(true);
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        let (address, cmd) =
+            eval_address(&mut cmd_line, &mut buffer, &mut None).expect("should parse successfully");
+        assert_eq!(address, Some(Address(2, 2)));
+        assert_eq!(cmd, Some('d'));
+    }
+
+    #[test]
+    fn eval_dollar_addr() {
+        let mut cmd_line = "$d\r\n".graphemes(true);
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        let (address, cmd) =
+            eval_address(&mut cmd_line, &mut buffer, &mut None).expect("should parse successfully");
+        assert_eq!(address, Some(Address(3, 3)));
+        assert_eq!(cmd, Some('d'));
     }
 
     #[test]
