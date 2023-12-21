@@ -255,7 +255,28 @@ fn parse_number<'a, 'b, I>(
 where
     I: Iterator<Item = &'b str>,
 {
-    Err(Error::InvalidLineNumber)
+    let mut acc = first_digit
+        .chars()
+        .next()
+        .map_or(None, |c| c.to_digit(10))
+        .ok_or(Error::InvalidLineNumber)? as usize;
+    let mut next = cmd_line.next();
+    while let Some(s) = next {
+        if !s.is_ascii_digit() {
+            break;
+        }
+        let d = s
+            .chars()
+            .next()
+            .map_or(None, |c| c.to_digit(10))
+            .ok_or(Error::InvalidLineNumber)? as usize;
+        acc = acc
+            .checked_mul(10)
+            .and_then(|n| n.checked_add(d))
+            .ok_or(Error::InvalidLineNumber)?;
+        next = cmd_line.next();
+    }
+    Ok((Some(acc), next))
 }
 
 //impl Cmd {
@@ -355,7 +376,6 @@ where
 //        }
 //        _ => None,
 //    }
-//}
 //
 //fn eval_line_addr(
 //    cmd_line: &mut impl Iterator,
