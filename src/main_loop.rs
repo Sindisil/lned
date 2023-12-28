@@ -1,5 +1,5 @@
 use crate::cli;
-use crate::command::{self, Cmd, Parser};
+use crate::command::{self, Cmd, Reader};
 use crate::edit_buffer::{self, EditBuffer};
 use std::fmt;
 use std::io::{self, prelude::*};
@@ -35,20 +35,20 @@ where
     let mut previous_pattern: Option<regex::Regex> = None;
 
     // Accept and process commands until fatal error or exit
-    let mut parser = Parser::new();
+    let mut reader = Reader::new(&mut input);
     let mut done = false;
     while !done {
         // write prompt
         write_prompt(&mut output)?;
 
-        parser
-            .parse(&mut input, &mut buffer, &mut previous_pattern)
+        reader
+            .read_cmd(&mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
             .and_then(|cmd| {
                 let res = match &cmd {
                     // dispatch editor commands
                     Cmd::Append(address) => buffer
-                        .do_append(&mut input, &mut output, *address)
+                        .do_append(&mut reader, &mut output, *address)
                         .map_err(Error::BufferCmd),
                     Cmd::Delete(address) => buffer
                         .do_delete(&mut output, *address)

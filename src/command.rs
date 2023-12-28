@@ -1,17 +1,22 @@
 use core::fmt::{self, Debug, Display, Formatter};
 use std::io::{self, BufRead};
-use std::iter::Iterator;
+use std::iter::{Iterator, Peekable};
 use std::path::PathBuf;
 
 use crate::edit_buffer::EditBuffer;
+use crate::iter_utils::Peeking;
 use crate::str_utils::StrUtils;
 
 use regex::Regex;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug)]
-pub struct Parser {
+pub struct Reader<'a, R>
+where
+    R: BufRead,
+{
     line: String,
+    input: &'a mut R,
 }
 
 #[derive(Debug, Clone)]
@@ -31,7 +36,7 @@ pub enum Cmd {
 
 #[derive(Debug)]
 pub enum Error {
-    Unknown(char),
+    Unknown(String),
     UnexpectedAddress,
     OffsetTooLarge,
     OffsetTooSmall,
@@ -81,95 +86,74 @@ impl Display for Error {
     }
 }
 
-impl Parser {
-    pub fn new() -> Parser {
-        Parser {
+impl<'a, R> Reader<'a, R>
+where
+    R: BufRead,
+{
+    pub fn new(input: &'a mut R) -> Reader<'a, R> {
+        Reader {
             line: String::with_capacity(120),
+            input,
         }
     }
 
-    pub fn parse(
+    fn clear(&mut self) {
+        self.line.clear();
+    }
+
+    // Read lines of input into buf, stopping when a '.' alone on a line
+    // is read. Clears previous content of buf, but doesn't shrink capacity.
+    // Returns number of bytes read or Error::Readlines if an error is
+    // encountered.
+    pub fn read_lines(&mut self, buf: &mut Vec<String>) -> Result<usize, io::Error> {
+        loop {
+            self.clear(); // get rid of any old input
+            self.input.read_line(&mut self.line)?;
+            if self.line == ".\n" || self.line == ".\r\n" {
+                return Ok(buf.len());
+            }
+            buf.push(self.line.clone());
+        }
+    }
+
+    pub fn read_cmd(
         &mut self,
-        input: &mut impl BufRead,
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
-        input
+        self.input
             .read_line(&mut self.line)
             .map_err(Error::ReadCommand)?;
-        let mut cmd_line = self.line.as_mut_str().graphemes(true);
-        let (address, cmd) = eval_address(&mut cmd_line, buffer, previous_pattern)?;
-        match cmd {
-            Some('a') => parse_no_args_cmd(cmd_line, Cmd::Append(address)),
-            Some('d') => parse_no_args_cmd(cmd_line, Cmd::Delete(address)),
-            Some('e') => parse_edit_cmd(cmd_line, address),
-            Some('f') => parse_file_cmd(cmd_line, address),
-            Some('n') => parse_no_args_cmd(cmd_line, Cmd::Enumerate(address)),
-            None => Ok(Cmd::Null(address)),
-            Some('p') => parse_no_args_cmd(cmd_line, Cmd::Print(address)),
-            Some('q') => parse_lone_cmd(cmd_line, address, Cmd::Quit),
-            Some('u') => parse_lone_cmd(cmd_line, address, Cmd::Undo),
-            Some('U') => parse_lone_cmd(cmd_line, address, Cmd::Redo),
-            Some('w') => parse_write_cmd(cmd_line, address),
-            Some(c) => Err(Error::Unknown(c)),
+        let mut graphemes = self.line.as_mut_str().graphemes(true).peekable();
+        let address = eval_address(&mut graphemes, buffer, previous_pattern)?;
+        match graphemes.next() {
+            Some("a") => parse_no_args(&mut graphemes, Cmd::Append(address)),
+            Some("d") => parse_no_args(&mut graphemes, Cmd::Delete(address)),
+            Some("e") => parse_edit_cmd(&mut graphemes, address),
+            Some("f") => parse_file_cmd(&mut graphemes, address),
+            Some("n") => parse_no_args(&mut graphemes, Cmd::Enumerate(address)),
+            None | Some("\n" | "\r\n") => Ok(Cmd::Null(address)),
+            Some("p") => parse_no_args(&mut graphemes, Cmd::Print(address)),
+            Some("q") => parse_no_address(address, Cmd::Quit)
+                .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
+            Some("u") => parse_no_address(address, Cmd::Undo)
+                .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
+            Some("U") => parse_no_address(address, Cmd::Redo)
+                .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
+            Some("w") => parse_write_cmd(&mut graphemes, address),
+            Some(s) => Err(Error::Unknown(s.to_owned())),
         }
     }
 }
 
-fn parse_lone_cmd<'a, I>(cmd_line: I, address: Option<Address>, cmd: Cmd) -> Result<Cmd, Error>
+fn parse_write_cmd<'a, I>(graphemes: &mut I, address: Option<Address>) -> Result<Cmd, Error>
 where
     I: Iterator<Item = &'a str>,
 {
-    if address.is_some() {
-        Err(Error::UnexpectedAddress)
-    } else {
-        parse_no_args_cmd(cmd_line, cmd)
-    }
-}
-
-fn parse_no_args_cmd<'a, I>(mut cmd_line: I, cmd: Cmd) -> Result<Cmd, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
-    match cmd_line.next() {
-        None | Some("\n" | "\r\n") => Ok(cmd),
-        _ => Err(Error::InvalidCmdSuffix),
-    }
-}
-
-fn parse_file_cmd<'a, I>(mut cmd_line: I, address: Option<Address>) -> Result<Cmd, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
-    if address.is_some() {
-        return Err(Error::UnexpectedAddress);
-    }
-    match cmd_line.next() {
-        None | Some("\n" | "\r\n") => Ok(Cmd::File(None)),
-        Some(s) if s.is_blank() => {
-            let filename = cmd_line
-                .take_while(|s| *s != "\n" && *s != "\r\n")
-                .collect::<String>()
-                .trim()
-                .to_owned();
-            if filename.is_empty() {
-                Err(Error::InvalidFilename)
-            } else {
-                Ok(Cmd::File(Some(PathBuf::from(filename))))
-            }
-        }
-        _ => Err(Error::InvalidCmdSuffix),
-    }
-}
-
-fn parse_write_cmd<'a, I>(mut cmd_line: I, address: Option<Address>) -> Result<Cmd, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
-    match cmd_line.next() {
+    match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(Cmd::Write(address, None)),
         Some(s) if s.is_blank() => {
-            let filename = cmd_line
+            let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
                 .collect::<String>()
                 .trim()
@@ -184,17 +168,17 @@ where
     }
 }
 
-fn parse_edit_cmd<'a, I>(mut cmd_line: I, address: Option<Address>) -> Result<Cmd, Error>
+fn parse_edit_cmd<'a, I>(graphemes: &mut I, address: Option<Address>) -> Result<Cmd, Error>
 where
     I: Iterator<Item = &'a str>,
 {
     if address.is_some() {
         return Err(Error::UnexpectedAddress);
     }
-    match cmd_line.next() {
+    match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(Cmd::Edit(None)),
         Some(s) if s.is_blank() => {
-            let filename = cmd_line
+            let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
                 .collect::<String>()
                 .trim()
@@ -209,74 +193,142 @@ where
     }
 }
 
-fn eval_address<'a, 'b, I>(
-    cmd_line: &'a mut I,
+fn eval_address<'a, I>(
+    graphemes: &mut Peekable<I>,
     buffer: &mut EditBuffer,
     _previous_pattern: &mut Option<Regex>,
-) -> Result<(Option<Address>, Option<char>), Error>
+) -> Result<Option<Address>, Error>
 where
-    I: Iterator<Item = &'b str>,
+    I: Iterator<Item = &'a str>,
 {
-    let mut left = None;
+    let left = None;
     let mut right = None;
-    let mut cmd_chr = None;
 
-    let mut next = cmd_line.next();
     loop {
-        match next {
-            Some("\r\n" | "\n") => break,
-            Some(".") => {
-                right = Some(buffer.current_line());
-                next = cmd_line.next();
+        match graphemes.peek() {
+            Some(&"\r\n" | &"\n") => break,
+            Some(&".") => {
+                graphemes.next();
+                let offset = eval_offsets(graphemes)?;
+                right = Some(
+                    buffer
+                        .current_line()
+                        .checked_add_signed(offset)
+                        .ok_or(Error::OffsetOverflow)?,
+                );
             }
-            Some("$") => {
-                right = Some(buffer.len());
-                next = cmd_line.next();
+            Some(&"$") => {
+                graphemes.next();
+                let offset = eval_offsets(graphemes)?;
+                right = Some(
+                    buffer
+                        .len()
+                        .checked_add_signed(offset)
+                        .ok_or(Error::OffsetOverflow)?,
+                );
             }
-            Some(s) if s.is_blank() => next = cmd_line.next(),
-            Some(s) if s.is_ascii_digit() => (right, next) = parse_number(cmd_line, s)?,
-            Some(s) => {
-                cmd_chr = s.chars().next();
-                break;
+            Some(s) if s.is_blank() => {
+                graphemes.next();
             }
+            Some(s) if s.is_ascii_digit() => {
+                let num = parse_number(graphemes)?;
+                let offset = eval_offsets(graphemes)?;
+                right = Some(
+                    num.checked_add_signed(offset)
+                        .ok_or(Error::OffsetOverflow)?,
+                );
+            }
+            Some(_) => break,
             None => return Err(Error::MissingEol),
         }
     }
 
     let address = right.map(|r| Address(left.map_or(r, |l| l), r));
 
-    Ok((address, cmd_chr))
+    Ok(address)
 }
 
-fn parse_number<'a, 'b, I>(
-    cmd_line: &'a mut I,
-    first_digit: &'b str,
-) -> Result<(Option<usize>, Option<&'b str>), Error>
+fn eval_offsets<'a, I>(_graphemes: &mut Peekable<I>) -> Result<isize, Error>
 where
-    I: Iterator<Item = &'b str>,
+    I: Iterator<Item = &'a str>,
 {
-    let mut acc = first_digit
-        .chars()
-        .next()
-        .map_or(None, |c| c.to_digit(10))
-        .ok_or(Error::InvalidLineNumber)? as usize;
-    let mut next = cmd_line.next();
-    while let Some(s) = next {
-        if !s.is_ascii_digit() {
-            break;
-        }
-        let d = s
-            .chars()
-            .next()
-            .map_or(None, |c| c.to_digit(10))
-            .ok_or(Error::InvalidLineNumber)? as usize;
-        acc = acc
-            .checked_mul(10)
-            .and_then(|n| n.checked_add(d))
-            .ok_or(Error::InvalidLineNumber)?;
-        next = cmd_line.next();
+    Ok(0)
+}
+
+fn parse_no_address(address: Option<Address>, cmd: Cmd) -> Result<Cmd, Error> {
+    address.map_or(Ok(cmd), |_| Err(Error::UnexpectedAddress))
+}
+
+fn parse_no_args<'a, I>(graphemes: &mut I, cmd: Cmd) -> Result<Cmd, Error>
+where
+    I: Iterator<Item = &'a str>,
+{
+    match graphemes.next() {
+        None | Some("\n" | "\r\n") => Ok(cmd),
+        _ => Err(Error::InvalidCmdSuffix),
     }
-    Ok((Some(acc), next))
+}
+
+fn parse_number<'a, I>(graphemes: &mut Peekable<I>) -> Result<usize, Error>
+where
+    I: Iterator<Item = &'a str>,
+{
+    graphemes
+        .peeking_take_while(|s| s.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .try_fold(0usize, |acc, s| {
+            s.chars()
+                .next()
+                .and_then(|c| c.to_digit(10))
+                .and_then(|d| acc.checked_mul(10).and_then(|n| n.checked_add(d as usize)))
+        })
+        .ok_or(Error::InvalidLineNumber)
+    //    let mut acc = first_digit
+    //        .chars()
+    //        .next()
+    //        .map_or(None, |c| c.to_digit(10))
+    //        .ok_or(Error::InvalidLineNumber)? as usize;
+    //    let mut next = graphemes.next();
+    //    while let Some(s) = next {
+    //        if !s.is_ascii_digit() {
+    //            break;
+    //        }
+    //        let d = s
+    //            .chars()
+    //            .next()
+    //            .map_or(None, |c| c.to_digit(10))
+    //            .ok_or(Error::InvalidLineNumber)? as usize;
+    //        acc = acc
+    //            .checked_mul(10)
+    //            .and_then(|n| n.checked_add(d))
+    //            .ok_or(Error::InvalidLineNumber)?;
+    //        next = graphemes.next();
+    //    }
+    //    Ok((acc, next))
+}
+
+fn parse_file_cmd<'a, I>(graphemes: &mut I, address: Option<Address>) -> Result<Cmd, Error>
+where
+    I: Iterator<Item = &'a str>,
+{
+    if address.is_some() {
+        return Err(Error::UnexpectedAddress);
+    }
+    match graphemes.next() {
+        None | Some("\n" | "\r\n") => Ok(Cmd::File(None)),
+        Some(s) if s.is_blank() => {
+            let filename = graphemes
+                .take_while(|s| *s != "\n" && *s != "\r\n")
+                .collect::<String>()
+                .trim()
+                .to_owned();
+            if filename.is_empty() {
+                Err(Error::InvalidFilename)
+            } else {
+                Ok(Cmd::File(Some(PathBuf::from(filename))))
+            }
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
 }
 
 //impl Cmd {
@@ -565,70 +617,61 @@ mod tests {
 
     #[test]
     fn parse_valid_lone_cmd() {
-        let mut cmd_line = "\n".graphemes(true);
-        let res = parse_lone_cmd(&mut cmd_line, None, Cmd::Quit).expect("good parse");
+        let res = parse_no_address(None, Cmd::Quit).expect("good parse");
         assert!(matches!(res, Cmd::Quit));
     }
 
     #[test]
-    fn parse_lone_cmd_error_with_address() {
-        let mut cmd_line = "\n".graphemes(true);
-        let res = parse_lone_cmd(&mut cmd_line, Some(Address(1, 1)), Cmd::Quit)
-            .expect_err("unexpected address");
+    fn parse_no_address_error_with_address() {
+        let res = parse_no_address(Some(Address(1, 1)), Cmd::Quit).expect_err("unexpected address");
         assert!(matches!(res, Error::UnexpectedAddress));
     }
 
     #[test]
-    fn parse_no_args_cmd_error_with_extra_chars() {
+    fn parse_no_args_error_with_extra_chars() {
         let mut cmd_line = "extra\n".graphemes(true);
-        let res = parse_no_args_cmd(&mut cmd_line, Cmd::Delete(None)).expect_err("invalid suffix");
-        assert!(matches!(res, Error::InvalidCmdSuffix));
-        let mut cmd_line = "extra\n".graphemes(true);
-        let res = parse_no_args_cmd(&mut cmd_line, Cmd::Delete(None)).expect_err("invalid suffix");
+        let res = parse_no_args(&mut cmd_line, Cmd::Delete(None)).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
-    fn parse_no_args_cmd_both_line_terminators_valid() {
+    fn parse_no_args_both_line_terminators_valid() {
         let mut cmd_line = "\n".graphemes(true);
-        let res = parse_no_args_cmd(&mut cmd_line, Cmd::Delete(None)).expect("parse ok");
-        assert!(matches!(res, Cmd::Delete(None)));
-        let mut cmd_line = "\n".graphemes(true);
-        let res = parse_no_args_cmd(&mut cmd_line, Cmd::Delete(None)).expect("parse ok");
+        let res = parse_no_args(&mut cmd_line, Cmd::Delete(None)).expect("parse ok");
         assert!(matches!(res, Cmd::Delete(None)));
     }
 
     #[test]
     fn eval_no_addr_null_cmd() {
-        let mut cmd_line = "\r\n".graphemes(true);
-        let (address, cmd) =
+        let mut cmd_line = "\r\n".graphemes(true).peekable();
+        let address =
             eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(address.is_none());
-        assert!(cmd.is_none());
-        let mut cmd_line = "\n".graphemes(true);
-        let (address, cmd) =
+        assert!(matches!(cmd_line.next(), Some("\r\n")));
+        let mut cmd_line = "\n".graphemes(true).peekable();
+        let address =
             eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(address.is_none());
-        assert!(cmd.is_none());
+        assert!(matches!(cmd_line.next(), Some("\n")));
     }
 
     #[test]
     fn eval_no_addr_null_cmd_skip_spaces() {
-        let mut cmd_line = "\t  \r\n".graphemes(true);
-        let (address, cmd) =
+        let mut cmd_line = "\t  \r\n".graphemes(true).peekable();
+        let address =
             eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(address.is_none());
-        assert!(cmd.is_none());
-        let mut cmd_line = "\n".graphemes(true);
-        let (address, cmd) =
+        assert!(matches!(cmd_line.next(), Some("\r\n")));
+        let mut cmd_line = "\n".graphemes(true).peekable();
+        let address =
             eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(address.is_none());
-        assert!(cmd.is_none());
+        assert!(matches!(cmd_line.next(), Some("\n")));
     }
 
     #[test]
     fn eval_addr_no_eol() {
-        let mut cmd_line = "".graphemes(true);
+        let mut cmd_line = "".graphemes(true).peekable();
         let res = eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None)
             .expect_err("mising line terminator");
         assert!(matches!(res, Error::MissingEol));
@@ -636,50 +679,50 @@ mod tests {
 
     #[test]
     fn eval_no_addr() {
-        let mut cmd_line = "q\n".graphemes(true);
-        let (address, cmd) =
+        let mut cmd_line = "q\n".graphemes(true).peekable();
+        let address =
             eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(address.is_none());
-        assert!(matches!(cmd, Some('q')));
+        assert_eq!(cmd_line.next(), Some("q"));
     }
 
     #[test]
     fn eval_dot_addr() {
-        let mut cmd_line = ".d\r\n".graphemes(true);
+        let mut cmd_line = ".d\r\n".graphemes(true).peekable();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
-        let (address, cmd) =
+        let address =
             eval_address(&mut cmd_line, &mut buffer, &mut None).expect("should parse successfully");
         assert_eq!(address, Some(Address(2, 2)));
-        assert_eq!(cmd, Some('d'));
+        assert_eq!(cmd_line.next(), Some("d"));
     }
 
     #[test]
     fn eval_dollar_addr() {
-        let mut cmd_line = "$d\r\n".graphemes(true);
+        let mut cmd_line = "$d\r\n".graphemes(true).peekable();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
-        let (address, cmd) =
+        let address =
             eval_address(&mut cmd_line, &mut buffer, &mut None).expect("should parse successfully");
         assert_eq!(address, Some(Address(3, 3)));
-        assert_eq!(cmd, Some('d'));
+        assert_eq!(cmd_line.next(), Some("d"));
     }
 
     #[test]
     fn eval_simple_number_addr() {
-        let mut cmd_line = "42d\n".graphemes(true);
-        let (address, cmd) = eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None)
+        let mut cmd_line = "42d\n".graphemes(true).peekable();
+        let address = eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None)
             .expect("should eval line number");
-        assert_eq!(cmd, Some('d'));
+        assert_eq!(cmd_line.next(), Some("d"));
         assert_eq!(address, Some(Address(42, 42)));
     }
 
     #[test]
     fn parse_append_cmd_no_addr() {
         let mut input = "a\r\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect("good parse");
         assert!(matches!(res, Cmd::Append(None)));
     }
@@ -687,9 +730,9 @@ mod tests {
     #[test]
     fn parse_delete_cmd_no_addr() {
         let mut input = "d\r\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect("good parse");
         assert!(
             matches!(res, Cmd::Delete(None)),
@@ -700,9 +743,9 @@ mod tests {
     #[test]
     fn parse_enumerate_cmd_no_addr() {
         let mut input = "n\r\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect("good parse");
         assert!(
             matches!(res, Cmd::Enumerate(None)),
@@ -713,9 +756,9 @@ mod tests {
     #[test]
     fn parse_null_cmd_no_addr() {
         let mut input = "\r\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect("good parse");
         assert!(matches!(res, Cmd::Null(None)));
     }
@@ -723,9 +766,9 @@ mod tests {
     #[test]
     fn parse_print_cmd_no_addr() {
         let mut input = "p\r\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect("good parse");
         assert!(
             matches!(res, Cmd::Print(None)),
@@ -736,9 +779,9 @@ mod tests {
     #[test]
     fn parse_quit_cmd() {
         let mut input = "q\r\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect("good parse");
         assert!(matches!(res, Cmd::Quit), "{res:?} didn't match Cmd::Quit");
     }
@@ -746,9 +789,9 @@ mod tests {
     #[test]
     fn parse_undo_cmd() {
         let mut input = "u\r\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect("good parse");
         assert!(matches!(res, Cmd::Undo), "{res:?} didn't match Cmd::Undo");
     }
@@ -756,9 +799,9 @@ mod tests {
     #[test]
     fn parse_redo_cmd() {
         let mut input = "U\r\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect("good parse");
         assert!(matches!(res, Cmd::Redo), "{res:?} didn't match Cmd::Redo");
     }
@@ -766,9 +809,9 @@ mod tests {
     #[test]
     fn parse_quit_cmd_invalid_suffix() {
         let mut input = "q/more stuff/\r\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect_err("invalid sufix");
         assert!(
             matches!(res, Error::InvalidCmdSuffix),
@@ -779,76 +822,76 @@ mod tests {
     #[test]
     fn parse_unknown_command() {
         let mut input = "O\n".as_bytes();
-        let mut parser = Parser::new();
-        let res = parser
-            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+        let mut reader = Reader::new(&mut input);
+        let res = reader
+            .read_cmd(&mut EditBuffer::new(), &mut None)
             .expect_err("unknown cmd");
         assert!(
-            matches!(res, Error::Unknown('O')),
-            "{res:?} didn't match Error::Unknown('O')"
+            matches!(res, Error::Unknown(ref s) if s == "O"),
+            "{res:?} didn't match Error::Unknown(\"O\")"
         );
     }
 
     #[test]
     fn parse_edit_with_address() {
-        let cmd_line = " filename.rs".graphemes(true);
-        let res = parse_edit_cmd(cmd_line, Some(Address(1, 1))).expect_err("unexpected addr");
+        let mut cmd_line = " filename.rs".graphemes(true);
+        let res = parse_edit_cmd(&mut cmd_line, Some(Address(1, 1))).expect_err("unexpected addr");
         assert!(matches!(res, Error::UnexpectedAddress));
     }
 
     #[test]
     fn parse_edit_no_filename() {
-        let cmd_line = "\n".graphemes(true);
-        let res = parse_edit_cmd(cmd_line, None).expect("parsed edit cmd");
+        let mut cmd_line = "\n".graphemes(true);
+        let res = parse_edit_cmd(&mut cmd_line, None).expect("parsed edit cmd");
         assert!(matches!(res, Cmd::Edit(None)));
     }
 
     #[test]
     fn parse_edit_bad_filename() {
-        let cmd_line = " \r\n".graphemes(true);
-        let res = parse_edit_cmd(cmd_line, None).expect_err("bad filename");
+        let mut cmd_line = " \r\n".graphemes(true);
+        let res = parse_edit_cmd(&mut cmd_line, None).expect_err("bad filename");
         assert!(matches!(res, Error::InvalidFilename));
     }
 
     #[test]
     fn parse_edit_with_filename() {
-        let cmd_line = " a/filename.rs\r\n".graphemes(true);
-        let res = parse_edit_cmd(cmd_line, None).expect("parsed edit cmd");
+        let mut cmd_line = " a/filename.rs\r\n".graphemes(true);
+        let res = parse_edit_cmd(&mut cmd_line, None).expect("parsed edit cmd");
         assert!(matches!(&res, Cmd::Edit(Some(f)) if f.to_str().unwrap() == "a/filename.rs"));
     }
 
     #[test]
     fn parse_edit_invalid_suffix() {
-        let cmd_line = "filename.rs\n".graphemes(true);
-        let res = parse_edit_cmd(cmd_line, None).expect_err("invalid suffix");
+        let mut cmd_line = "filename.rs\n".graphemes(true);
+        let res = parse_edit_cmd(&mut cmd_line, None).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
     fn parse_file_cmd_with_address() {
-        let cmd_line = " filename.rs".graphemes(true);
-        let res = parse_file_cmd(cmd_line, Some(Address(1, 1))).expect_err("unexpected addr");
+        let mut cmd_line = " filename.rs".graphemes(true);
+        let res = parse_file_cmd(&mut cmd_line, Some(Address(1, 1))).expect_err("unexpected addr");
         assert!(matches!(res, Error::UnexpectedAddress));
     }
 
     #[test]
     fn parse_file_cmd_no_filename() {
-        let cmd_line = "\n".graphemes(true);
-        let res = parse_file_cmd(cmd_line, None).expect("parsed file cmd");
+        let mut cmd_line = "\n".graphemes(true);
+        let res = parse_file_cmd(&mut cmd_line, None).expect("parsed file cmd");
         assert!(matches!(res, Cmd::File(None)));
     }
 
     #[test]
     fn parse_file_cmd_bad_filename() {
-        let cmd_line = " \r\n".graphemes(true);
-        let res = parse_file_cmd(cmd_line, None).expect_err("bad filename");
+        let mut cmd_line = " \r\n".graphemes(true);
+        let res = parse_file_cmd(&mut cmd_line, None).expect_err("bad filename");
         assert!(matches!(res, Error::InvalidFilename));
     }
 
     #[test]
     fn parse_file_cmd_with_filename() {
-        let cmd_line = " a/filename.rs\r\n".graphemes(true);
-        let res = parse_file_cmd(cmd_line, None).expect("parsed file cmd");
+        let mut cmd_line = " a/filename.rs\r\n".graphemes(true);
+        let res = parse_file_cmd(&mut cmd_line, None).expect("parsed file cmd");
         assert!(
             matches!(&res, Cmd::File(Some(f)) if f.to_str().unwrap() == "a/filename.rs"),
             "{res:?} wasnt Cmd::File(Some('filename.rs'))"
@@ -857,16 +900,16 @@ mod tests {
 
     #[test]
     fn parse_file_cmd_invalid_suffix() {
-        let cmd_line = "filename.rs\n".graphemes(true);
-        let res = parse_file_cmd(cmd_line, None).expect_err("invalid suffix");
+        let mut cmd_line = "filename.rs\n".graphemes(true);
+        let res = parse_file_cmd(&mut cmd_line, None).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
     fn parse_write_cmd_with_address() {
-        let cmd_line = " filename.rs".graphemes(true);
+        let mut cmd_line = " filename.rs".graphemes(true);
         let addr = Address(1, 10);
-        let res = parse_write_cmd(cmd_line, Some(addr)).expect("parsed write cmd");
+        let res = parse_write_cmd(&mut cmd_line, Some(addr)).expect("parsed write cmd");
         assert!(
             matches!(res, Cmd::Write(Some(a), Some(f)) if a == addr && f.to_str().unwrap() == "filename.rs")
         );
@@ -874,23 +917,23 @@ mod tests {
 
     #[test]
     fn parse_write_cmd_no_filename() {
-        let cmd_line = "\n".graphemes(true);
+        let mut cmd_line = "\n".graphemes(true);
         let addr = Address(1, 10);
-        let res = parse_write_cmd(cmd_line, Some(addr)).expect("parsed file cmd");
+        let res = parse_write_cmd(&mut cmd_line, Some(addr)).expect("parsed file cmd");
         assert!(matches!(res, Cmd::Write(Some(a), None) if a == addr));
     }
 
     #[test]
     fn parse_write_cmd_bad_filename() {
-        let cmd_line = " \r\n".graphemes(true);
-        let res = parse_write_cmd(cmd_line, None).expect_err("bad filename");
+        let mut cmd_line = " \r\n".graphemes(true);
+        let res = parse_write_cmd(&mut cmd_line, None).expect_err("bad filename");
         assert!(matches!(res, Error::InvalidFilename));
     }
 
     #[test]
     fn parse_write_cmd_with_filename() {
-        let cmd_line = " a/filename.rs\r\n".graphemes(true);
-        let res = parse_write_cmd(cmd_line, None).expect("parsed file cmd");
+        let mut cmd_line = " a/filename.rs\r\n".graphemes(true);
+        let res = parse_write_cmd(&mut cmd_line, None).expect("parsed file cmd");
         assert!(
             matches!(&res, Cmd::Write(None, Some(f)) if f.to_str().unwrap() == "a/filename.rs"),
             "{res:?} wasnt Cmd::Write(Some('filename.rs'))"
@@ -899,8 +942,8 @@ mod tests {
 
     #[test]
     fn parse_write_cmd_invalid_suffix() {
-        let cmd_line = "filename.rs\n".graphemes(true);
-        let res = parse_write_cmd(cmd_line, None).expect_err("invalid suffix");
+        let mut cmd_line = "filename.rs\n".graphemes(true);
+        let res = parse_write_cmd(&mut cmd_line, None).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 }
