@@ -121,6 +121,7 @@ where
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
+        self.clear();
         self.input
             .read_line(&mut self.line)
             .map_err(Error::ReadCommand)?;

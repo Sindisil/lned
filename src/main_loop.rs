@@ -185,7 +185,6 @@ mod tests {
     // Cmd tests
 
     #[test]
-    #[ignore]
     fn do_quit_twice_exits() {
         let input = b"a\n1\n2\n3\n.\nq\nq\n";
         let mut output = Vec::new();
@@ -198,7 +197,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn do_edit_twice_overrides_warning() {
         let input =
             b"a\n1\n2\n3\n.\ne a_file_that_is_not_there.ext\ne a_file_that_is_not_there.ext\nq\n";
@@ -210,7 +208,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn new_prompt_on_line_after_error_message() {
         let input = b"1p\nq\n";
         let mut output = Vec::new();
