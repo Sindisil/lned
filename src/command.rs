@@ -1,3 +1,4 @@
+use core::cmp;
 use core::fmt::{self, Debug, Display, Formatter};
 use std::io::{self, BufRead};
 use std::iter::{Iterator, Peekable};
@@ -249,11 +250,38 @@ where
     Ok(address)
 }
 
-fn eval_offsets<'a, I>(_graphemes: &mut Peekable<I>) -> Result<isize, Error>
+fn eval_offsets<'a, I>(graphemes: &mut Peekable<I>) -> Result<isize, Error>
 where
     I: Iterator<Item = &'a str>,
 {
-    Ok(0)
+    let mut total_offset = 0isize;
+    while let Some(s) = graphemes.peek() {
+        match s {
+            s if s.is_blank() => {
+                graphemes.next();
+            }
+            s if s.is_ascii_digit() => {
+                total_offset = parse_number(graphemes)
+                    .and_then(|o| o.try_into().map_err(|_| Error::OffsetTooLarge))
+                    .and_then(|o| total_offset.checked_add(o).ok_or(Error::OffsetTooLarge))
+                    .map_err(|_| Error::OffsetTooLarge)?;
+            }
+            &"+" => {
+                graphemes.next();
+                total_offset = parse_number(graphemes)
+                    .and_then(|o| o.try_into().map_err(|_| Error::OffsetTooLarge))
+                    .and_then(|o| {
+                        total_offset
+                            .checked_add(cmp::max(1, o))
+                            .ok_or(Error::OffsetTooLarge)
+                    })
+                    .map_err(|_| Error::OffsetTooLarge)?;
+            }
+
+            _ => break,
+        }
+    }
+    Ok(total_offset)
 }
 
 fn parse_no_address(address: Option<Address>, cmd: Cmd) -> Result<Cmd, Error> {
@@ -668,6 +696,48 @@ mod tests {
             eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(address.is_none());
         assert!(matches!(cmd_line.next(), Some("\n")));
+    }
+
+    #[test]
+    fn eval_positive_offset() {
+        let mut input = "3p".graphemes(true).peekable();
+        let res = eval_offsets(&mut input).expect("should parse");
+        assert_eq!(res, 3);
+        assert!(matches!(input.next(), Some("p")));
+        let mut input = "+42p".graphemes(true).peekable();
+        let res = eval_offsets(&mut input).expect("should parse");
+        assert_eq!(res, 42);
+        assert!(matches!(input.next(), Some("p")));
+    }
+
+    #[test]
+    fn eval_negative_offsets() {
+        todo!();
+    }
+
+    #[test]
+    fn eval_mixed_offsets() {
+        todo!();
+    }
+
+    #[test]
+    fn eval_offset_too_large() {
+        todo!();
+    }
+
+    #[test]
+    fn eval_offset_too_small() {
+        todo!();
+    }
+
+    #[test]
+    fn eval_offset_overflow() {
+        todo!();
+    }
+
+    #[test]
+    fn eval_mixed_offsets_with_spaces() {
+        todo!();
     }
 
     #[test]
