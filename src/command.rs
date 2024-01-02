@@ -256,7 +256,7 @@ where
 {
     let mut total_offset = 0isize;
     while let Some(s) = graphemes.peek() {
-        match s {
+        match *s {
             s if s.is_blank() => {
                 graphemes.next();
             }
@@ -266,16 +266,27 @@ where
                     .and_then(|o| total_offset.checked_add(o).ok_or(Error::OffsetTooLarge))
                     .map_err(|_| Error::OffsetTooLarge)?;
             }
-            &"+" => {
+            "+" => {
                 graphemes.next();
                 total_offset = parse_number(graphemes)
                     .and_then(|o| o.try_into().map_err(|_| Error::OffsetTooLarge))
                     .and_then(|o| {
                         total_offset
                             .checked_add(cmp::max(1, o))
-                            .ok_or(Error::OffsetTooLarge)
+                            .ok_or(Error::OffsetOverflow)
                     })
                     .map_err(|_| Error::OffsetTooLarge)?;
+            }
+            "-" => {
+                graphemes.next();
+                total_offset = parse_number(graphemes)
+                    .and_then(|o| o.try_into().map_err(|_| Error::OffsetTooSmall))
+                    .and_then(|o| {
+                        total_offset
+                            .checked_sub(cmp::max(1, o))
+                            .ok_or(Error::OffsetOverflow)
+                    })
+                    .map_err(|_| Error::OffsetTooSmall)?;
             }
 
             _ => break,
@@ -712,7 +723,10 @@ mod tests {
 
     #[test]
     fn eval_negative_offsets() {
-        todo!();
+        let mut input = "-2p".graphemes(true).peekable();
+        let res = eval_offsets(&mut input).expect("should parse");
+        assert_eq!(res, -2);
+        assert!(matches!(input.next(), Some("p")));
     }
 
     #[test]
