@@ -204,7 +204,6 @@ where
 
     loop {
         match graphemes.peek() {
-            Some(&"\r\n" | &"\n") => break,
             Some(&",") => {
                 graphemes.next();
                 left = right.or(Some(1));
@@ -222,44 +221,24 @@ where
                 right = right.or_else(|| Some(buffer.len()));
             }
             Some(&"+" | &"-") => {
-                let offset = eval_offsets(graphemes)?;
-                right = Some(
-                    buffer
-                        .current_line()
-                        .checked_add_signed(offset)
-                        .ok_or(Error::OffsetOverflow)?,
-                );
+                right = Some(eval_line_number(graphemes, buffer.current_line())?);
             }
             Some(&".") => {
                 graphemes.next();
-                let offset = eval_offsets(graphemes)?;
-                right = Some(
-                    buffer
-                        .current_line()
-                        .checked_add_signed(offset)
-                        .ok_or(Error::OffsetOverflow)?,
-                );
+                right = Some(eval_line_number(graphemes, buffer.current_line())?);
             }
             Some(&"$") => {
                 graphemes.next();
-                let offset = eval_offsets(graphemes)?;
-                right = Some(
-                    buffer
-                        .len()
-                        .checked_add_signed(offset)
-                        .ok_or(Error::OffsetOverflow)?,
-                );
+                right = Some(eval_line_number(graphemes, buffer.len())?);
             }
+            Some(&"/") => todo!("forward pattern addr"),
+            Some(&"?") => todo!("backward pattern addr"),
             Some(s) if s.is_blank() => {
                 graphemes.next();
             }
             Some(s) if s.is_ascii_digit() => {
                 let num = parse_number(graphemes)?;
-                let offset = eval_offsets(graphemes)?;
-                right = Some(
-                    num.checked_add_signed(offset)
-                        .ok_or(Error::OffsetOverflow)?,
-                );
+                right = Some(eval_line_number(graphemes, num)?);
             }
             Some(_) => break,
             None => return Err(Error::MissingEol),
@@ -282,7 +261,15 @@ where
     )
 }
 
-fn eval_offsets<'a, I>(graphemes: &mut Peekable<I>) -> Result<isize, Error>
+fn eval_line_number<'a, I>(graphemes: &mut Peekable<I>, line: usize) -> Result<usize, Error>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let offset = compute_line_offset(graphemes)?;
+    line.checked_add_signed(offset).ok_or(Error::OffsetOverflow)
+}
+
+fn compute_line_offset<'a, I>(graphemes: &mut Peekable<I>) -> Result<isize, Error>
 where
     I: Iterator<Item = &'a str>,
 {
@@ -744,11 +731,11 @@ mod tests {
     #[test]
     fn eval_positive_offset() {
         let mut input = "3p".graphemes(true).peekable();
-        let res = eval_offsets(&mut input).expect("should parse");
+        let res = compute_line_offset(&mut input).expect("should parse");
         assert_eq!(res, 3);
         assert!(matches!(input.next(), Some("p")));
         let mut input = "+42p".graphemes(true).peekable();
-        let res = eval_offsets(&mut input).expect("should parse");
+        let res = compute_line_offset(&mut input).expect("should parse");
         assert_eq!(res, 42);
         assert!(matches!(input.next(), Some("p")));
     }
@@ -756,7 +743,7 @@ mod tests {
     #[test]
     fn eval_negative_offsets() {
         let mut input = "-2p".graphemes(true).peekable();
-        let res = eval_offsets(&mut input).expect("should parse");
+        let res = compute_line_offset(&mut input).expect("should parse");
         assert_eq!(res, -2);
         assert!(matches!(input.next(), Some("p")));
     }
@@ -764,7 +751,7 @@ mod tests {
     #[test]
     fn eval_mixed_offsets() {
         let mut input = "2-7+6p".graphemes(true).peekable();
-        let res = eval_offsets(&mut input).expect("should parse");
+        let res = compute_line_offset(&mut input).expect("should parse");
         assert_eq!(res, 1);
         assert!(matches!(input.next(), Some("p")));
     }
@@ -774,37 +761,37 @@ mod tests {
         let mut input = "8399999999999999999+839999999999999999+8399999999999999999p"
             .graphemes(true)
             .peekable();
-        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
         assert!(matches!(res, Error::OffsetOverflow));
 
         let mut input = "-839999999999999999-83999999999999999-8399999999999999999p"
             .graphemes(true)
             .peekable();
-        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
         assert!(matches!(res, Error::OffsetOverflow));
     }
 
     #[test]
     fn eval_offset_too_large() {
         let mut input = "999999999999999999999p".graphemes(true).peekable();
-        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
         assert!(matches!(res, Error::OffsetTooLarge));
         let mut input = "+999999999999999999999p".graphemes(true).peekable();
-        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
         assert!(matches!(res, Error::OffsetTooLarge));
     }
 
     #[test]
     fn eval_offset_too_small() {
         let mut input = "-999999999999999999999p".graphemes(true).peekable();
-        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
         assert!(matches!(res, Error::OffsetTooSmall));
     }
 
     #[test]
     fn eval_mixed_offsets_with_spaces() {
         let mut input = "   2 -7  6 +1p".graphemes(true).peekable();
-        let res = eval_offsets(&mut input).expect("should parse");
+        let res = compute_line_offset(&mut input).expect("should parse");
         assert_eq!(res, 2);
         assert!(matches!(input.next(), Some("p")));
     }
