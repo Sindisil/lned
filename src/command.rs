@@ -42,7 +42,7 @@ pub enum Error {
     OffsetTooLarge,
     OffsetTooSmall,
     OffsetOverflow,
-    InvalidLineNumber,
+    InvalidAddress,
     Regex(regex::Error),
     NoMatchingLine,
     NoPreviousPattern,
@@ -58,12 +58,6 @@ pub enum Error {
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct Address(pub usize, pub usize);
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum Separator {
-    Comma,
-    Semicolon,
-}
-
 impl std::error::Error for Error {}
 
 impl Display for Error {
@@ -74,7 +68,7 @@ impl Display for Error {
             Error::OffsetTooLarge => write!(f, "Offset too large"),
             Error::OffsetOverflow => write!(f, "Offset results in invalid line number"),
             Error::OffsetTooSmall => write!(f, "Offset too small"),
-            Error::InvalidLineNumber => write!(f, "invalid line number"),
+            Error::InvalidAddress => write!(f, "invalid address"),
             Error::Regex(e) => write!(f, "{e}"),
             Error::NoMatchingLine => write!(f, "no matching line"),
             Error::TrailingBackslash => write!(f, "invalid trailing backslash"),
@@ -214,9 +208,19 @@ where
             Some(&",") => {
                 graphemes.next();
                 left = right.or(Some(1));
-                right = None;
+                right = right.or_else(|| Some(buffer.len()));
             }
-            Some(&";") => todo!(),
+            Some(&";") => {
+                graphemes.next();
+                left = Some(match right {
+                    Some(r) => {
+                        buffer.set_current_line(r);
+                        r
+                    }
+                    None => buffer.current_line(),
+                });
+                right = right.or_else(|| Some(buffer.len()));
+            }
             Some(&"+" | &"-") => todo!(),
             Some(&".") => {
                 graphemes.next();
@@ -248,18 +252,26 @@ where
                     num.checked_add_signed(offset)
                         .ok_or(Error::OffsetOverflow)?,
                 );
+                if left.is_none() {
+                    left = right;
+                }
             }
             Some(_) => break,
             None => return Err(Error::MissingEol),
         }
     }
 
-    let address = right.map_or_else(
-        || left.map(|l| Address(l, buffer.len())),
-        |r| Some(left.map_or_else(|| Address(r, r), |l| Address(l, r))),
-    );
-
-    Ok(address)
+    let address = right.map(|r| Address(left.map_or(r, |l| l), r));
+    address.map_or_else(
+        || Ok(None),
+        |a| {
+            if a.0 > a.1 {
+                Err(Error::InvalidAddress)
+            } else {
+                Ok(Some(a))
+            }
+        },
+    )
 }
 
 fn eval_offsets<'a, I>(graphemes: &mut Peekable<I>) -> Result<isize, Error>
@@ -861,7 +873,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address(5, 6)));
+        assert_eq!(res, Some(Address(5, 5)));
     }
 
     #[test]
@@ -874,12 +886,84 @@ mod tests {
     }
 
     #[test]
+    fn eval_comma_only_chain_addr() {
+        let mut input = ",,p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(6, 6)));
+    }
+
+    #[test]
     fn eval_comma_chain_addr() {
         let mut input = ",12, 3+1,p\n".graphemes(true).peekable();
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address(4, 6)));
+        assert_eq!(res, Some(Address(4, 4)));
+    }
+
+    #[test]
+    fn eval_simple_semicolon_addr() {
+        let mut input = "1;2p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(buffer.current_line(), 6);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should succeed");
+        assert_eq!(res, Some(Address(1, 2)));
+        assert_eq!(buffer.current_line(), 1);
+        assert_eq!(input.next(), Some("p"));
+    }
+
+    #[test]
+    fn eval_leading_semicolon_addr() {
+        let mut input = ";5p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(3, 5)));
+        assert_eq!(buffer.current_line(), 3);
+    }
+
+    #[test]
+    fn eval_trailing_semicolon_addr() {
+        let mut input = "5;p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(5, 5)));
+        assert_eq!(buffer.current_line(), 5);
+    }
+
+    #[test]
+    fn eval_semicolon_only_addr() {
+        let mut input = ";p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(3, 6)));
+        assert_eq!(buffer.current_line(), 3);
+    }
+
+    #[test]
+    fn eval_semicolon_only_chain_addr() {
+        let mut input = ";;p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(6, 6)));
+    }
+
+    #[test]
+    fn eval_big_before_small_semicolon_chain_addr() {
+        let mut input = "4;$;2p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
