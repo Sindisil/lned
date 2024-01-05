@@ -194,7 +194,7 @@ where
 fn eval_address<'a, I>(
     graphemes: &mut Peekable<I>,
     buffer: &mut EditBuffer,
-    _previous_pattern: &mut Option<Regex>,
+    previous_pattern: &mut Option<Regex>,
 ) -> Result<Option<Address>, Error>
 where
     I: Iterator<Item = &'a str>,
@@ -231,8 +231,51 @@ where
                 graphemes.next();
                 right = Some(eval_line_number(graphemes, buffer.len())?);
             }
-            Some(&"/") => todo!("forward pattern addr"),
-            Some(&"?") => todo!("backward pattern addr"),
+            Some(&"/") => {
+                let pattern = parse_pattern(graphemes)?;
+                if !pattern.is_empty() {
+                    *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
+                }
+                let re = previous_pattern.as_ref().ok_or(Error::NoPreviousPattern)?;
+                let offset = compute_line_offset(graphemes)?;
+                let line = if buffer.current_line() == buffer.len() {
+                    (1..=buffer.len()).find(|&i| re.is_match(&buffer[i]))
+                } else {
+                    (buffer.current_line() + 1..=buffer.len())
+                        .find(|&i| re.is_match(&buffer[i]))
+                        .or_else(|| (1..=buffer.current_line()).find(|&i| re.is_match(&buffer[i])))
+                }
+                .ok_or(Error::NoMatchingLine)?;
+                right = Some(
+                    line.checked_add_signed(offset)
+                        .ok_or(Error::OffsetOverflow)?,
+                );
+            }
+            Some(&"?") => {
+                let pattern = parse_pattern(graphemes)?;
+                if !pattern.is_empty() {
+                    *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
+                }
+                let re = previous_pattern.as_ref().ok_or(Error::NoPreviousPattern)?;
+                let offset = compute_line_offset(graphemes)?;
+                let line = if buffer.current_line() == 1 {
+                    (1..=buffer.len()).rev().find(|&i| re.is_match(&buffer[i]))
+                } else {
+                    (1..buffer.current_line())
+                        .rev()
+                        .find(|&i| re.is_match(&buffer[i]))
+                        .or_else(|| {
+                            (buffer.current_line()..=buffer.len())
+                                .rev()
+                                .find(|&i| re.is_match(&buffer[i]))
+                        })
+                }
+                .ok_or(Error::NoMatchingLine)?;
+                right = Some(
+                    line.checked_add_signed(offset)
+                        .ok_or(Error::OffsetOverflow)?,
+                );
+            }
             Some(s) if s.is_blank() => {
                 graphemes.next();
             }
@@ -267,6 +310,32 @@ where
 {
     let offset = compute_line_offset(graphemes)?;
     line.checked_add_signed(offset).ok_or(Error::OffsetOverflow)
+}
+
+fn parse_pattern<'a, I>(graphemes: &mut Peekable<I>) -> Result<String, Error>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let delimiter = graphemes
+        .next_if(|gr| *gr != "\n" && *gr != "\r\n" && *gr != " ")
+        .ok_or(Error::InvalidPatternDelimiter)?;
+    let mut pattern = String::new();
+    while let Some(gr) = graphemes.next_if(|gr| *gr != "\n" && *gr != "\r\n") {
+        if gr == delimiter {
+            break;
+        } else if gr != "\\" {
+            pattern.push_str(gr);
+        } else {
+            let escaped_gr = graphemes
+                .next_if(|gr| *gr != "\n" && *gr != "\r\n")
+                .ok_or(Error::TrailingBackslash)?;
+            if escaped_gr != delimiter {
+                pattern.push('\\');
+            }
+            pattern.push_str(escaped_gr);
+        }
+    }
+    Ok(pattern)
 }
 
 fn compute_line_offset<'a, I>(graphemes: &mut Peekable<I>) -> Result<isize, Error>
@@ -341,28 +410,6 @@ where
                 .and_then(|d| acc.checked_mul(10).and_then(|n| n.checked_add(d as usize)))
         })
         .ok_or(Error::NumberParse)
-    //    let mut acc = first_digit
-    //        .chars()
-    //        .next()
-    //        .map_or(None, |c| c.to_digit(10))
-    //        .ok_or(Error::InvalidLineNumber)? as usize;
-    //    let mut next = graphemes.next();
-    //    while let Some(s) = next {
-    //        if !s.is_ascii_digit() {
-    //            break;
-    //        }
-    //        let d = s
-    //            .chars()
-    //            .next()
-    //            .map_or(None, |c| c.to_digit(10))
-    //            .ok_or(Error::InvalidLineNumber)? as usize;
-    //        acc = acc
-    //            .checked_mul(10)
-    //            .and_then(|n| n.checked_add(d))
-    //            .ok_or(Error::InvalidLineNumber)?;
-    //        next = graphemes.next();
-    //    }
-    //    Ok((acc, next))
 }
 
 fn parse_file_cmd<'a, I>(graphemes: &mut I, address: Option<Address>) -> Result<Cmd, Error>
@@ -389,286 +436,6 @@ where
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
-
-//impl Cmd {
-//fn parse_edit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
-//    if address.is_some() {
-//        return Err(Error::UnexpectedAddress);
-//    }
-//    match cmd_chars.peek() {
-//        None | Some('\n' | '\r') => Ok(Cmd::Edit(None)),
-//        Some(c) if c.is_blank() => {
-//            let filename = parse_filename(cmd_chars);
-//            if filename.is_empty() {
-//                Err(Error::InvalidFilename)
-//            } else {
-//                Ok(Cmd::Edit(Some(PathBuf::from(filename))))
-//            }
-//        }
-//        _ => Err(Error::InvalidCmdSuffix),
-//    }
-//}
-//
-//
-//fn parse_filename(cmd_chars: &mut Peekable<Chars>) -> String {
-//    let mut filename = String::new();
-//    while let Some(c) = cmd_chars.next_if(|c| *c != '\n') {
-//        filename.push(c);
-//    }
-//
-//    filename.trim().to_owned()
-//}
-//pub fn eval_address<'a>(
-//    cmd_line: &'a mut impl Iterator,
-//    buffer: &mut EditBuffer,
-//    previous_pattern: &mut Option<Regex>,
-//) -> Result<(Option<Address>, Option<&'a str>), Error> {
-//    let (addr, next_char) = eval_line_addr(cmd_line, buffer, previous_pattern)?;
-//    let separator = parse_separator(cmd_line);
-//    match separator {
-//        None => Ok(addr.map(Address::Line)),
-//        Some(sep) => Ok(Some(eval_addr_chain(
-//            cmd_chars,
-//            buffer,
-//            addr,
-//            sep,
-//            previous_pattern,
-//        )?)),
-//    }
-//}
-//
-//fn eval_addr_chain(
-//    cmd_chars: &mut Peekable<Chars>,
-//    buffer: &mut EditBuffer,
-//    left: Option<usize>,
-//    separator: Separator,
-//    previous_pattern: &mut Option<Regex>,
-//) -> Result<Address, Error> {
-//    // set current_line if left has a value
-//    if let Some(left) = left {
-//        if separator == Separator::Semicolon {
-//            if left == 0 || left > buffer.len() {
-//                return Err(Error::InvalidLineNumber);
-//            }
-//            buffer.set_current_line(left);
-//        }
-//    }
-//
-//    let right = eval_line_addr(cmd_chars, buffer, previous_pattern)?
-//        .unwrap_or_else(|| left.unwrap_or_else(|| buffer.len()));
-//    let left = left.unwrap_or_else(|| match separator {
-//        Separator::Semicolon => buffer.current_line(),
-//        Separator::Comma => 1,
-//    });
-//
-//    let next_separator = parse_separator(cmd_chars);
-//
-//    Ok(match next_separator {
-//        None => Address::Span(left, right),
-//        Some(separator) => {
-//            eval_addr_chain(cmd_chars, buffer, Some(right), separator, previous_pattern)?
-//        }
-//    })
-//}
-//
-//fn parse_separator(cmd_chars: &mut Peekable<Chars>) -> Option<Separator> {
-//    match cmd_chars.peek() {
-//        Some(c) if c.is_blank() => {
-//            cmd_chars.next();
-//            parse_separator(cmd_chars)
-//        }
-//        Some(',') => {
-//            cmd_chars.next();
-//            Some(Separator::Comma)
-//        }
-//        Some(';') => {
-//            cmd_chars.next();
-//            Some(Separator::Semicolon)
-//        }
-//        _ => None,
-//    }
-//
-//fn eval_line_addr(
-//    cmd_line: &mut impl Iterator,
-//    buffer: &EditBuffer,
-//    previous_pattern: &mut Option<Regex>,
-//) -> Result<Option<usize>, Error> {
-//    match cmd_line.next() {
-//        Some(s) if c.is_blank() => eval_line_addr(cmd_chars, buffer, previous_pattern),
-//        Some(".") => {
-//            let offset = eval_addr_offsets(cmd_chars)?;
-//            let line = buffer
-//                .current_line()
-//                .checked_add_signed(offset)
-//                .ok_or(Error::OffsetOverflow)?;
-//            Ok(Some(line))
-//        }
-//        Some('$') => {
-//            cmd_chars.next();
-//            let offset = eval_addr_offsets(cmd_chars)?;
-//            let line = buffer
-//                .len()
-//                .checked_add_signed(offset)
-//                .ok_or(Error::OffsetOverflow)?;
-//            Ok(Some(line))
-//        }
-//        Some('/') => {
-//            let pattern = parse_pattern(cmd_chars)?;
-//            if !pattern.is_empty() {
-//                *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
-//            }
-//            let re = previous_pattern.as_ref().ok_or(Error::NoPreviousPattern)?;
-//            let offset = eval_addr_offsets(cmd_chars)?;
-//            let line = if buffer.current_line() == buffer.len() {
-//                (1..=buffer.len()).find(|&i| re.is_match(&buffer[i]))
-//            } else {
-//                (buffer.current_line() + 1..=buffer.len())
-//                    .find(|&i| re.is_match(&buffer[i]))
-//                    .or_else(|| (1..=buffer.current_line()).find(|&i| re.is_match(&buffer[i])))
-//            }
-//            .ok_or(Error::NoMatchingLine)?;
-//            let line = line
-//                .checked_add_signed(offset)
-//                .ok_or(Error::OffsetOverflow)?;
-//            Ok(Some(line))
-//        }
-//        Some('?') => {
-//            let pattern = parse_pattern(cmd_chars)?;
-//            if !pattern.is_empty() {
-//                *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
-//            }
-//            let re = previous_pattern.as_ref().ok_or(Error::NoPreviousPattern)?;
-//            let offset = eval_addr_offsets(cmd_chars)?;
-//            let line = if buffer.current_line() == 1 {
-//                (1..=buffer.len()).rev().find(|&i| re.is_match(&buffer[i]))
-//            } else {
-//                (1..buffer.current_line())
-//                    .rev()
-//                    .find(|&i| re.is_match(&buffer[i]))
-//                    .or_else(|| {
-//                        (buffer.current_line()..=buffer.len())
-//                            .rev()
-//                            .find(|&i| re.is_match(&buffer[i]))
-//                    })
-//            }
-//            .ok_or(Error::NoMatchingLine)?;
-//            let line = line
-//                .checked_add_signed(offset)
-//                .ok_or(Error::OffsetOverflow)?;
-//            Ok(Some(line))
-//        }
-//        Some('0'..='9') => {
-//            let num = cmd_chars
-//                .peeking_take_while(char::is_ascii_digit)
-//                .try_fold(0usize, |acc, c| {
-//                    c.to_digit(10)
-//                        .and_then(|d| acc.checked_mul(10).and_then(|n| n.checked_add(d as usize)))
-//                })
-//                .ok_or(Error::InvalidLineNumber)?;
-//            let offset = eval_addr_offsets(cmd_chars)?;
-//            let line = num
-//                .checked_add_signed(offset)
-//                .ok_or(Error::OffsetOverflow)?;
-//            Ok(Some(line))
-//        }
-//        Some('+' | '-') => {
-//            let offset = eval_addr_offsets(cmd_chars)?;
-//            let line = buffer
-//                .current_line()
-//                .checked_add_signed(offset)
-//                .ok_or(Error::InvalidLineNumber)?;
-//            if line > buffer.len() {
-//                Err(Error::InvalidLineNumber)
-//            } else {
-//                Ok(Some(line))
-//            }
-//        }
-//        _ => Ok(None),
-//    }
-//}
-//
-//fn parse_pattern(cmd_chars: &mut Peekable<Chars>) -> Result<String, Error> {
-//    let delimiter = cmd_chars
-//        .next_if(|c| *c != '\n' && *c != '\r' && *c != ' ')
-//        .ok_or(Error::InvalidPatternDelimiter)?;
-//    let mut pattern = String::new();
-//    while let Some(c) = cmd_chars.next_if(|c| *c != '\n' && *c != '\r') {
-//        if c == delimiter {
-//            break;
-//        } else if c != '\\' {
-//            pattern.push(c);
-//        } else {
-//            let escaped_c = cmd_chars
-//                .next_if(|c| *c != 'r' && *c != '\n')
-//                .ok_or(Error::TrailingBackslash)?;
-//            if escaped_c != delimiter {
-//                pattern.push('\\');
-//            }
-//            pattern.push(escaped_c);
-//        }
-//    }
-//    Ok(pattern)
-//}
-//
-//fn eval_addr_offsets(cmd_chars: &mut Peekable<Chars>) -> Result<isize, Error> {
-//    let mut total_offset = 0isize;
-//    while let Some(c) = cmd_chars.peek() {
-//        let offset = match c {
-//            ' ' | '\t' => {
-//                cmd_chars.next();
-//                None
-//            }
-//            '+' => {
-//                cmd_chars.next();
-//                Some(cmp::max(
-//                    1,
-//                    cmd_chars
-//                        .peeking_take_while(char::is_ascii_digit)
-//                        .try_fold(0isize, |acc, c| {
-//                            c.to_digit(10).and_then(|d| {
-//                                acc.checked_mul(10)
-//                                    .and_then(|n| n.checked_add_unsigned(d.try_into().unwrap()))
-//                            })
-//                        })
-//                        .ok_or(Error::OffsetTooLarge)?,
-//                ))
-//            }
-//            '-' => {
-//                cmd_chars.next();
-//                Some(cmp::min(
-//                    -1,
-//                    cmd_chars
-//                        .peeking_take_while(char::is_ascii_digit)
-//                        .try_fold(0isize, |acc, c| {
-//                            c.to_digit(10).and_then(|d| {
-//                                acc.checked_mul(10)
-//                                    .and_then(|n| n.checked_sub_unsigned(d.try_into().unwrap()))
-//                            })
-//                        })
-//                        .ok_or(Error::OffsetTooSmall)?,
-//                ))
-//            }
-//            '0'..='9' => Some(
-//                cmd_chars
-//                    .peeking_take_while(char::is_ascii_digit)
-//                    .try_fold(0isize, |acc, c| {
-//                        c.to_digit(10).and_then(|d| {
-//                            acc.checked_mul(10)
-//                                .and_then(|n| n.checked_add_unsigned(d.try_into().unwrap()))
-//                        })
-//                    })
-//                    .ok_or(Error::OffsetTooLarge)?,
-//            ),
-//            _ => break,
-//        };
-//        if let Some(offset) = offset {
-//            total_offset = total_offset
-//                .checked_add(offset)
-//                .ok_or(Error::OffsetOverflow)?;
-//        }
-//    }
-//    Ok(total_offset)
-//}
 
 #[cfg(test)]
 mod tests {
@@ -797,6 +564,51 @@ mod tests {
     }
 
     #[test]
+    fn parse_pattern_invalid_delimiter() {
+        let mut input = " stuff + other_stuff. \n".graphemes(true).peekable();
+        let res = parse_pattern(&mut input);
+        assert!(matches!(res, Err(Error::InvalidPatternDelimiter)));
+    }
+
+    #[test]
+    fn parse_pattern_trailing_backslash() {
+        let mut input = "/stuff + other_stuff.\\\n".graphemes(true).peekable();
+        let res = parse_pattern(&mut input).expect_err("trailing backslash");
+        assert!(matches!(res, Error::TrailingBackslash));
+        let mut input = "/stuff + other_stuff.\\".graphemes(true).peekable();
+        let res = parse_pattern(&mut input).expect_err("trailing backslash");
+        assert!(matches!(res, Error::TrailingBackslash));
+    }
+
+    #[test]
+    fn parse_pattern_no_terminating_delimiter() {
+        let mut input = "/stuff\\/other_stuff.\n".graphemes(true).peekable();
+        let res = parse_pattern(&mut input).expect("parsed pattern");
+        assert_eq!("stuff/other_stuff.".to_owned(), res);
+    }
+
+    #[test]
+    fn parse_pattern_escaped_terminator() {
+        let mut input = "/stuff\\/other_stuff./\n".graphemes(true).peekable();
+        let res = parse_pattern(&mut input).expect("parsed pattern");
+        assert_eq!("stuff/other_stuff.".to_owned(), res);
+    }
+
+    #[test]
+    fn parse_pattern_escaped_chars() {
+        let mut input = "?stuff \\+ other_stuff\\.?\n".graphemes(true).peekable();
+        let res = parse_pattern(&mut input).expect("parsed pattern");
+        assert_eq!("stuff \\+ other_stuff\\.".to_owned(), res);
+    }
+
+    #[test]
+    fn parse_pattern_no_escaped_chars() {
+        let mut input = "/stuff + other_stuff./\n".graphemes(true).peekable();
+        let res = parse_pattern(&mut input).expect("parsed pattern");
+        assert_eq!("stuff + other_stuff.".to_owned(), res);
+    }
+
+    #[test]
     fn eval_addr_no_eol() {
         let mut cmd_line = "".graphemes(true).peekable();
         let res = eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None)
@@ -842,6 +654,138 @@ mod tests {
             .expect("should eval line number");
         assert_eq!(cmd_line.next(), Some("d"));
         assert_eq!(address, Some(Address(42, 42)));
+    }
+
+    #[test]
+    fn regex_line_addr_regex_syntax() {
+        let mut input = "/\\lo.+/n\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect_err("bad pattern");
+        assert!(matches!(res, Error::Regex(_)));
+    }
+
+    #[test]
+    fn rev_regex_line_addr_regex_syntax() {
+        let mut input = "?\\lo.+?n\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect_err("bad pattern");
+        assert!(matches!(res, Error::Regex(_)));
+    }
+
+    #[test]
+    fn regex_line_addr_embedded_delim() {
+        let mut input = "/o.+\\//n\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["one/\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(1, 1)));
+    }
+
+    #[test]
+    fn regex_line_addr_no_final_delimiter() {
+        let mut input = "/o.+\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(4, 4)));
+    }
+
+    #[test]
+    fn regex_line_addr_needle_in_first_half_of_split_range() {
+        let mut input = "/o.+/n\n".graphemes(true).peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(4, 4)));
+    }
+
+    #[test]
+    fn regex_line_addr_needle_in_second_half_of_split_range() {
+        let mut input = "/on.+/n\n".graphemes(true).peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(4);
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(1, 1)));
+    }
+
+    #[test]
+    fn regex_line_addr_contiguous_search_range() {
+        let mut input = "/o.+/n\n".graphemes(true).peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(6);
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(1, 1)));
+    }
+
+    #[test]
+    fn rev_regex_line_addr_needle_in_first_half_of_split_range() {
+        let mut input = "?o.+?n\n".graphemes(true).peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(1, 1)));
+    }
+
+    #[test]
+    fn rev_regex_line_addr_needle_in_second_half_of_split_range() {
+        let mut input = "?ou.+?n\n".graphemes(true).peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(4);
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(4, 4)));
+    }
+
+    #[test]
+    fn rev_regex_line_addr_contiguous_search_range() {
+        let mut input = "?o.+?n\n".graphemes(true).peekable();
+        let mut previous_pattern: Option<Regex> = None;
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(1);
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(4, 4)));
+    }
+
+    #[test]
+    fn regex_line_addr_with_offset() {
+        let mut input = "/o.+/+2\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(6, 6)));
+    }
+
+    #[test]
+    fn rev_regex_line_addr_with_offset() {
+        let mut input = "?o.+?+2\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(2);
+        let mut previous_pattern: Option<Regex> = None;
+        let res =
+            eval_address(&mut input, &mut buffer, &mut previous_pattern).expect("pattern found");
+        assert_eq!(res, Some(Address(3, 3)));
     }
 
     #[test]
