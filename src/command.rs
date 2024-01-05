@@ -237,7 +237,6 @@ where
                     *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
                 }
                 let re = previous_pattern.as_ref().ok_or(Error::NoPreviousPattern)?;
-                let offset = compute_line_offset(graphemes)?;
                 let line = if buffer.current_line() == buffer.len() {
                     (1..=buffer.len()).find(|&i| re.is_match(&buffer[i]))
                 } else {
@@ -246,10 +245,7 @@ where
                         .or_else(|| (1..=buffer.current_line()).find(|&i| re.is_match(&buffer[i])))
                 }
                 .ok_or(Error::NoMatchingLine)?;
-                right = Some(
-                    line.checked_add_signed(offset)
-                        .ok_or(Error::OffsetOverflow)?,
-                );
+                right = Some(eval_line_number(graphemes, line)?);
             }
             Some(&"?") => {
                 let pattern = parse_pattern(graphemes)?;
@@ -257,7 +253,6 @@ where
                     *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
                 }
                 let re = previous_pattern.as_ref().ok_or(Error::NoPreviousPattern)?;
-                let offset = compute_line_offset(graphemes)?;
                 let line = if buffer.current_line() == 1 {
                     (1..=buffer.len()).rev().find(|&i| re.is_match(&buffer[i]))
                 } else {
@@ -271,10 +266,7 @@ where
                         })
                 }
                 .ok_or(Error::NoMatchingLine)?;
-                right = Some(
-                    line.checked_add_signed(offset)
-                        .ok_or(Error::OffsetOverflow)?,
-                );
+                right = Some(eval_line_number(graphemes, line)?);
             }
             Some(s) if s.is_blank() => {
                 graphemes.next();
