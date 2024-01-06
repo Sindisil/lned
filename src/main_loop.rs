@@ -35,20 +35,20 @@ where
     let mut previous_pattern: Option<regex::Regex> = None;
 
     // Accept and process commands until fatal error or exit
-    let mut reader = Reader::new(&mut input);
+    let mut reader = Reader::new();
     let mut done = false;
     while !done {
         // write prompt
         write_prompt(&mut output)?;
 
         reader
-            .read_cmd(&mut buffer, &mut previous_pattern)
+            .read_cmd(&mut input, &mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
             .and_then(|cmd| {
                 let res = match &cmd {
                     // dispatch editor commands
                     Cmd::Append(address) => buffer
-                        .do_append(&mut reader, &mut output, *address)
+                        .do_append(&mut reader, &mut input, &mut output, *address)
                         .map_err(Error::BufferCmd),
                     Cmd::Delete(address) => buffer
                         .do_delete(&mut output, *address)
