@@ -11,11 +11,6 @@ use crate::str_utils::StrUtils;
 use regex::Regex;
 use unicode_segmentation::UnicodeSegmentation;
 
-#[derive(Debug)]
-pub struct Reader {
-    line: String,
-}
-
 #[derive(Debug, Clone)]
 pub enum Cmd {
     Append(Option<Address>),
@@ -79,47 +74,32 @@ impl Display for Error {
     }
 }
 
-impl Reader {
-    pub fn new() -> Reader {
-        Reader {
-            line: String::with_capacity(120),
-        }
-    }
-
-    fn clear(&mut self) {
-        self.line.clear();
-    }
-
+impl Cmd {
     // Read lines of input into buf, stopping when a '.' alone on a line
     // is read. Clears previous content of buf, but doesn't shrink capacity.
     // Returns number of bytes read or Error::Readlines if an error is
     // encountered.
-    pub fn read_lines(
-        &mut self,
-        input: &mut impl BufRead,
-        buf: &mut Vec<String>,
-    ) -> Result<usize, io::Error> {
+    pub fn read_lines(input: &mut impl BufRead, buf: &mut Vec<String>) -> Result<usize, io::Error> {
+        let mut line = String::new();
+        buf.clear();
         loop {
-            self.clear(); // get rid of any old input
-            input.read_line(&mut self.line)?;
-            if self.line == ".\n" || self.line == ".\r\n" {
+            input.read_line(&mut line)?;
+            if line == ".\n" || line == ".\r\n" {
                 return Ok(buf.len());
             }
-            buf.push(self.line.clone());
+            buf.push(line);
+            line = String::new();
         }
     }
 
-    pub fn read_cmd(
-        &mut self,
+    pub fn read(
         input: &mut impl BufRead,
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
-        self.clear();
-        input
-            .read_line(&mut self.line)
-            .map_err(Error::ReadCommand)?;
-        let mut graphemes = self.line.as_mut_str().graphemes(true).peekable();
+        let mut line = String::with_capacity(120);
+        input.read_line(&mut line).map_err(Error::ReadCommand)?;
+        let mut graphemes = line.as_mut_str().graphemes(true).peekable();
         let address = eval_address(&mut graphemes, buffer, previous_pattern)?;
         match graphemes.next() {
             Some("a") => parse_no_args(&mut graphemes, Cmd::Append(address)),
@@ -937,20 +917,14 @@ mod tests {
     #[test]
     fn parse_append_cmd_no_addr() {
         let mut input = "a\r\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect("good parse");
+        let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(matches!(res, Cmd::Append(None)));
     }
 
     #[test]
     fn parse_delete_cmd_no_addr() {
         let mut input = "d\r\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect("good parse");
+        let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(
             matches!(res, Cmd::Delete(None)),
             "{res:?} didn't match Cmd::Delete(None)"
@@ -960,10 +934,7 @@ mod tests {
     #[test]
     fn parse_enumerate_cmd_no_addr() {
         let mut input = "n\r\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect("good parse");
+        let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(
             matches!(res, Cmd::Enumerate(None)),
             "{res:?} didn't match Cmd::Enumerate(None)"
@@ -973,20 +944,14 @@ mod tests {
     #[test]
     fn parse_null_cmd_no_addr() {
         let mut input = "\r\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect("good parse");
+        let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(matches!(res, Cmd::Null(None)));
     }
 
     #[test]
     fn parse_print_cmd_no_addr() {
         let mut input = "p\r\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect("good parse");
+        let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(
             matches!(res, Cmd::Print(None)),
             "{res:?} didn't match Cmd::Print(None)"
@@ -996,40 +961,29 @@ mod tests {
     #[test]
     fn parse_quit_cmd() {
         let mut input = "q\r\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect("good parse");
+        let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(matches!(res, Cmd::Quit), "{res:?} didn't match Cmd::Quit");
     }
 
     #[test]
     fn parse_undo_cmd() {
         let mut input = "u\r\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect("good parse");
+        let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(matches!(res, Cmd::Undo), "{res:?} didn't match Cmd::Undo");
     }
 
     #[test]
     fn parse_redo_cmd() {
         let mut input = "U\r\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect("good parse");
+        let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect("good parse");
         assert!(matches!(res, Cmd::Redo), "{res:?} didn't match Cmd::Redo");
     }
 
     #[test]
     fn parse_quit_cmd_invalid_suffix() {
         let mut input = "q/more stuff/\r\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect_err("invalid sufix");
+        let res =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect_err("invalid sufix");
         assert!(
             matches!(res, Error::InvalidCmdSuffix),
             "{res:?} didn't match Error::InvalidCmdSuffix"
@@ -1039,10 +993,8 @@ mod tests {
     #[test]
     fn parse_unknown_command() {
         let mut input = "O\n".as_bytes();
-        let mut reader = Reader::new();
-        let res = reader
-            .read_cmd(&mut input, &mut EditBuffer::new(), &mut None)
-            .expect_err("unknown cmd");
+        let res =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).expect_err("unknown cmd");
         assert!(
             matches!(res, Error::Unknown(ref s) if s == "O"),
             "{res:?} didn't match Error::Unknown(\"O\")"

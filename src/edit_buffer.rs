@@ -14,7 +14,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use crate::command::{Address, Cmd, Reader};
+use crate::command::{Address, Cmd};
 use crate::edit_buffer::operation::{AppendData, DeleteData, EditData, Op};
 use crate::edit_buffer::undo_stack::UndoStack;
 use crate::num_utils::NumUtils;
@@ -436,15 +436,12 @@ impl EditBuffer {
 
     pub fn do_append(
         &mut self,
-        reader: &mut Reader,
         input: &mut impl BufRead,
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<(), Error> {
         let mut lines = Vec::new();
-        reader
-            .read_lines(input, &mut lines)
-            .map_err(Error::ReadLines)?;
+        Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
         let mut op = Op::Append(AppendData {
             address,
             lines,
@@ -775,9 +772,8 @@ mod tests {
         assert!(!buffer.is_dirty());
         let mut output = Vec::new();
         let mut input = "one more line\n.\n".as_bytes();
-        let mut reader = Reader::new();
         buffer
-            .do_append(&mut reader, &mut input, &mut output, Some(Address(0, 0)))
+            .do_append(&mut input, &mut output, Some(Address(0, 0)))
             .expect("line appended");
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
@@ -795,9 +791,8 @@ mod tests {
         assert!(!buffer.is_dirty());
         let mut output = Vec::new();
         let mut input = "one more line\n.\n".as_bytes();
-        let mut reader = Reader::new();
         buffer
-            .do_append(&mut reader, &mut input, &mut output, Some(Address(0, 0)))
+            .do_append(&mut input, &mut output, Some(Address(0, 0)))
             .expect("line appended");
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
@@ -815,9 +810,8 @@ mod tests {
         assert!(!buffer.is_dirty());
         let mut output = Vec::new();
         let mut input = "one more line\n.\n".as_bytes();
-        let mut reader = Reader::new();
         buffer
-            .do_append(&mut reader, &mut input, &mut output, Some(Address(0, 0)))
+            .do_append(&mut input, &mut output, Some(Address(0, 0)))
             .expect("line appended");
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
@@ -1478,10 +1472,8 @@ mod tests {
         }
         input.extend_from_slice(".\n".as_bytes());
         let mut input = &input[..];
-        let mut reader = Reader::new();
         buffer
             .do_append(
-                &mut reader,
                 &mut input,
                 &mut output,
                 Some(Address(buffer.len(), buffer.len())),
@@ -1567,12 +1559,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["one\n"]);
         let mut input = "one\n.\n".as_bytes();
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(0, 0)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
             .expect("successful append");
         assert_eq!(1, buffer.current_line);
         assert_eq!(1, buffer.len());
@@ -1585,12 +1572,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["a\n", "b", "c"]);
         let mut input = "a\nb\nc\n.\n".as_bytes();
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(0, 0)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
             .expect("successful append");
         assert_eq!(3, buffer.current_line);
         assert_eq!(3, buffer.len());
@@ -1603,12 +1585,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["a\n", "b", "c", "1", "2", "3"]);
         let mut input = "a\nb\nc\n.\n".as_bytes();
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(0, 0)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
             .expect("successful append");
         assert_eq!(3, buffer.current_line);
         assert_eq!(6, buffer.len());
@@ -1621,12 +1598,7 @@ mod tests {
         let mut input = "a\nb\nc\n.\n".as_bytes();
         let expected = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3"]);
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(2, 2)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
             .expect("successful append");
         assert_eq!(5, buffer.current_line());
         assert_eq!(6, buffer.len());
@@ -1639,12 +1611,7 @@ mod tests {
         let mut input = "a\nb\nc\n.\n".as_bytes();
         let expected = EditBuffer::from(vec!["1\n", "2", "3", "a", "b", "c", "4", "5", "6"]);
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(2, 3)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 3)))
             .expect("successful append");
         assert_eq!(6, buffer.current_line);
         assert_eq!(9, buffer.len());
@@ -1657,12 +1624,7 @@ mod tests {
         let mut input = "a\nb\nc\n.\n".as_bytes();
         let expected = EditBuffer::from(vec!["1\n", "2", "3", "a", "b", "c"]);
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(3, 3)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(3, 3)))
             .expect("successful append");
         assert_eq!(6, buffer.current_line);
         assert_eq!(6, buffer.len());
@@ -1676,12 +1638,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert_eq!(3, buffer.current_line());
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(2, 2)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
             .expect("successful append");
         assert_eq!(2, buffer.current_line);
         assert_eq!(3, buffer.len());
@@ -1777,12 +1734,7 @@ mod tests {
         let mut input = "1\n2\n3\n.\n".as_bytes();
         assert!(!buffer.is_dirty());
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(0, 0)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
             .expect("lines appended");
         assert!(buffer.is_dirty());
     }
@@ -1792,12 +1744,7 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let mut input = "1\n2\n3\n.\n".as_bytes();
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(0, 0)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
             .expect("lines appended");
         assert_eq!(&EditBuffer::from(vec!["1\n", "2", "3"])[..], &buffer[..]);
         buffer.do_undo(&mut Vec::new()).expect("append undone");
@@ -1810,12 +1757,7 @@ mod tests {
         let mut input = "1\n2\n3\n.\n".as_bytes();
         let expected_final = buffer.clone();
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(2, 3)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 3)))
             .expect("lines appended");
         assert_eq!(
             &EditBuffer::from(vec!["one\n", "two", "three", "1\n", "2", "3"])[..],
@@ -1832,7 +1774,7 @@ mod tests {
         buffer.set_current_line(2);
         let expected_final = buffer.clone();
         buffer
-            .do_append(&mut Reader::new(), &mut input, &mut Vec::new(), None)
+            .do_append(&mut input, &mut Vec::new(), None)
             .expect("lines appended");
         assert_eq!(
             &EditBuffer::from(vec!["one\n", "two", "1\n", "2", "3", "three"])[..],
@@ -1926,12 +1868,7 @@ mod tests {
         assert_eq!(6, buffer.current_line());
 
         buffer
-            .do_append(
-                &mut Reader::new(),
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(2, 2)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
             .expect("3 lines appended");
         let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
         assert_eq!(&expected_1[..], &buffer[..]);
@@ -1954,13 +1891,12 @@ mod tests {
     fn do_undo_redo_multi() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let mut input = "a\nb\nc\n.\n".as_bytes();
-        let mut reader = Reader::new();
         let expected_final = buffer.clone();
         let mut output = Vec::new();
         assert_eq!(6, buffer.current_line());
 
         buffer
-            .do_append(&mut reader, &mut input, &mut output, Some(Address(2, 2)))
+            .do_append(&mut input, &mut output, Some(Address(2, 2)))
             .expect("3 lines appended");
         let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
         assert_eq!(&expected_1[..], &buffer[..]);
@@ -1977,7 +1913,7 @@ mod tests {
 
         input = "spam!\n.\n".as_bytes();
         buffer
-            .do_append(&mut reader, &mut input, &mut output, Some(Address(4, 5)))
+            .do_append(&mut input, &mut output, Some(Address(4, 5)))
             .expect("one more line appended");
         let expected_3 =
             EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "spam!", "3", "4", "5", "6"]);
@@ -2000,16 +1936,10 @@ mod tests {
     #[test]
     fn buffer_clean_after_undo_all() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let mut reader = Reader::new();
         let mut input = "a\nb\nc\n.\n".as_bytes();
 
         buffer
-            .do_append(
-                &mut reader,
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(2, 2)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
             .expect("3 lines appended");
 
         buffer
@@ -2018,12 +1948,7 @@ mod tests {
 
         input = "x\ny\nz\n.\n".as_bytes();
         buffer
-            .do_append(
-                &mut reader,
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(0, 0)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
             .expect("3 lines appended");
 
         buffer.do_undo(&mut Vec::new()).expect("undone Append");
@@ -2065,15 +1990,9 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!(6, buffer.current_line());
 
-        let mut reader = Reader::new();
         let mut input = "a\nb\nc\n.\n".as_bytes();
         buffer
-            .do_append(
-                &mut reader,
-                &mut input,
-                &mut Vec::new(),
-                Some(Address(2, 2)),
-            )
+            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
             .expect("3 lines appended");
         let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
         assert_eq!(&expected_1[..], &buffer[..]);
