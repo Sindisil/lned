@@ -18,6 +18,7 @@ pub enum Cmd {
     Edit(Option<PathBuf>),
     Enumerate(Option<Address>),
     File(Option<PathBuf>),
+    Global(Option<Address>, Regex, Vec<u8>),
     Null(Option<Address>),
     Print(Option<Address>),
     Quit,
@@ -80,15 +81,14 @@ impl Cmd {
     // Returns number of bytes read or Error::Readlines if an error is
     // encountered.
     pub fn read_lines(input: &mut impl BufRead, buf: &mut Vec<String>) -> Result<usize, io::Error> {
-        let mut line = String::new();
         buf.clear();
         loop {
-            input.read_line(&mut line)?;
-            if line == ".\n" || line == ".\r\n" {
+            let mut line = String::new();
+            let n = input.read_line(&mut line)?;
+            if n == 0 || line == ".\n" || line == ".\r\n" {
                 return Ok(buf.len());
             }
             buf.push(line);
-            line = String::new();
         }
     }
 
@@ -404,6 +404,50 @@ where
         }
         _ => Err(Error::InvalidCmdSuffix),
     }
+}
+
+fn parse_global_cmd<'a, I>(
+    graphemes: &mut Peekable<I>,
+    address: Option<Address>,
+    previous_pattern: &mut Option<Regex>,
+    input: &mut impl BufRead,
+) -> Result<Cmd, Error>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let pattern = parse_pattern(graphemes)?;
+    if !(pattern.is_empty()) {
+        *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
+    }
+    let pattern = previous_pattern.clone().ok_or(Error::NoPreviousPattern)?;
+
+    let mut commands = Vec::new();
+    let mut more_lines = false;
+
+    // Copy first command to commands string,
+    // noting and unescaping escaped EOL.
+    while let Some(gr) = graphemes.next() {
+        if gr == "\\" && matches!(graphemes.peek(), Some(&"\n" | &"\r\n")) {
+            more_lines = true;
+        } else {
+            commands.extend_from_slice(gr.as_bytes());
+            if gr == "\n" || gr == "\r\n" {
+                break;
+            }
+        }
+    }
+
+    // if the EOL was escaped, use read_lines() to read in rest of command list
+    if more_lines {
+        let mut lines = Vec::new();
+        if Cmd::read_lines(input, &mut lines).map_err(Error::ReadCommand)? > 0 {
+            for line in lines {
+                commands.extend_from_slice(line.as_bytes());
+            }
+        }
+    }
+
+    Ok(Cmd::Global(address, pattern, commands))
 }
 
 #[cfg(test)]
@@ -1072,6 +1116,27 @@ mod tests {
         let mut cmd_line = "filename.rs\n".graphemes(true);
         let res = parse_file_cmd(&mut cmd_line, None).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
+    }
+
+    #[test]
+    fn parse_simple_global_cmd() {
+        let mut input = "/pat/p\r\n".graphemes(true).peekable();
+        let mut prev_pattern = None;
+        let res = parse_global_cmd(&mut input, None, &mut prev_pattern, &mut "".as_bytes())
+            .expect("should parse");
+        assert!(matches!(res,
+            Cmd::Global(a, p, c) if a.is_none() && p.as_str() == "pat" && c == *"p\r\n".as_bytes()));
+    }
+
+    #[test]
+    fn parse_multi_global_cmd() {
+        let mut input = "/pat/n\\\r\n".graphemes(true).peekable();
+        let mut more_input = "d\r\n".as_bytes();
+        let mut prev_pattern = None;
+        let res = parse_global_cmd(&mut input, None, &mut prev_pattern, &mut more_input)
+            .expect("should parse");
+        assert!(matches!(res,
+            Cmd::Global(a, p, c) if a.is_none() && p.as_str() == "pat" && c == *"n\r\nd\r\n".as_bytes()));
     }
 
     #[test]

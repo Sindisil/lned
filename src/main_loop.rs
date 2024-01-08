@@ -60,6 +60,7 @@ where
                     Cmd::File(filename) => buffer
                         .do_file(&mut output, filename.as_deref())
                         .map_err(Error::BufferCmd),
+                    Cmd::Global(_adress, _pattern, _commands) => todo!(),
                     Cmd::Null(address) => buffer
                         .do_null(&mut output, *address)
                         .map_err(Error::BufferCmd),
