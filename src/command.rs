@@ -18,7 +18,7 @@ pub enum Cmd {
     Edit(Option<PathBuf>),
     Enumerate(Option<Address>),
     File(Option<PathBuf>),
-    Global(Option<Address>, Regex, Vec<u8>),
+    Global(Option<Address>, Regex, String),
     Null(Option<Address>),
     Print(Option<Address>),
     Quit,
@@ -421,7 +421,7 @@ where
     }
     let pattern = previous_pattern.clone().ok_or(Error::NoPreviousPattern)?;
 
-    let mut commands = Vec::new();
+    let mut commands = String::new();
     let mut more_lines = false;
 
     // Copy first command to commands string,
@@ -430,7 +430,7 @@ where
         if gr == "\\" && matches!(graphemes.peek(), Some(&"\n" | &"\r\n")) {
             more_lines = true;
         } else {
-            commands.extend_from_slice(gr.as_bytes());
+            commands.push_str(gr);
             if gr == "\n" || gr == "\r\n" {
                 break;
             }
@@ -442,7 +442,7 @@ where
         let mut lines = Vec::new();
         if Cmd::read_lines(input, &mut lines).map_err(Error::ReadCommand)? > 0 {
             for line in lines {
-                commands.extend_from_slice(line.as_bytes());
+                commands.push_str(&line);
             }
         }
     }
@@ -1125,7 +1125,7 @@ mod tests {
         let res = parse_global_cmd(&mut input, None, &mut prev_pattern, &mut "".as_bytes())
             .expect("should parse");
         assert!(matches!(res,
-            Cmd::Global(a, p, c) if a.is_none() && p.as_str() == "pat" && c == *"p\r\n".as_bytes()));
+            Cmd::Global(a, p, c) if a.is_none() && p.as_str() == "pat" && c == "p\r\n"));
     }
 
     #[test]
@@ -1136,7 +1136,7 @@ mod tests {
         let res = parse_global_cmd(&mut input, None, &mut prev_pattern, &mut more_input)
             .expect("should parse");
         assert!(matches!(res,
-            Cmd::Global(a, p, c) if a.is_none() && p.as_str() == "pat" && c == *"n\r\nd\r\n".as_bytes()));
+            Cmd::Global(a, p, c) if a.is_none() && p.as_str() == "pat" && c == "n\r\nd\r\n"));
     }
 
     #[test]
