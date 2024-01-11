@@ -10,9 +10,12 @@ use core::fmt::{self, Display, Formatter};
 use core::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use core::slice::Iter;
 use std::borrow::ToOwned;
+use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+
+use regex::Regex;
 
 use crate::command::{Address, Cmd};
 use crate::edit_buffer::operation::{AppendData, DeleteData, EditData, Op};
@@ -39,6 +42,9 @@ pub enum Error {
     FileOpen(io::Error),
     WriteLines(io::Error),
     ReadLines(io::Error),
+    NestedGlobalCmd,
+    UnsupportedGlobalCmd,
+    ReadGlobalCmd,
 }
 
 impl std::error::Error for Error {}
@@ -57,6 +63,9 @@ impl Display for Error {
             Error::FileOpen(e) => write!(f, "Error opening file: {e}"),
             Error::WriteLines(e) => write!(f, "Error writing lines to file: {e}"),
             Error::ReadLines(e) => write!(f, "{e} reading input lines"),
+            Error::NestedGlobalCmd => write!(f, "invalid nested global command"),
+            Error::UnsupportedGlobalCmd => write!(f, "unsupported global command"),
+            Error::ReadGlobalCmd => write!(f, "error reading global command"),
         }
     }
 }
@@ -506,10 +515,11 @@ impl EditBuffer {
         res
     }
 
-    pub fn do_enumerate<W>(&mut self, output: &mut W, address: Option<Address>) -> Result<(), Error>
-    where
-        W: Write,
-    {
+    pub fn do_enumerate(
+        &mut self,
+        output: &mut impl Write,
+        address: Option<Address>,
+    ) -> Result<(), Error> {
         let span = if let Some(Address(b, e)) = address {
             b..=e
         } else {
@@ -540,10 +550,11 @@ impl EditBuffer {
         Ok(())
     }
 
-    pub fn do_file<W>(&mut self, output: &mut W, filename: Option<&Path>) -> Result<(), Error>
-    where
-        W: Write,
-    {
+    pub fn do_file(
+        &mut self,
+        output: &mut impl Write,
+        filename: Option<&Path>,
+    ) -> Result<(), Error> {
         if let Some(filename) = filename {
             self.filename = Some(filename.to_owned());
         }
@@ -556,6 +567,44 @@ impl EditBuffer {
                 .write_all(format!("{}\n", f.display()).as_bytes())
                 .map_err(Error::WriteOutput),
         }
+    }
+
+    pub fn do_global(
+        &mut self,
+        output: &mut impl Write,
+        address: Option<Address>,
+        pattern: &Regex,
+        commands: &str,
+        previous_pattern: &mut Option<Regex>,
+    ) -> Result<(), Error> {
+        // make a list of matching lines
+        let search_range = address.map_or_else(|| 1..=self.len(), |a| a.0..=a.1);
+        let mut matched_lines = (search_range)
+            .filter(|&n| {
+                self[n]
+                    .lines()
+                    .next()
+                    .map_or(false, |l| pattern.is_match(l))
+            })
+            .collect::<VecDeque<usize>>();
+
+        // iterate over list
+        while let Some(line_num) = matched_lines.pop_front() {
+            self.set_current_line(line_num);
+            let mut input = commands.as_bytes();
+
+            // parse and execute command list for line
+            let cmd =
+                Cmd::read(&mut input, self, previous_pattern).map_err(|_| Error::ReadGlobalCmd)?;
+            match cmd {
+                Cmd::Enumerate(address) => self.do_enumerate(output, address)?,
+                Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
+                Cmd::Null(address) | Cmd::Print(address) => self.do_print(output, address)?,
+                _ => return Err(Error::UnsupportedGlobalCmd),
+            }
+        }
+
+        Ok(())
     }
 
     pub fn do_null<W>(&mut self, output: &mut W, address: Option<Address>) -> Result<(), Error>
@@ -2077,6 +2126,130 @@ mod tests {
             .expect("displayed filename");
         assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
+    }
+
+    #[test]
+    fn do_global_no_matches() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("four").unwrap();
+        let commands = "p\n".to_owned();
+        buffer
+            .do_global(&mut output, None, &pat, &commands, &mut prev_pattern)
+            .expect("no matches");
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn do_global_illegal_nested_gobal() {
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three"]);
+        buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("t..").unwrap();
+        let commands = "1,2g/ee/n\n".to_owned();
+        let res = buffer
+            .do_global(&mut output, None, &pat, &commands, &mut prev_pattern)
+            .expect_err("nested global");
+        assert!(matches!(res, Error::NestedGlobalCmd));
+    }
+
+    #[test]
+    fn do_global_blank_command_print() {
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "tweedle dee"]);
+        buffer.set_current_line(3);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("t..").unwrap();
+        let commands = "\n".to_owned();
+        buffer
+            .do_global(
+                &mut output,
+                Some(Address(1, 3)),
+                &pat,
+                &commands,
+                &mut prev_pattern,
+            )
+            .expect("print two lines");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\r\nthree\r\n");
+    }
+
+    #[test]
+    fn do_global_print() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("t..").unwrap();
+        let commands = "p\r\n".to_owned();
+        buffer
+            .do_global(&mut output, None, &pat, &commands, &mut prev_pattern)
+            .expect("print two lines");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\nthree\n");
+    }
+
+    #[test]
+    fn do_global_enumerate() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("t..").unwrap();
+        let commands = "n\r\n".to_owned();
+        buffer
+            .do_global(
+                &mut output,
+                Some(Address(1, 3)),
+                &pat,
+                &commands,
+                &mut prev_pattern,
+            )
+            .expect("enumerate two lines");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "2  two\n3  three\n");
+    }
+
+    #[test]
+    fn do_global_enumerate_with_addresses() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(6);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "-1,.n\r\n".to_owned();
+        buffer
+            .do_global(
+                &mut output,
+                Some(Address(2, 5)),
+                &pat,
+                &commands,
+                &mut prev_pattern,
+            )
+            .expect("should enumerate two matches");
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "2  two\n3  three\n4  four\n5  five\n"
+        );
+    }
+
+    #[test]
+    fn do_global_unsupported_commands() {
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three"]);
+        buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new(r"t..").unwrap();
+        let commands = "e filename.txt\n".to_owned();
+        let res = buffer
+            .do_global(
+                &mut output,
+                Some(Address(1, 3)),
+                &pat,
+                &commands,
+                &mut prev_pattern,
+            )
+            .expect_err("unsupported global command");
+        assert!(matches!(res, Error::UnsupportedGlobalCmd));
     }
 
     #[test]

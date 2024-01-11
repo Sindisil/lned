@@ -106,6 +106,7 @@ impl Cmd {
             Some("d") => parse_no_args(&mut graphemes, Cmd::Delete(address)),
             Some("e") => parse_edit_cmd(&mut graphemes, address),
             Some("f") => parse_file_cmd(&mut graphemes, address),
+            Some("g") => parse_global_cmd(&mut graphemes, address, previous_pattern, input),
             Some("n") => parse_no_args(&mut graphemes, Cmd::Enumerate(address)),
             None | Some("\n" | "\r\n") => Ok(Cmd::Null(address)),
             Some("p") => parse_no_args(&mut graphemes, Cmd::Print(address)),
