@@ -198,7 +198,34 @@ remembered filename is printed to stdout.
 
 The current line is not affected by this command.
 
-'n' (number, or enumerate)
+### 'g' (global)
+
+#### Syntax
+
+(1,$)g/__RE__/__commands__
+
+#### Behavior
+
+The g command will first note every line matching the specified regex, then,
+working from beginning to end, the command list will be executed for each
+matching line, with the current line set to the address of that line. Any
+matched line modified by the command list will be removed from the list of
+matching lines. Any error will immediately stop execution. Any character other
+than ' ' (space) or '\n' (new line) may be used instead of '/' to delimit the
+regex, and within the regex the delimiter may be used as a literal character if
+escaped by a '\' character.
+
+Unless errors are encountered, the current line will eventually be set to the
+value assigned by the lastcommand in the command list. If there were no
+matching lines, the current line will not change.
+
+The first command in the command list must appear on the same line as the global
+command. All additional lines in the command list but the last must be backslash
+terminated to escape the line terminator.
+
+The list of permitted commands in a global command list includes either of
+'n' or 'p'. If no command is provided, it will be interpreted as if a 'p' command
+were given.
 
 #### Syntax
 
