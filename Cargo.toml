@@ -7,6 +7,7 @@ edition = "2021"
 [dependencies]
 lexopt = "0.3.0"
 regex = "1.8.1"
+unicode-segmentation = "1.10.1"
 wild = "2.1.0"
 
 [lints.clippy]

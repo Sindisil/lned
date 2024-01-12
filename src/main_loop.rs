@@ -8,10 +8,6 @@ use std::io::{self, prelude::*};
 pub enum Error {
     /// I/O Error writing output
     WriteOutput(io::Error),
-    /// I/O Error reading command input
-    ReadCommand(io::Error),
-    /// I/O Error reading input lines
-    ReadLines(io::Error),
     ParseCmd(command::Error),
     BufferCmd(edit_buffer::Error),
 }
@@ -22,8 +18,6 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
-            Error::ReadCommand(e) => write!(f, "Error reading command: {e}"),
-            Error::ReadLines(e) => write!(f, "{e} reading input lines"),
             Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
             Error::BufferCmd(e) => write!(f, "buffer command error: {e}"),
         }
@@ -37,7 +31,6 @@ where
 {
     let mut buffer = EditBuffer::new();
 
-    let mut cmd_buf = String::new();
     let mut prev_command: Option<Cmd> = None;
     let mut previous_pattern: Option<regex::Regex> = None;
 
@@ -47,24 +40,14 @@ where
         // write prompt
         write_prompt(&mut output)?;
 
-        // read command
-        cmd_buf.clear();
-        read_command(&mut input, &mut cmd_buf)?;
-
-        let mut cmd_chars = cmd_buf.chars().peekable();
-
-        Cmd::parse(&mut cmd_chars, &mut buffer, &mut previous_pattern)
+        Cmd::read(&mut input, &mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
             .and_then(|cmd| {
                 let res = match &cmd {
                     // dispatch editor commands
-                    Cmd::Append(address) => {
-                        let mut lines = Vec::new();
-                        let _line_count = read_lines(&mut input, &mut lines)?;
-                        buffer
-                            .do_append(&mut output, *address, lines)
-                            .map_err(Error::BufferCmd)
-                    }
+                    Cmd::Append(address) => buffer
+                        .do_append(&mut input, &mut output, *address)
+                        .map_err(Error::BufferCmd),
                     Cmd::Delete(address) => buffer
                         .do_delete(&mut output, *address)
                         .map_err(Error::BufferCmd),
@@ -77,6 +60,7 @@ where
                     Cmd::File(filename) => buffer
                         .do_file(&mut output, filename.as_deref())
                         .map_err(Error::BufferCmd),
+                    Cmd::Global(_adress, _pattern, _commands) => todo!(),
                     Cmd::Null(address) => buffer
                         .do_null(&mut output, *address)
                         .map_err(Error::BufferCmd),
@@ -135,38 +119,9 @@ where
     Ok(())
 }
 
-fn read_command<R>(mut input: R, cmd_buf: &mut String) -> Result<usize, Error>
-where
-    R: BufRead,
-{
-    input.read_line(cmd_buf).map_err(Error::ReadCommand)
-}
-
-// Read lines of text input until a line with a single . is entered
-// Clears previous content of buffer, but doesn't shrink capacity.
-// Returns a Vec of all lines entered *except* the terminating line
-// containing a single dot.
-fn read_lines<R>(reader: &mut R, buf: &mut Vec<String>) -> Result<usize, Error>
-where
-    R: BufRead,
-{
-    let mut line = String::new(); // single line input buffer
-    buf.clear(); // get rid of any old input
-
-    loop {
-        reader.read_line(&mut line).map_err(Error::ReadLines)?;
-        if line == ".\n" || line == ".\r\n" {
-            return Ok(buf.len());
-        }
-        buf.push(line);
-        line = String::new();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use io::BufReader;
 
     use crate::cli::CmdArgs;
 
@@ -204,77 +159,6 @@ mod tests {
         let mut output = Vec::new();
         write_prompt(&mut output).expect("write should never fail");
         assert_eq!(b":", &output[..]);
-    }
-
-    /////
-    // read_command() tests
-
-    #[test]
-    fn read_command_io_error_gives_correct_error() {
-        let input = BadReader {};
-        let mut input = BufReader::new(input);
-        let mut cmd = String::new();
-        let _res = read_command(&mut input, &mut cmd);
-        assert!(matches!(Err::<Error, _>(Error::ReadCommand), _res));
-    }
-
-    #[test]
-    fn read_command_returns_input() {
-        let cmd_input = "q\n";
-        let mut input = Vec::new();
-        input.extend(cmd_input.bytes());
-        let mut cmd_ret = String::new();
-        let len = read_command(&input[..], &mut cmd_ret).expect("Error reading command string");
-        assert_eq!(2, len);
-        assert_eq!(cmd_input.trim(), cmd_ret.trim());
-    }
-
-    #[test]
-    fn read_line_io_error_gives_correct_error() {
-        let input = BadReader {};
-        let mut input = BufReader::new(input);
-        let mut lines = Vec::new();
-        let _line_count = read_lines(&mut input, &mut lines);
-        assert!(matches!(Err::<Error, _>(Error::ReadLines), _line_count));
-    }
-
-    #[test]
-    fn read_lines_with_no_input_gives_zero_lines() {
-        let input = b".\n";
-        let mut lines = Vec::new();
-        let line_count = read_lines(&mut &input[..], &mut lines).expect("Error reading lines");
-        assert_eq!(0, line_count);
-        assert_eq!(0, lines.len());
-    }
-
-    #[test]
-    fn read_lines_returns_lines_entered() {
-        let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\n"];
-        let mut input = Vec::new();
-        for line in &three_lines {
-            input.extend(line.as_bytes());
-        }
-        let mut lines = Vec::new();
-        let line_count = read_lines(&mut &input[..], &mut lines).expect("Error reading lines");
-
-        assert_eq!(3, line_count);
-        assert_eq!(3, lines.len());
-        assert_eq!(three_lines[..3], lines);
-    }
-
-    #[test]
-    fn read_lines_returns_lines_entered_crlf() {
-        let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\r\n"];
-        let mut input = Vec::new();
-        for line in &three_lines {
-            input.extend(line.as_bytes());
-        }
-        let mut lines = Vec::new();
-        let line_count = read_lines(&mut &input[..], &mut lines).expect("Error reading lines");
-
-        assert_eq!(3, line_count);
-        assert_eq!(3, lines.len());
-        assert_eq!(three_lines[..3], lines);
     }
 
     /////

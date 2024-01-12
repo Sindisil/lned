@@ -1,11 +1,11 @@
 #[cfg(target_has_atomic = "64")]
-mod char_utils;
 mod cli;
 mod command;
 mod edit_buffer;
 mod iter_utils;
 mod main_loop;
 mod num_utils;
+mod str_utils;
 
 use std::io;
 
