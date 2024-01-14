@@ -52,45 +52,32 @@ where
             .and_then(|cmd| {
                 let res = match &cmd {
                     // dispatch editor commands
-                    Cmd::Append(address) => buffer
-                        .do_append(&mut input, &mut output, *address)
-                        .map_err(Error::BufferCmd),
-                    Cmd::Delete(address) => buffer
-                        .do_delete(&mut output, *address)
-                        .map_err(Error::BufferCmd),
-                    Cmd::Edit(file) => buffer
-                        .do_edit(&mut output, file.as_deref(), prev_command.as_ref())
-                        .map_err(Error::BufferCmd),
-                    Cmd::Enumerate(address) => buffer
-                        .do_enumerate(&mut output, *address)
-                        .map_err(Error::BufferCmd),
-                    Cmd::File(filename) => buffer
-                        .do_file(&mut output, filename.as_deref())
-                        .map_err(Error::BufferCmd),
-                    Cmd::Global(address, pattern, commands) => buffer
-                        .do_global(
-                            &mut output,
-                            *address,
-                            pattern,
-                            commands,
-                            &mut previous_pattern,
-                        )
-                        .map_err(Error::BufferCmd),
-                    Cmd::Null(address) => buffer
-                        .do_null(&mut output, *address)
-                        .map_err(Error::BufferCmd),
-                    Cmd::Print(address) => buffer
-                        .do_print(&mut output, *address)
-                        .map_err(Error::BufferCmd),
+                    Cmd::Append(address) => buffer.do_append(&mut input, &mut output, *address),
+                    Cmd::Delete(address) => buffer.do_delete(&mut output, *address),
+                    Cmd::Edit(file) => {
+                        buffer.do_edit(&mut output, file.as_deref(), prev_command.as_ref())
+                    }
+                    Cmd::Enumerate(address) => buffer.do_enumerate(&mut output, *address),
+                    Cmd::File(filename) => buffer.do_file(&mut output, filename.as_deref()),
+                    Cmd::Global(address, pattern, commands) => buffer.do_global(
+                        &mut output,
+                        *address,
+                        pattern,
+                        commands,
+                        &mut previous_pattern,
+                    ),
+                    Cmd::Null(address) => buffer.do_null(&mut output, *address),
+                    Cmd::Print(address) => buffer.do_print(&mut output, *address),
                     Cmd::Quit => do_quit(&mut output, &buffer, &prev_command).map(|ok_to_exit| {
                         done = ok_to_exit;
                     }),
-                    Cmd::Write(address, filename) => buffer
-                        .do_write(&mut output, *address, filename.as_deref())
-                        .map_err(Error::BufferCmd),
-                    Cmd::Undo => buffer.do_undo(&mut output).map_err(Error::BufferCmd),
-                    Cmd::Redo => buffer.do_redo(&mut output).map_err(Error::BufferCmd),
-                };
+                    Cmd::Write(address, filename) => {
+                        buffer.do_write(&mut output, *address, filename.as_deref())
+                    }
+                    Cmd::Undo => buffer.do_undo(&mut output),
+                    Cmd::Redo => buffer.do_redo(&mut output),
+                }
+                .map_err(Error::BufferCmd);
                 prev_command = Some(cmd);
                 res
             })
@@ -103,7 +90,7 @@ fn do_quit<W>(
     output: &mut W,
     buffer: &EditBuffer,
     prev_command: &Option<Cmd>,
-) -> Result<bool, Error>
+) -> Result<bool, edit_buffer::Error>
 where
     W: Write,
 {
@@ -113,7 +100,7 @@ where
             output,
             "Unwritten changes - repeat quit command to discard changes."
         )
-        .map_err(Error::WriteOutput)?;
+        .map_err(edit_buffer::Error::WriteOutput)?;
     }
     Ok(ok)
 }
