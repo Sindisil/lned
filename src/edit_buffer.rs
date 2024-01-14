@@ -259,7 +259,11 @@ impl EditBuffer {
         let mut line = String::new();
         let mut bytes_read = 0;
         loop {
-            let len = reader.read_line(&mut line).map_err(Error::Read)?;
+            //            let len = reader.read_line(&mut line).map_err(Error::Read)?;
+            let len = reader.read_line(&mut line).map_err(|e| {
+                self.text.clear();
+                Error::Read(e)
+            })?;
             if len == 0 {
                 break;
             }
@@ -387,7 +391,7 @@ impl EditBuffer {
                 }
                 .map_err(Error::FileOpen)?;
 
-                self.read_replace(output, source, data)
+                self.read_replace(output, source, Some(data))
             }
             Op::Inverse(inner) => self.revert(output, inner),
         }
@@ -416,17 +420,18 @@ impl EditBuffer {
         }
     }
 
-    fn read_replace(
+    pub fn read_replace(
         &mut self,
         output: &mut impl Write,
         source: Option<impl BufRead>,
-        data: &mut EditData,
+        data: Option<&mut EditData>,
     ) -> Result<(), Error> {
-        if data.lines_removed.is_empty() {
-            data.lines_removed.append(&mut self.text);
-        } else {
-            self.text.clear();
+        if let Some(data) = data {
+            if data.lines_removed.is_empty() {
+                data.lines_removed.append(&mut self.text);
+            }
         }
+        self.text.clear();
 
         if let Some(source) = source {
             let ret = self.read(0, source)?;
@@ -2323,7 +2328,7 @@ mod tests {
         let mut data = EditData {
             ..Default::default()
         };
-        let res = buffer.read_replace(&mut output, source, &mut data);
+        let res = buffer.read_replace(&mut output, source, Some(&mut data));
         assert!(matches!(res, Err(Error::Read(_))));
     }
 
@@ -2337,7 +2342,7 @@ mod tests {
             ..Default::default()
         };
         buffer
-            .read_replace(&mut output, source, &mut data)
+            .read_replace(&mut output, source, Some(&mut data))
             .expect("no error");
         assert_eq!(buffer[..], Vec::<String>::new());
     }
@@ -2354,7 +2359,7 @@ mod tests {
             ..Default::default()
         };
         buffer
-            .read_replace(&mut output, source, &mut data)
+            .read_replace(&mut output, source, Some(&mut data))
             .expect("no error");
         assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
         assert_eq!(buffer.current_line(), 3usize);
@@ -2372,7 +2377,7 @@ mod tests {
             ..Default::default()
         };
         buffer
-            .read_replace(&mut output, source, &mut data)
+            .read_replace(&mut output, source, Some(&mut data))
             .expect("no error");
         assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
         assert_eq!(buffer.current_line(), 3usize);
@@ -2390,7 +2395,7 @@ mod tests {
             ..Default::default()
         };
         buffer
-            .read_replace(&mut output, source, &mut data)
+            .read_replace(&mut output, source, Some(&mut data))
             .expect("no error");
         assert_eq!(&output[..], &b"14\n"[..]);
     }

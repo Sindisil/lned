@@ -1,8 +1,9 @@
+use std::fmt;
+use std::io::{self, prelude::*};
+
 use crate::cli;
 use crate::command::{self, Cmd};
 use crate::edit_buffer::{self, EditBuffer};
-use std::fmt;
-use std::io::{self, prelude::*};
 
 #[derive(Debug)]
 pub enum Error {
@@ -24,7 +25,7 @@ impl fmt::Display for Error {
     }
 }
 
-pub(crate) fn run<R, W>(mut input: R, mut output: W, _args: &cli::CmdArgs) -> Result<(), Error>
+pub(crate) fn run<R, W>(mut input: R, mut output: W, args: &cli::CmdArgs) -> Result<(), Error>
 where
     R: BufRead,
     W: Write,
@@ -33,6 +34,12 @@ where
 
     let mut prev_command: Option<Cmd> = None;
     let mut previous_pattern: Option<regex::Regex> = None;
+
+    if let Some(file) = &args.file {
+        buffer
+            .do_edit(&mut output, Some(file), prev_command.as_ref())
+            .or_else(|e| writeln!(output, "{e}").map_err(Error::WriteOutput))?;
+    }
 
     // Accept and process commands until fatal error or exit
     let mut done = false;
@@ -124,6 +131,7 @@ mod tests {
     use super::*;
 
     use crate::cli::CmdArgs;
+    use std::path::PathBuf;
 
     struct BadWriter {}
 
@@ -216,5 +224,35 @@ mod tests {
             &output[..],
             &b":buffer command error: invalid address\n:"[..],
         );
+    }
+
+    #[test]
+    fn file_on_cmd_line() {
+        let args = cli::CmdArgs {
+            file: Some(
+                ["test", "assets", "text_with_final_eol.txt"]
+                    .iter()
+                    .collect::<PathBuf>(),
+            ),
+        };
+        let mut input = "q\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &args).expect("should exit");
+        assert!(std::str::from_utf8(output.as_slice())
+            .unwrap()
+            .contains("312\n"));
+    }
+
+    #[test]
+    fn file_on_cmd_line_not_found() {
+        let args = cli::CmdArgs {
+            file: Some(PathBuf::from("not_a_file")),
+        };
+        let mut input = "q\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &args).expect("should exit");
+        assert!(std::str::from_utf8(output.as_slice())
+            .unwrap()
+            .contains("cannot find"));
     }
 }
