@@ -41,10 +41,6 @@ impl UndoStack {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.undo.is_empty()
-    }
-
     /// Push the supplied Undoable onto the undo stack.
     ///
     /// If the pushed item doesn't yet have an id value, it
@@ -180,13 +176,13 @@ mod tests {
     #[test]
     fn create_new_undo_stack() {
         let s = UndoStack::new();
-        assert!(s.is_empty());
+        assert!(s.undo.is_empty());
     }
 
     #[test]
     fn undo_stack_empty_fingerprint() {
         let s = UndoStack::new();
-        assert!(s.is_empty());
+        assert!(s.undo.is_empty());
         assert!(s.fingerprint().is_none());
     }
 
@@ -203,12 +199,12 @@ mod tests {
         }));
         let fp2 = s.fingerprint();
         assert!(fp2.is_some() && fp1 != fp2);
-        assert!(!s.is_empty());
+        assert!(!s.undo.is_empty());
         s.pop_undo();
         assert!(s.fingerprint() == fp1);
         s.pop_undo();
         assert!(s.fingerprint().is_none());
-        assert!(s.is_empty());
+        assert!(s.undo.is_empty());
     }
 
     #[test]
@@ -227,15 +223,15 @@ mod tests {
             current_line: 1,
         });
 
-        assert!(s.is_empty());
+        assert!(s.undo.is_empty());
         assert!(s.pop_undo().is_none());
         assert!(s.pop_redo().is_none());
         s.push_undo(o_app.clone());
-        assert!(!s.is_empty());
+        assert!(!s.undo.is_empty());
         s.push_undo(o_del.clone());
-        assert!(!s.is_empty());
+        assert!(!s.undo.is_empty());
         let ret1 = s.pop_undo();
-        assert!(!s.is_empty());
+        assert!(!s.undo.is_empty());
         let u1 = ret1.unwrap();
         assert!(matches!(*u1, Op::Delete(_)));
         s.push_redo(u1);
@@ -255,6 +251,6 @@ mod tests {
         assert!(s.pop_undo().is_some());
         assert!(s.pop_undo().is_some());
         assert!(s.pop_undo().is_none());
-        assert!(s.is_empty());
+        assert!(s.undo.is_empty());
     }
 }

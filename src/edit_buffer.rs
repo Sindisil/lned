@@ -1984,7 +1984,12 @@ mod tests {
 
         buffer.do_undo(&mut output).expect("undone Append");
         assert_eq!(&expected_final[..], &buffer[..]);
-        assert!(buffer.undo_stack.is_empty());
+
+        buffer
+            .do_undo(&mut output)
+            .expect("no error, though stack should be empty");
+        // Undo stack should be empty here, so buffer shouldn't change
+        assert_eq!(&expected_final[..], &buffer[..]);
     }
 
     #[test]
