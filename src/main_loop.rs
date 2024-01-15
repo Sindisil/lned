@@ -234,7 +234,7 @@ mod tests {
         let mut input = "q\n".as_bytes();
         let mut output = Vec::new();
         run(&mut input, &mut output, &args).expect("should exit");
-        assert!(str::from_utf8(output.as_slice()).unwrap().contains("312\n"));
+        assert!(str::from_utf8(&output[..]).unwrap().contains("312\n"));
     }
 
     #[test]
@@ -245,7 +245,7 @@ mod tests {
         let mut input = "q\n".as_bytes();
         let mut output = Vec::new();
         run(&mut input, &mut output, &args).expect("should exit");
-        assert!(str::from_utf8(output.as_slice())
+        assert!(str::from_utf8(&output[..])
             .unwrap()
             .contains("cannot find"));
     }
