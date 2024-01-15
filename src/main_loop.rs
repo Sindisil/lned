@@ -127,6 +127,7 @@ mod tests {
 
     use crate::cli::CmdArgs;
     use std::path::PathBuf;
+    use std::str;
 
     struct BadWriter {}
 
@@ -233,9 +234,7 @@ mod tests {
         let mut input = "q\n".as_bytes();
         let mut output = Vec::new();
         run(&mut input, &mut output, &args).expect("should exit");
-        assert!(std::str::from_utf8(output.as_slice())
-            .unwrap()
-            .contains("312\n"));
+        assert!(str::from_utf8(output.as_slice()).unwrap().contains("312\n"));
     }
 
     #[test]
@@ -246,8 +245,127 @@ mod tests {
         let mut input = "q\n".as_bytes();
         let mut output = Vec::new();
         run(&mut input, &mut output, &args).expect("should exit");
-        assert!(std::str::from_utf8(output.as_slice())
+        assert!(str::from_utf8(output.as_slice())
             .unwrap()
             .contains("cannot find"));
+    }
+
+    #[test]
+    fn append_cmd_dispatch() {
+        let mut input = "a\none\ntwo\nthree\n.\n2p\nq\nq\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default())
+            .expect("should append 3 lines, print second, exit");
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("two\n"));
+        assert!(output.contains("Unwritten changes"));
+        assert!(!output.contains("one"));
+    }
+
+    #[test]
+    fn delete_cmd_dispatch() {
+        let mut input = "a\none\ntwo\nthree\n.\n1,2d\np\nd\np\nq\nq\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default())
+            .expect("should append 3 linesdelete first two, print remaining, exit");
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("three"));
+        assert!(output.contains("invalid address"));
+    }
+
+    #[test]
+    fn edit_cmd_dispatch() {
+        let mut input = "e test/assets/text_with_final_eol.txt\nq\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default()).expect("should edit file then quit");
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("312"));
+    }
+
+    #[test]
+    fn enumerate_cmd_dispatch() {
+        let mut input = "a\none\ntwo\nthree\n.\n2,3n\nq\nq\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default())
+            .expect("should append 3 lines, enumerate last two, exit");
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("2  two\n3  three\n"));
+    }
+
+    #[test]
+    fn file_cmd_dispatch() {
+        let mut input = "f\nf new_file_name.txt\nq\n".as_bytes();
+        let mut output = Vec::new();
+        let args = CmdArgs {
+            file: Some(PathBuf::from("test/assets/text_with_final_eol.txt")),
+        };
+        run(&mut input, &mut output, &args).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("test/assets/text_with_final_eol.txt"));
+        assert!(output.contains("new_file_name.txt"));
+    }
+
+    #[test]
+    fn global_cmd_dispatch() {
+        let mut input = "a\none\ntwo\nthree\nfour\nfive\n.\ng/e$/n\nq\nq\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("1  one\n3  three\n5  five\n"));
+    }
+
+    #[test]
+    fn null_cmd_dispatch() {
+        let mut input = "a\r\none\r\ntwo\r\nthree\r\n.\r\n1\r\n\r\nq\r\nq\r\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("two"));
+    }
+
+    #[test]
+    fn print_cmd_dispatch() {
+        let mut input = "a\none\ntwo\nthree\n.\n1,2p\nq\nq\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("one\ntwo\n"));
+    }
+
+    #[test]
+    fn quit_cmd_dispatch() {
+        let mut input = "q\r\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default()).expect("should exit w/o error");
+        assert!(str::from_utf8(&output[..]).unwrap() == ":");
+    }
+
+    #[test]
+    fn write_cmd_dispatch() {
+        let mut input = "a\none\n.\nw\nq\nq\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("No filename"));
+    }
+
+    #[test]
+    fn undo_cmd_dispatch() {
+        let mut input = "a\n1\n2\n3\n.\n2,3d\np\nu\np\nu\nq\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("1\n"));
+        assert!(output.contains("3\n"));
+    }
+
+    #[test]
+    fn redo_cmd_dispatch() {
+        let mut input = "a\n1\n2\n3\n.\n2,3d\nu\nU\n3p\nq\nq\n".as_bytes();
+        let mut output = Vec::new();
+        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("invalid address"));
+        assert!(output.contains("Unwritten changes"));
     }
 }

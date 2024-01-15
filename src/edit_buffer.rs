@@ -8,7 +8,6 @@ mod undo_stack;
 use core::cmp::Ordering;
 use core::fmt::{self, Display, Formatter};
 use core::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
-use core::slice::Iter;
 use std::borrow::ToOwned;
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
@@ -173,12 +172,9 @@ impl EditBuffer {
     /// lines of text. Specifying a capacity is useful to reduce the number
     /// of reallocations necessary as lines are added to the `EditBuffer`.
     ///
-    /// The capacity can be queried with the [`capacity`] method.
-    ///
     /// If the capacity given is `0`, this will be identical to the [`new`]
     /// method, and no allocation will occur.
     ///
-    /// [`capacity`]: EditBuffer::capacity
     /// [`new`]: EditBuffer::new
     ///
     #[inline]
@@ -191,11 +187,6 @@ impl EditBuffer {
     }
 
     #[must_use]
-    /// Returns this `EditBuffer`'s capacity, in bytes.
-    pub fn capacity(&self) -> usize {
-        self.text.capacity()
-    }
-
     /// Returns this `EditBuffer`'s length, in lines.
     pub fn len(&self) -> usize {
         self.text.len()
@@ -332,10 +323,6 @@ impl EditBuffer {
             self.clean_fingerprint = self.undo_stack.fingerprint();
         }
         Ok(())
-    }
-
-    fn iter(&self) -> Iter<'_, String> {
-        self.text.iter()
     }
 
     fn execute(&mut self, output: &mut impl Write, op: &mut Op) -> Result<(), Error> {
@@ -564,7 +551,7 @@ impl EditBuffer {
             self.filename = Some(filename.to_owned());
         }
 
-        match &self.filename {
+        match self.filename() {
             None => output
                 .write_all(b"No current filename\n")
                 .map_err(Error::WriteOutput),
@@ -721,11 +708,7 @@ where
     I: IntoIterator<Item = T>,
     T: AsRef<str>,
 {
-    let native_eol = if std::env::consts::FAMILY == "windows" {
-        "\r\n"
-    } else {
-        "\n"
-    };
+    let native_eol = compute_native_eol();
     let mut crlf = 0;
     let mut lf = 0;
 
@@ -883,7 +866,7 @@ mod tests {
     #[test]
     fn new_buffer_has_zero_capacity() {
         let buffer = EditBuffer::new();
-        assert_eq!(buffer.capacity(), 0);
+        assert_eq!(buffer.text.capacity(), 0);
     }
 
     #[test]
@@ -902,7 +885,7 @@ mod tests {
     fn buffer_with_capacity_has_correct_capacity() {
         const INIT_CAPACITY: usize = 1024;
         let buffer = EditBuffer::with_capacity(INIT_CAPACITY);
-        assert_eq!(buffer.capacity(), INIT_CAPACITY);
+        assert_eq!(buffer.text.capacity(), INIT_CAPACITY);
     }
 
     #[test]
@@ -918,6 +901,7 @@ mod tests {
         let buf_partially_terminated = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert_eq!(buf_partially_terminated[..], buf_fully_terminated[..]);
         assert!(buf_non_terminated
+            .text
             .iter()
             .all(|l| l.ends_with("\r\n") || l.ends_with('\n')));
     }
@@ -1984,7 +1968,12 @@ mod tests {
 
         buffer.do_undo(&mut output).expect("undone Append");
         assert_eq!(&expected_final[..], &buffer[..]);
-        assert!(buffer.undo_stack.is_empty());
+
+        buffer
+            .do_undo(&mut output)
+            .expect("no error, though stack should be empty");
+        // Undo stack should be empty here, so buffer shouldn't change
+        assert_eq!(&expected_final[..], &buffer[..]);
     }
 
     #[test]
