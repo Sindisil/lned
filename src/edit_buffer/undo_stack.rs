@@ -54,7 +54,7 @@ impl UndoStack {
     ///
     /// This will preserve full history, including the undo
     /// commands issued before the current change.
-    pub fn push_undo<T: Into<Undoable>>(&mut self, item: T) {
+    pub fn push_undo(&mut self, item: impl Into<Undoable>) {
         let mut item = item.into();
         if item.id.is_none() {
             item.id = Some(INST_COUNTER.fetch_add(1, Ordering::SeqCst));

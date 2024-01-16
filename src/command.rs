@@ -122,10 +122,10 @@ impl Cmd {
     }
 }
 
-fn parse_write_cmd<'a, I>(graphemes: &mut I, address: Option<Address>) -> Result<Cmd, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+fn parse_write_cmd<'a>(
+    graphemes: &mut impl Iterator<Item = &'a str>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
     match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(Cmd::Write(address, None)),
         Some(s) if s.is_blank() => {
@@ -144,10 +144,10 @@ where
     }
 }
 
-fn parse_edit_cmd<'a, I>(graphemes: &mut I, address: Option<Address>) -> Result<Cmd, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+fn parse_edit_cmd<'a>(
+    graphemes: &mut impl Iterator<Item = &'a str>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
     if address.is_some() {
         return Err(Error::UnexpectedAddress);
     }
@@ -169,14 +169,11 @@ where
     }
 }
 
-fn eval_address<'a, I>(
-    graphemes: &mut Peekable<I>,
+fn eval_address<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
     buffer: &mut EditBuffer,
     previous_pattern: &mut Option<Regex>,
-) -> Result<Option<Address>, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+) -> Result<Option<Address>, Error> {
     let mut left = None;
     let mut right = None;
 
@@ -274,18 +271,17 @@ where
     )
 }
 
-fn eval_line_number<'a, I>(graphemes: &mut Peekable<I>, line: usize) -> Result<usize, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+fn eval_line_number<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+    line: usize,
+) -> Result<usize, Error> {
     let offset = compute_line_offset(graphemes)?;
     line.checked_add_signed(offset).ok_or(Error::OffsetOverflow)
 }
 
-fn parse_pattern<'a, I>(graphemes: &mut Peekable<I>) -> Result<String, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+fn parse_pattern<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+) -> Result<String, Error> {
     let delimiter = graphemes
         .next_if(|gr| *gr != "\n" && *gr != "\r\n" && *gr != " ")
         .ok_or(Error::InvalidPatternDelimiter)?;
@@ -308,10 +304,9 @@ where
     Ok(pattern)
 }
 
-fn compute_line_offset<'a, I>(graphemes: &mut Peekable<I>) -> Result<isize, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+fn compute_line_offset<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+) -> Result<isize, Error> {
     let mut total_offset = 0isize;
     while let Some(s) = graphemes.peek() {
         match *s {
@@ -357,20 +352,19 @@ fn parse_no_address(address: Option<Address>, cmd: Cmd) -> Result<Cmd, Error> {
     address.map_or(Ok(cmd), |_| Err(Error::UnexpectedAddress))
 }
 
-fn parse_no_args<'a, I>(graphemes: &mut I, cmd: Cmd) -> Result<Cmd, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+fn parse_no_args<'a>(
+    graphemes: &mut impl Iterator<Item = &'a str>,
+    cmd: Cmd,
+) -> Result<Cmd, Error> {
     match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(cmd),
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
 
-fn parse_number<'a, I>(graphemes: &mut Peekable<I>) -> Result<usize, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+fn parse_number<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+) -> Result<usize, Error> {
     graphemes
         .peeking_take_while(|s| s.chars().next().is_some_and(|c| c.is_ascii_digit()))
         .try_fold(0usize, |acc, s| {
@@ -382,10 +376,10 @@ where
         .ok_or(Error::NumberParse)
 }
 
-fn parse_file_cmd<'a, I>(graphemes: &mut I, address: Option<Address>) -> Result<Cmd, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+fn parse_file_cmd<'a>(
+    graphemes: &mut impl Iterator<Item = &'a str>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
     if address.is_some() {
         return Err(Error::UnexpectedAddress);
     }
@@ -407,15 +401,12 @@ where
     }
 }
 
-fn parse_global_cmd<'a, I>(
-    graphemes: &mut Peekable<I>,
+fn parse_global_cmd<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
     address: Option<Address>,
     previous_pattern: &mut Option<Regex>,
     input: &mut impl BufRead,
-) -> Result<Cmd, Error>
-where
-    I: Iterator<Item = &'a str>,
-{
+) -> Result<Cmd, Error> {
     let pattern = parse_pattern(graphemes)?;
     if !(pattern.is_empty()) {
         *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);

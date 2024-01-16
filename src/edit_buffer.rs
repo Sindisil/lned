@@ -239,10 +239,7 @@ impl EditBuffer {
     ///    or inserted).
     ///
     /// Returns number of bytes read, or an error if read fails
-    fn read<R>(&mut self, at_line: usize, mut reader: R) -> Result<ReadResult, Error>
-    where
-        R: BufRead,
-    {
+    fn read(&mut self, at_line: usize, mut reader: impl BufRead) -> Result<ReadResult, Error> {
         if at_line > self.text.len() {
             return Err(Error::ReadBadIndex(self.len(), at_line));
         }
@@ -289,16 +286,12 @@ impl EditBuffer {
         }
     }
 
-    fn write<W1, W2>(
+    fn write(
         &mut self,
-        output: &mut W1,
+        output: &mut impl Write,
         address: Option<Address>,
-        destination: &mut W2,
-    ) -> Result<(), Error>
-    where
-        W1: Write,
-        W2: Write,
-    {
+        destination: &mut impl Write,
+    ) -> Result<(), Error> {
         let line_span = address.map_or_else(|| 1usize..=self.len(), |addr| addr.0..=addr.1);
         let full_buffer_write = line_span == (1usize..=self.len());
 
@@ -599,10 +592,11 @@ impl EditBuffer {
         Ok(())
     }
 
-    pub fn do_null<W>(&mut self, output: &mut W, address: Option<Address>) -> Result<(), Error>
-    where
-        W: Write,
-    {
+    pub fn do_null(
+        &mut self,
+        output: &mut impl Write,
+        address: Option<Address>,
+    ) -> Result<(), Error> {
         match address {
             None => {
                 if self.is_empty() || self.current_line == self.len() {
@@ -617,10 +611,11 @@ impl EditBuffer {
         }
     }
 
-    pub fn do_print<W>(&mut self, output: &mut W, address: Option<Address>) -> Result<(), Error>
-    where
-        W: Write,
-    {
+    pub fn do_print(
+        &mut self,
+        output: &mut impl Write,
+        address: Option<Address>,
+    ) -> Result<(), Error> {
         let span = if let Some(Address(b, e)) = address {
             b..=e
         } else {
@@ -668,15 +663,12 @@ impl EditBuffer {
         }
     }
 
-    pub fn do_write<W>(
+    pub fn do_write(
         &mut self,
-        output: &mut W,
+        output: &mut impl Write,
         address: Option<Address>,
         filename: Option<&Path>,
-    ) -> Result<(), Error>
-    where
-        W: Write,
-    {
+    ) -> Result<(), Error> {
         if self.filename.is_none() {
             if filename.is_none() {
                 return Err(Error::NoFilename);
@@ -703,11 +695,7 @@ fn compute_native_eol() -> &'static str {
     }
 }
 
-fn compute_default_eol<I, T>(lines: I) -> &'static str
-where
-    I: IntoIterator<Item = T>,
-    T: AsRef<str>,
-{
+fn compute_default_eol(lines: impl IntoIterator<Item = impl AsRef<str>>) -> &'static str {
     let native_eol = compute_native_eol();
     let mut crlf = 0;
     let mut lf = 0;
@@ -949,10 +937,7 @@ mod tests {
     /////
     // read() tests
 
-    fn new_input_buf<S>(content: &[S]) -> Vec<u8>
-    where
-        S: Deref<Target = str>,
-    {
+    fn new_input_buf(content: &[impl Deref<Target = str>]) -> Vec<u8> {
         let mut input = Vec::new();
         for line in content {
             input.extend(line.bytes());

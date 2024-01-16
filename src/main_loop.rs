@@ -25,11 +25,11 @@ impl fmt::Display for Error {
     }
 }
 
-pub(crate) fn run<R, W>(mut input: R, mut output: W, args: &cli::CmdArgs) -> Result<(), Error>
-where
-    R: BufRead,
-    W: Write,
-{
+pub fn run(
+    mut input: impl BufRead,
+    mut output: impl Write,
+    args: &cli::CmdArgs,
+) -> Result<(), Error> {
     let mut buffer = EditBuffer::new();
 
     let mut prev_command: Option<Cmd> = None;
@@ -86,14 +86,11 @@ where
     Ok(())
 }
 
-fn do_quit<W>(
-    output: &mut W,
+fn do_quit(
+    output: &mut impl Write,
     buffer: &EditBuffer,
     prev_command: &Option<Cmd>,
-) -> Result<bool, edit_buffer::Error>
-where
-    W: Write,
-{
+) -> Result<bool, edit_buffer::Error> {
     let ok = ok_to_exit(prev_command, buffer);
     if !ok {
         writeln!(
@@ -112,10 +109,7 @@ fn ok_to_exit(prev_command: &Option<Cmd>, buffer: &EditBuffer) -> bool {
     }
 }
 
-fn write_prompt<W>(output: &mut W) -> Result<(), Error>
-where
-    W: Write,
-{
+fn write_prompt(output: &mut impl Write) -> Result<(), Error> {
     write!(output, ":").map_err(Error::WriteOutput)?;
     output.flush().map_err(Error::WriteOutput)?;
     Ok(())
@@ -245,9 +239,7 @@ mod tests {
         let mut input = "q\n".as_bytes();
         let mut output = Vec::new();
         run(&mut input, &mut output, &args).expect("should exit");
-        assert!(str::from_utf8(&output[..])
-            .unwrap()
-            .contains("cannot find"));
+        assert!(str::from_utf8(&output[..]).unwrap().contains("cannot find"));
     }
 
     #[test]
