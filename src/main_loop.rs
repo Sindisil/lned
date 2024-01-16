@@ -1,3 +1,5 @@
+/// Main event loop for lned.
+///
 use std::fmt;
 use std::io::{self, prelude::*};
 
@@ -25,6 +27,9 @@ impl fmt::Display for Error {
     }
 }
 
+/// Main event loop.
+///
+/// Handles prompting, command input, command dispatch, and error display.
 pub fn run(
     mut input: impl BufRead,
     mut output: impl Write,
@@ -86,26 +91,26 @@ pub fn run(
     Ok(())
 }
 
+/// Implements quit command.
+///
+/// Displays warning and doesn't actually exit if unwritten
+/// buffer changes are detected.
 fn do_quit(
     output: &mut impl Write,
     buffer: &EditBuffer,
     prev_command: &Option<Cmd>,
 ) -> Result<bool, edit_buffer::Error> {
-    let ok = ok_to_exit(prev_command, buffer);
-    if !ok {
-        writeln!(
-            output,
-            "Unwritten changes - repeat quit command to discard changes."
-        )
-        .map_err(edit_buffer::Error::WriteOutput)?;
-    }
-    Ok(ok)
-}
-
-fn ok_to_exit(prev_command: &Option<Cmd>, buffer: &EditBuffer) -> bool {
     match prev_command {
-        Some(Cmd::Quit) => true,
-        _ => !buffer.is_dirty(),
+        Some(Cmd::Quit) => Ok(true),
+        _ if !buffer.is_dirty() => Ok(true),
+        _ => {
+            writeln!(
+                output,
+                "Unwritten changes - repeat quit command to discard changes."
+            )
+            .map_err(edit_buffer::Error::WriteOutput)?;
+            Ok(false)
+        }
     }
 }
 
@@ -155,38 +160,24 @@ mod tests {
     #[test]
     fn write_prompt_clean_buffer() {
         let mut output = Vec::new();
-        write_prompt(&mut output).expect("write should never fail");
+        write_prompt(&mut output).unwrap();
         assert_eq!(b":", &output[..]);
     }
 
-    /////
-    // ok_to_exit() tests
-
     #[test]
-    fn ok_to_exit_if_prev_cmd_was_quit() {
-        let prev_cmd = Some(Cmd::Quit);
-        let buffer = EditBuffer::new();
-        let safe = ok_to_exit(&prev_cmd, &buffer);
-        assert!(safe);
+    fn do_quit_unchanged() {
+        let input = &b"q\n"[..];
+        let mut output = Vec::new();
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        assert_eq!(&output[..], &b":"[..]);
     }
-
-    #[test]
-    fn ok_to_exit_if_buffer_unchanged() {
-        let prev_cmd = None;
-        let buffer = EditBuffer::new();
-        let safe = ok_to_exit(&prev_cmd, &buffer);
-        assert!(safe);
-    }
-
-    /////
-    // Cmd tests
 
     #[test]
     fn do_quit_twice_exits() {
         let input = b"a\n1\n2\n3\n.\nq\nq\n";
         let mut output = Vec::new();
 
-        run(&mut &input[..], &mut output, &CmdArgs::default()).expect("no error");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         assert_eq!(
             &b"::Unwritten changes - repeat quit command to discard changes.\n:"[..],
             &output[..]
@@ -199,7 +190,7 @@ mod tests {
             b"a\n1\n2\n3\n.\ne a_file_that_is_not_there.ext\ne a_file_that_is_not_there.ext\nq\n";
         let mut output = Vec::new();
 
-        run(&mut &input[..], &mut output, &CmdArgs::default()).expect("no error");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         assert!(&output[..]
             .starts_with(b"::Unwritten changes - repeat edit command to discard changes.\n:"));
     }
@@ -209,7 +200,7 @@ mod tests {
         let input = b"1p\nq\n";
         let mut output = Vec::new();
 
-        run(&mut &input[..], &mut output, &CmdArgs::default()).expect("no error");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         assert_eq!(
             &output[..],
             &b":buffer command error: invalid address\n:"[..],
@@ -225,9 +216,9 @@ mod tests {
                     .collect::<PathBuf>(),
             ),
         };
-        let mut input = "q\n".as_bytes();
+        let input = b"q\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &args).expect("should exit");
+        run(&mut &input[..], &mut output, &args).unwrap();
         assert!(str::from_utf8(&output[..]).unwrap().contains("312\n"));
     }
 
@@ -236,18 +227,17 @@ mod tests {
         let args = cli::CmdArgs {
             file: Some(PathBuf::from("not_a_file")),
         };
-        let mut input = "q\n".as_bytes();
+        let input = b"q\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &args).expect("should exit");
+        run(&mut &input[..], &mut output, &args).unwrap();
         assert!(str::from_utf8(&output[..]).unwrap().contains("cannot find"));
     }
 
     #[test]
     fn append_cmd_dispatch() {
-        let mut input = "a\none\ntwo\nthree\n.\n2p\nq\nq\n".as_bytes();
+        let input = b"a\none\ntwo\nthree\n.\n2p\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default())
-            .expect("should append 3 lines, print second, exit");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("two\n"));
         assert!(output.contains("Unwritten changes"));
@@ -256,10 +246,9 @@ mod tests {
 
     #[test]
     fn delete_cmd_dispatch() {
-        let mut input = "a\none\ntwo\nthree\n.\n1,2d\np\nd\np\nq\nq\n".as_bytes();
+        let input = b"a\none\ntwo\nthree\n.\n1,2d\np\nd\np\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default())
-            .expect("should append 3 linesdelete first two, print remaining, exit");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("three"));
         assert!(output.contains("invalid address"));
@@ -267,31 +256,30 @@ mod tests {
 
     #[test]
     fn edit_cmd_dispatch() {
-        let mut input = "e test/assets/text_with_final_eol.txt\nq\n".as_bytes();
+        let input = b"e test/assets/text_with_final_eol.txt\nq\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default()).expect("should edit file then quit");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("312"));
     }
 
     #[test]
     fn enumerate_cmd_dispatch() {
-        let mut input = "a\none\ntwo\nthree\n.\n2,3n\nq\nq\n".as_bytes();
+        let input = b"a\none\ntwo\nthree\n.\n2,3n\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default())
-            .expect("should append 3 lines, enumerate last two, exit");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("2  two\n3  three\n"));
     }
 
     #[test]
     fn file_cmd_dispatch() {
-        let mut input = "f\nf new_file_name.txt\nq\n".as_bytes();
+        let input = b"f\nf new_file_name.txt\nq\n";
         let mut output = Vec::new();
         let args = CmdArgs {
             file: Some(PathBuf::from("test/assets/text_with_final_eol.txt")),
         };
-        run(&mut input, &mut output, &args).unwrap();
+        run(&mut &input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("test/assets/text_with_final_eol.txt"));
         assert!(output.contains("new_file_name.txt"));
@@ -299,53 +287,53 @@ mod tests {
 
     #[test]
     fn global_cmd_dispatch() {
-        let mut input = "a\none\ntwo\nthree\nfour\nfive\n.\ng/e$/n\nq\nq\n".as_bytes();
+        let input = b"a\none\ntwo\nthree\nfour\nfive\n.\ng/e$/n\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("1  one\n3  three\n5  five\n"));
     }
 
     #[test]
     fn null_cmd_dispatch() {
-        let mut input = "a\r\none\r\ntwo\r\nthree\r\n.\r\n1\r\n\r\nq\r\nq\r\n".as_bytes();
+        let input = b"a\r\none\r\ntwo\r\nthree\r\n.\r\n1\r\n\r\nq\r\nq\r\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("two"));
     }
 
     #[test]
     fn print_cmd_dispatch() {
-        let mut input = "a\none\ntwo\nthree\n.\n1,2p\nq\nq\n".as_bytes();
+        let input = b"a\none\ntwo\nthree\n.\n1,2p\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("one\ntwo\n"));
     }
 
     #[test]
     fn quit_cmd_dispatch() {
-        let mut input = "q\r\n".as_bytes();
+        let input = b"q\r\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default()).expect("should exit w/o error");
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         assert!(str::from_utf8(&output[..]).unwrap() == ":");
     }
 
     #[test]
     fn write_cmd_dispatch() {
-        let mut input = "a\none\n.\nw\nq\nq\n".as_bytes();
+        let input = b"a\none\n.\nw\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("No filename"));
     }
 
     #[test]
     fn undo_cmd_dispatch() {
-        let mut input = "a\n1\n2\n3\n.\n2,3d\np\nu\np\nu\nq\n".as_bytes();
+        let input = b"a\n1\n2\n3\n.\n2,3d\np\nu\np\nu\nq\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("1\n"));
         assert!(output.contains("3\n"));
@@ -353,9 +341,9 @@ mod tests {
 
     #[test]
     fn redo_cmd_dispatch() {
-        let mut input = "a\n1\n2\n3\n.\n2,3d\nu\nU\n3p\nq\nq\n".as_bytes();
+        let input = b"a\n1\n2\n3\n.\n2,3d\nu\nU\n3p\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut input, &mut output, &CmdArgs::default()).unwrap();
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("invalid address"));
         assert!(output.contains("Unwritten changes"));
