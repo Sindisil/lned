@@ -247,9 +247,7 @@ impl EditBuffer {
         let mut line = String::new();
         let mut bytes_read = 0;
         loop {
-            //            let len = reader.read_line(&mut line).map_err(Error::Read)?;
             let len = reader.read_line(&mut line).map_err(|e| {
-                self.text.clear();
                 Error::Read(e)
             })?;
             if len == 0 {
@@ -1251,6 +1249,17 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let res = buffer.read(0, &mut input).expect_err("IO error");
         assert!(matches!(res, Error::Read(_)));
+    }
+
+    #[test]
+    fn read_with_io_error_preserves_text() {
+        let reader = BadReader {};
+        let mut input = BufReader::new(reader);
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let expected = buffer.clone();
+        let res = buffer.read(0, &mut input).expect_err("IO error");
+        assert!(matches!(res, Error::Read(_)));
+        assert_eq!(buffer[..], expected[..]);
     }
 
     /////
