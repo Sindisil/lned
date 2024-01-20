@@ -68,7 +68,7 @@ pub fn parse_args(
 }
 
 impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Error::WroteMessage => write!(f, "message output, no error"),
             Error::NextArg(_) => write!(f, "Error parsing next command line argument"),

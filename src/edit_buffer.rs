@@ -49,7 +49,7 @@ pub enum Error {
 impl std::error::Error for Error {}
 
 impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Error::Read(e) => write!(f, "error reading lines: {e}"),
             Error::ReadBadIndex(sz, i) => write!(

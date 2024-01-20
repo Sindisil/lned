@@ -10,5 +10,8 @@ regex = "1.8.1"
 unicode-segmentation = "1.10.1"
 wild = "2.1.0"
 
+[lints.rust]
+elided_lifetimes_in_paths = "deny"
+
 [lints.clippy]
 pedantic = "warn"

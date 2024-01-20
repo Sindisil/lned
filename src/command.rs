@@ -53,7 +53,7 @@ pub struct Address(pub usize, pub usize);
 impl std::error::Error for Error {}
 
 impl Display for Error {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Error::UnexpectedAddress => write!(f, "Command takes no line address."),
             Error::Unknown(c) => write!(f, "Unknown command '{c}'"),
