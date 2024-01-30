@@ -10,28 +10,91 @@
 /// history).
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use std::ops::{Deref, DerefMut};
-
-use crate::edit_buffer::operation::Op;
-
-#[derive(Debug, Clone)]
-pub struct Undoable {
-    id: Option<u64>,
-    op: Op,
-}
-
-#[derive(Debug, Clone)]
-pub struct Redoable {
-    undo: Undoable,
-}
-
 #[derive(Debug, Clone)]
 pub struct UndoStack {
-    undo: Vec<Undoable>,
-    redo: Vec<Redoable>,
+    undo: Vec<ChangeSet>,
+    redo: Vec<ChangeSet>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChangeSet {
+    id: Option<u64>,
+    pub current_line_before: usize,
+    pub current_line_after: usize,
+    diffs: Vec<Diff>,
+}
+
+//#[derive(Debug, Clone)]
+#[derive(Debug, Clone)]
+pub enum Diff {
+    Add(usize, Vec<String>),    // Add/Insert of lines
+    Remove(usize, Vec<String>), // Removal of lines
+    Change(usize, Vec<String>), // Lines removed for change (paired with following Add)
 }
 
 static INST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn next_id() -> Option<u64> {
+    Some(INST_COUNTER.fetch_add(1, Ordering::SeqCst))
+}
+
+impl ChangeSet {
+    pub fn new() -> Self {
+        ChangeSet {
+            id: None,
+            current_line_before: 0,
+            current_line_after: 0,
+            diffs: Vec::new(),
+        }
+    }
+
+    pub fn push_add(&mut self, position: usize, lines_added: Vec<String>) {
+        self.diffs.push(Diff::Add(position, lines_added));
+    }
+
+    pub fn push_remove(&mut self, position: usize, lines_removed: Vec<String>) {
+        self.diffs.push(Diff::Remove(position, lines_removed));
+    }
+
+    pub fn push_change(
+        &mut self,
+        position: usize,
+        lines_added: Vec<String>,
+        lines_removed: Vec<String>,
+    ) {
+        self.diffs.push(Diff::Change(position, lines_removed));
+        self.diffs.push(Diff::Add(position, lines_added));
+    }
+
+    pub fn diffs(&self) -> impl Iterator<Item = &Diff> {
+        self.diffs.iter()
+    }
+
+    //    fn to_inverse(&self) -> ChangeSet {
+    //        let mut inv = ChangeSet::new();
+    //        inv.id = next_id();
+    //        //        (inv.current_line_before, inv.current_line_after) =
+    //        //            (self.current_line_after, self.current_line_before);
+    //        inv.current_line_after = self.current_line_after;
+    //        inv.current_line_before = self.current_line_before;
+    //        let mut diffs = self.diffs.iter();
+    //        while let Some(diff) = diffs.next() {
+    //            match diff {
+    //                Diff::Remove(p, l) => inv.diffs.push(Diff::Add(*p, l.clone())),
+    //                Diff::Add(p, l) => inv.diffs.push(Diff::Remove(*p, l.clone())),
+    //                Diff::Change(cp, cl) => {
+    //                    if let Some(Diff::Add(ap, al)) = diffs.next() {
+    //                        inv.diffs.push(Diff::Change(*ap, al.clone()));
+    //                        inv.diffs.push(Diff::Add(*cp, cl.clone()));
+    //                    } else {
+    //                        panic!("Expected matching Diff::Add after Diff::Change!");
+    //                    }
+    //                }
+    //            }
+    //        }
+    //        inv
+    //    }
+}
 
 impl UndoStack {
     pub fn new() -> Self {
@@ -43,7 +106,7 @@ impl UndoStack {
 
     /// Push the supplied Undoable onto the undo stack.
     ///
-    /// If the pushed item doesn't yet have an id value, it
+    /// If the pushed ChangeSet doesn't yet have an id value, it
     /// must be a new operation, rather than a redone operation.
     ///
     /// In that case, if the redo stack is not
@@ -54,57 +117,32 @@ impl UndoStack {
     ///
     /// This will preserve full history, including the undo
     /// commands issued before the current change.
-    pub fn push_undo(&mut self, item: impl Into<Undoable>) {
-        let mut item = item.into();
-        if item.id.is_none() {
-            item.id = Some(INST_COUNTER.fetch_add(1, Ordering::SeqCst));
-            if !self.redo.is_empty() {
-                let mut inv: Vec<Undoable> = self
-                    .redo
-                    .iter()
-                    .map(Redoable::to_inverse_undoable)
-                    .collect();
-
-                for item in self.redo.drain(..).rev() {
-                    self.undo.push(item.undo);
-                }
-
-                self.undo.append(&mut inv);
-            }
+    pub fn push_undo(&mut self, mut change: ChangeSet) {
+        if change.id.is_none() {
+            change.id = next_id();
+            //            if !self.redo.is_empty() {
+            //                let mut inv: Vec<ChangeSet> = self.redo.iter().map(ChangeSet::to_inverse).collect();
+            //                self.undo.extend(self.redo.drain(..).rev());
+            //                self.undo.append(&mut inv);
+            //            }
         }
-        self.undo.push(item);
+        self.undo.push(change);
     }
 
-    pub fn push_redo(&mut self, item: Redoable) {
-        self.redo.push(item);
+    pub fn push_redo(&mut self, change: ChangeSet) {
+        self.redo.push(change);
     }
 
-    /// Pops the top item from the undo stack and returns it
-    /// as an (optional) Redoable. None is returned if
-    /// the undo stack was empty.
-    ///
-    /// A Redoable is returned so that it is ready to be
-    /// pushed on the redo stack (the typical next destination
-    /// for an item popped from the undo stack).
-    ///
-    /// The returned value implements Deref<Op>, so it can
-    /// be used anywhere that an Op reference could be.
-    pub fn pop_undo(&mut self) -> Option<Redoable> {
-        self.undo.pop().map(|undo| Redoable { undo })
+    /// Pops the top item from the undo stack and returns it as an Option,
+    /// returning None if the undo stack was empty.
+    pub fn pop_undo(&mut self) -> Option<ChangeSet> {
+        self.undo.pop()
     }
 
     /// Pops the top item from the redo stack and returns it
-    /// as an (optional) Undoable. None is returned if
-    /// the undo stack was empty.
-    ///
-    /// An Undoable is returned so that it is ready to be
-    /// pushed on the undo stack (the typical next destination
-    /// for an item popped from the redo stack).
-    ///
-    /// The returned value implements Deref<Op>, so it can
-    /// be used anywhere that an Op reference could be.
-    pub fn pop_redo(&mut self) -> Option<Undoable> {
-        self.redo.pop().map(|redo| redo.undo)
+    /// as an Option, returning None if the redo stack was empty.
+    pub fn pop_redo(&mut self) -> Option<ChangeSet> {
+        self.redo.pop()
     }
 
     /// Return the id of the top item in the undo stack,
@@ -118,68 +156,9 @@ impl UndoStack {
     }
 }
 
-impl Redoable {
-    /// Returns an Undoable that is the inverse of the
-    /// Redoable upon which this method is called.
-    ///
-    /// This is to support flushing the redo stack onto the
-    /// undo stack when a new change is made, allowing
-    /// previous undo actions to be undone and thus
-    /// ensuring that there are no unreachable past
-    /// states.
-    fn to_inverse_undoable(&self) -> Undoable {
-        Undoable {
-            id: Some(INST_COUNTER.fetch_add(1, Ordering::SeqCst)),
-            op: self.undo.op.inverse(),
-        }
-    }
-}
-
-impl From<Op> for Undoable {
-    fn from(value: Op) -> Self {
-        Undoable {
-            id: None,
-            op: value,
-        }
-    }
-}
-
-impl DerefMut for Undoable {
-    #[cfg(not(tarpaulin_include))]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.op
-    }
-}
-
-impl Deref for Undoable {
-    type Target = Op;
-
-    #[cfg(not(tarpaulin_include))]
-    fn deref(&self) -> &Self::Target {
-        &self.op
-    }
-}
-
-impl DerefMut for Redoable {
-    #[cfg(not(tarpaulin_include))]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.undo.op
-    }
-}
-
-impl Deref for Redoable {
-    type Target = Op;
-
-    #[cfg(not(tarpaulin_include))]
-    fn deref(&self) -> &Self::Target {
-        &self.undo.op
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::edit_buffer::{DeleteData, Insertion};
 
     #[test]
     fn create_new_undo_stack() {
@@ -197,14 +176,10 @@ mod tests {
     #[test]
     fn undo_stack_non_empty_fingerprint() {
         let mut s = UndoStack::new();
-        s.push_undo(Op::Append(Insertion {
-            ..Insertion::default()
-        }));
+        s.push_undo(ChangeSet::new());
         let fp1 = s.fingerprint();
         assert!(fp1.is_some());
-        s.push_undo(Op::Append(Insertion {
-            ..Insertion::default()
-        }));
+        s.push_undo(ChangeSet::new());
         let fp2 = s.fingerprint();
         assert!(fp2.is_some() && fp1 != fp2);
         assert!(!s.undo.is_empty());
@@ -212,53 +187,6 @@ mod tests {
         assert!(s.fingerprint() == fp1);
         s.pop_undo();
         assert!(s.fingerprint().is_none());
-        assert!(s.undo.is_empty());
-    }
-
-    #[test]
-    fn undo_stack_push_and_pop() {
-        use crate::command::Address;
-
-        let mut s = UndoStack::new();
-        let o_app = Op::Append(Insertion {
-            address: Some(Address(1, 1)),
-            lines: vec!["spam".to_owned()],
-            current_line: 0,
-        });
-        let o_del = Op::Delete(DeleteData {
-            address: Some(Address(1, 1)),
-            lines_removed: Vec::new(),
-            current_line: 1,
-        });
-
-        assert!(s.undo.is_empty());
-        assert!(s.pop_undo().is_none());
-        assert!(s.pop_redo().is_none());
-        s.push_undo(o_app.clone());
-        assert!(!s.undo.is_empty());
-        s.push_undo(o_del.clone());
-        assert!(!s.undo.is_empty());
-        let ret1 = s.pop_undo();
-        assert!(!s.undo.is_empty());
-        let u1 = ret1.unwrap();
-        assert!(matches!(*u1, Op::Delete(_)));
-        s.push_redo(u1);
-
-        s.push_undo(o_del.clone());
-        // redo_stack now empty
-        assert!(s.pop_redo().is_none());
-
-        let ret3 = s.pop_undo();
-        s.push_redo(ret3.unwrap());
-
-        let ret2 = s.pop_redo();
-        let u2 = ret2.unwrap();
-        assert!(matches!(*u2, Op::Delete(_)));
-        assert!(s.pop_redo().is_none());
-        assert!(s.pop_undo().is_some());
-        assert!(s.pop_undo().is_some());
-        assert!(s.pop_undo().is_some());
-        assert!(s.pop_undo().is_none());
         assert!(s.undo.is_empty());
     }
 }

@@ -5,20 +5,19 @@
 mod operation;
 mod undo_stack;
 
-use core::cmp::Ordering;
-use core::fmt::{self, Display, Formatter};
-use core::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use std::borrow::ToOwned;
+use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::fmt::{self, Display, Formatter};
+use std::fs::OpenOptions;
+use std::io::{self, BufRead, Write};
+use std::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
 use crate::command::{Address, Cmd};
-use crate::edit_buffer::operation::{DeleteData, EditData, Insertion, Op};
-use crate::edit_buffer::undo_stack::UndoStack;
+use crate::edit_buffer::undo_stack::{ChangeSet, Diff, UndoStack};
 use crate::num_utils::NumUtils;
 
 #[derive(Debug, Clone)]
@@ -277,6 +276,7 @@ impl EditBuffer {
         }
     }
 
+    // fixme - move out into io module or main_loop
     fn write(
         &mut self,
         output: &mut impl Write,
@@ -309,155 +309,154 @@ impl EditBuffer {
         Ok(())
     }
 
-    fn execute(&mut self, output: &mut impl Write, op: &mut Op) -> Result<(), Error> {
-        match op {
-            Op::Append(data) => {
-                let b = data.address.map_or(self.current_line, |addr| addr.1);
+    //    fn execute(&mut self, output: &mut impl Write, op: &mut Op) -> Result<(), Error> {
+    //        match op {
+    //            Op::Append(data) => {
+    //                let b = data.address.map_or(self.current_line, |addr| addr.1);
+    //
+    //                if data.lines.is_empty() {
+    //                    self.current_line = b;
+    //                } else {
+    //                    // set default_eol if neccessary
+    //                    let default_eol = self
+    //                        .default_eol
+    //                        .get_or_insert_with(|| compute_default_eol(&data.lines));
+    //                    self.text.splice(
+    //                        b..b,
+    //                        data.lines.iter().cloned().map(|mut line| {
+    //                            if !(line.ends_with('\n') || line.ends_with("\r\n")) {
+    //                                line.push_str(default_eol);
+    //                            }
+    //                            line
+    //                        }),
+    //                    );
+    //                    self.current_line = b + data.lines.len();
+    //                }
+    //                Ok(())
+    //            }
+    //            Op::Delete(data) => {
+    //                let (b, e) = data
+    //                    .address
+    //                    .map_or((self.current_line, self.current_line), |addr| {
+    //                        (addr.0, addr.1)
+    //                    });
+    //
+    //                if data.lines_removed.is_empty() {
+    //                    data.lines_removed
+    //                        .splice(.., self.text.splice(b - 1..e, None));
+    //                } else {
+    //                    self.text.splice(b - 1..e, None);
+    //                }
+    //                self.current_line = usize::min(self.text.len(), b);
+    //                Ok(())
+    //            }
+    //            Op::Edit(data) => {
+    //                let f = File::open(&data.filename);
+    //                let source = match f {
+    //                    Ok(f) => Ok(Some(BufReader::new(f))),
+    //                    Err(e) => match e.kind() {
+    //                        io::ErrorKind::NotFound => {
+    //                            writeln!(output, "{e}").map_err(Error::WriteOutput)?;
+    //                            Ok(None)
+    //                        }
+    //                        _ => Err(e),
+    //                    },
+    //                }
+    //                .map_err(Error::FileOpen)?;
+    //
+    //                self.read_replace(output, source, Some(data))
+    //            }
+    //            Op::Insert(data) => {
+    //                let b = data.address.map_or(self.current_line, |addr| addr.1);
+    //
+    //                if data.lines.is_empty() {
+    //                    self.current_line = b;
+    //                } else {
+    //                    let b = b.saturating_sub(1); // insert point is before addressed line
+    //                                                 // set default_eol if neccessary
+    //                    let default_eol = self
+    //                        .default_eol
+    //                        .get_or_insert_with(|| compute_default_eol(&data.lines));
+    //                    self.text.splice(
+    //                        b..b,
+    //                        data.lines.iter().cloned().map(|mut line| {
+    //                            if !(line.ends_with('\n') || line.ends_with("\r\n")) {
+    //                                line.push_str(default_eol);
+    //                            }
+    //                            line
+    //                        }),
+    //                    );
+    //                    self.current_line = b + data.lines.len();
+    //                }
+    //                Ok(())
+    //            }
+    //            Op::Inverse(inner) => self.revert(output, inner),
+    //        }
+    //    }
+    //
+    //    fn revert(&mut self, output: &mut impl Write, op: &mut Op) -> Result<(), Error> {
+    //        match op {
+    //            Op::Append(data) => {
+    //                let b = data.address.map_or(data.current_line, |addr| addr.1);
+    //                self.text.splice(b..b + data.lines.len(), None);
+    //                self.current_line = data.current_line;
+    //                Ok(())
+    //            }
+    //            Op::Delete(data) => {
+    //                let b = data.address.map_or(data.current_line, |addr| addr.0) - 1;
+    //                self.text.splice(b..b, data.lines_removed.iter().cloned());
+    //                self.current_line = b + data.lines_removed.len();
+    //                Ok(())
+    //            }
+    //            Op::Edit(data) => {
+    //                self.text.splice(.., data.lines_removed.iter().cloned());
+    //                self.current_line = data.current_line;
+    //                Ok(())
+    //            }
+    //            Op::Insert(data) => {
+    //                let b = data
+    //                    .address
+    //                    .map_or(data.current_line, |addr| addr.1)
+    //                    .saturating_sub(1);
+    //                self.text.splice(b..b + data.lines.len(), None);
+    //                self.current_line = data.current_line;
+    //                Ok(())
+    //            }
+    //            Op::Inverse(inner) => self.execute(output, inner),
+    //        }
+    //    }
+    //
+    //    pub fn read_replace(
+    //        &mut self,
+    //        output: &mut impl Write,
+    //        source: Option<impl BufRead>,
+    //        data: Option<&mut EditData>,
+    //    ) -> Result<(), Error> {
+    //        if let Some(data) = data {
+    //            if data.lines_removed.is_empty() {
+    //                data.lines_removed.append(&mut self.text);
+    //            }
+    //        }
+    //        self.text.clear();
+    //
+    //        if let Some(source) = source {
+    //            let ret = self.read(0, source)?;
+    //            match ret {
+    //                ReadResult::EOLAdded(bytes_read) => {
+    //                    writeln!(output, "missing line terminator appended\n{bytes_read}")
+    //                        .map_err(Error::WriteOutput)?;
+    //                }
+    //                ReadResult::AsIs(bytes_read) => {
+    //                    writeln!(output, "{bytes_read}").map_err(Error::WriteOutput)?;
+    //                }
+    //            }
+    //        }
+    //        Ok(())
+    //    }
 
-                if data.lines.is_empty() {
-                    self.current_line = b;
-                } else {
-                    // set default_eol if neccessary
-                    let default_eol = self
-                        .default_eol
-                        .get_or_insert_with(|| compute_default_eol(&data.lines));
-                    self.text.splice(
-                        b..b,
-                        data.lines.iter().cloned().map(|mut line| {
-                            if !(line.ends_with('\n') || line.ends_with("\r\n")) {
-                                line.push_str(default_eol);
-                            }
-                            line
-                        }),
-                    );
-                    self.current_line = b + data.lines.len();
-                }
-                Ok(())
-            }
-            Op::Delete(data) => {
-                let (b, e) = data
-                    .address
-                    .map_or((self.current_line, self.current_line), |addr| {
-                        (addr.0, addr.1)
-                    });
-
-                if data.lines_removed.is_empty() {
-                    data.lines_removed
-                        .splice(.., self.text.splice(b - 1..e, None));
-                } else {
-                    self.text.splice(b - 1..e, None);
-                }
-                self.current_line = usize::min(self.text.len(), b);
-                Ok(())
-            }
-            Op::Edit(data) => {
-                let f = File::open(&data.filename);
-                let source = match f {
-                    Ok(f) => Ok(Some(BufReader::new(f))),
-                    Err(e) => match e.kind() {
-                        io::ErrorKind::NotFound => {
-                            writeln!(output, "{e}").map_err(Error::WriteOutput)?;
-                            Ok(None)
-                        }
-                        _ => Err(e),
-                    },
-                }
-                .map_err(Error::FileOpen)?;
-
-                self.read_replace(output, source, Some(data))
-            }
-            Op::Insert(data) => {
-                let b = data.address.map_or(self.current_line, |addr| addr.1);
-
-                if data.lines.is_empty() {
-                    self.current_line = b;
-                } else {
-                    let b = b.saturating_sub(1); // insert point is before addressed line
-                                                 // set default_eol if neccessary
-                    let default_eol = self
-                        .default_eol
-                        .get_or_insert_with(|| compute_default_eol(&data.lines));
-                    self.text.splice(
-                        b..b,
-                        data.lines.iter().cloned().map(|mut line| {
-                            if !(line.ends_with('\n') || line.ends_with("\r\n")) {
-                                line.push_str(default_eol);
-                            }
-                            line
-                        }),
-                    );
-                    self.current_line = b + data.lines.len();
-                }
-                Ok(())
-            }
-            Op::Inverse(inner) => self.revert(output, inner),
-        }
-    }
-
-    fn revert(&mut self, output: &mut impl Write, op: &mut Op) -> Result<(), Error> {
-        match op {
-            Op::Append(data) => {
-                let b = data.address.map_or(data.current_line, |addr| addr.1);
-                self.text.splice(b..b + data.lines.len(), None);
-                self.current_line = data.current_line;
-                Ok(())
-            }
-            Op::Delete(data) => {
-                let b = data.address.map_or(data.current_line, |addr| addr.0) - 1;
-                self.text.splice(b..b, data.lines_removed.iter().cloned());
-                self.current_line = b + data.lines_removed.len();
-                Ok(())
-            }
-            Op::Edit(data) => {
-                self.text.splice(.., data.lines_removed.iter().cloned());
-                self.current_line = data.current_line;
-                Ok(())
-            }
-            Op::Insert(data) => {
-                let b = data
-                    .address
-                    .map_or(data.current_line, |addr| addr.1)
-                    .saturating_sub(1);
-                self.text.splice(b..b + data.lines.len(), None);
-                self.current_line = data.current_line;
-                Ok(())
-            }
-            Op::Inverse(inner) => self.execute(output, inner),
-        }
-    }
-
-    pub fn read_replace(
-        &mut self,
-        output: &mut impl Write,
-        source: Option<impl BufRead>,
-        data: Option<&mut EditData>,
-    ) -> Result<(), Error> {
-        if let Some(data) = data {
-            if data.lines_removed.is_empty() {
-                data.lines_removed.append(&mut self.text);
-            }
-        }
-        self.text.clear();
-
-        if let Some(source) = source {
-            let ret = self.read(0, source)?;
-            match ret {
-                ReadResult::EOLAdded(bytes_read) => {
-                    writeln!(output, "missing line terminator appended\n{bytes_read}")
-                        .map_err(Error::WriteOutput)?;
-                }
-                ReadResult::AsIs(bytes_read) => {
-                    writeln!(output, "{bytes_read}").map_err(Error::WriteOutput)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn do_append(
+    pub fn prepare_append(
         &mut self,
         input: &mut impl BufRead,
-        output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<(), Error> {
         if address.is_some_and(|a| a.1 > self.len()) {
@@ -465,69 +464,173 @@ impl EditBuffer {
         }
         let mut lines = Vec::new();
         Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
-        let mut op = Op::Append(Insertion {
-            address,
-            lines,
-            current_line: self.current_line,
-        });
-        let res = self.execute(output, &mut op);
-        self.undo_stack.push_undo(op);
-        res
+        let location = address.map_or(self.current_line, |addr| addr.1);
+        self.do_append(location, lines)
     }
 
-    pub fn do_delete(
-        &mut self,
-        output: &mut impl Write,
-        address: Option<Address>,
-    ) -> Result<(), Error> {
-        let address = match address {
+    fn do_append(&mut self, location: usize, lines: Vec<String>) -> Result<(), Error> {
+        let mut change = ChangeSet::new();
+        change.current_line_before = self.current_line;
+        if lines.is_empty() {
+            self.current_line = location;
+        } else {
+            // set default_eol if neccessary
+            self.default_eol
+                .get_or_insert_with(|| compute_default_eol(&lines));
+            self.text.splice(location..location, lines.iter().cloned());
+            self.current_line = location + lines.len();
+            change.push_add(location, lines);
+        }
+        change.current_line_after = self.current_line;
+        self.undo_stack.push_undo(change);
+        Ok(())
+    }
+
+    pub fn prepare_delete(&mut self, address: Option<Address>) -> Result<(), Error> {
+        match address {
             Some(Address(0, _)) => Err(Error::InvalidAddress),
             None if self.current_line == 0 => Err(Error::InvalidAddress),
-            _ => Ok(address),
-        }?;
-
-        let mut op = Op::Delete(DeleteData {
-            address,
-            lines_removed: Vec::new(),
-            current_line: self.current_line,
-        });
-        let res = self.execute(output, &mut op);
-        self.undo_stack.push_undo(op);
-        res
+            _ => self.do_delete(address),
+        }
     }
 
-    pub fn do_edit(
-        &mut self,
-        output: &mut impl Write,
-        filename: Option<&Path>,
-        prev_command: Option<&Cmd>,
-    ) -> Result<(), Error> {
-        if self.is_dirty() && !matches!(prev_command, Some(Cmd::Edit(_))) {
-            writeln!(
-                output,
-                "Unwritten changes - repeat edit command to discard changes."
-            )
-            .map_err(Error::WriteOutput)?;
-            return Ok(());
-        }
-
-        if let Some(filename) = filename {
-            self.filename = Some(filename.to_owned());
-        }
-        let filename = self.filename.as_ref().ok_or(Error::NoFilename)?;
-
-        let mut op = Op::Edit(EditData {
-            filename: filename.clone(),
-            current_line: self.current_line,
-            lines_removed: Vec::new(),
-            clean_fingerprint: self.clean_fingerprint,
+    pub fn do_delete(&mut self, address: Option<Address>) -> Result<(), Error> {
+        let (b, e) = address.map_or((self.current_line, self.current_line), |addr| {
+            (addr.0, addr.1)
         });
 
-        let res = self.execute(output, &mut op);
-        self.undo_stack.push_undo(op);
-        self.clean_fingerprint = self.undo_stack.fingerprint();
-        res
+        let removed: Vec<String> = self.text.splice(b - 1..e, None).collect();
+
+        let mut change = ChangeSet::new();
+        change.current_line_before = self.current_line;
+        self.current_line = usize::min(self.text.len(), b);
+        change.current_line_after = self.current_line;
+        change.push_remove(b - 1, removed);
+        self.undo_stack.push_undo(change);
+        Ok(())
     }
+
+    // fixme - in second phase, implement edit properly
+    //    pub fn prepare_edit(
+    //        &mut self,
+    //        output: &mut impl Write,
+    //        filename: Option<&Path>,
+    //        prev_command: Option<&Cmd>,
+    //    ) -> Result<(), Error> {
+    //// This will all move to main_loop in later phase of rewrite
+    //        if self.is_dirty() && !matches!(prev_command, Some(Cmd::Edit(_))) {
+    //            writeln!(
+    //                output,
+    //                "Unwritten changes - repeat edit command to discard changes."
+    //            )
+    //            .map_err(Error::WriteOutput)?;
+    //            return Ok(());
+    //        }
+    //
+    //        if let Some(filename) = filename {
+    //            self.filename = Some(filename.to_owned());
+    //        }
+    //        let filename = self.filename.as_ref().ok_or(Error::NoFilename)?;
+    //                let f = File::open(&data.filename);
+    //                let source = match f {
+    //                    Ok(f) => Ok(Some(BufReader::new(f))),
+    //                    Err(e) => match e.kind() {
+    //                        io::ErrorKind::NotFound => {
+    //                            writeln!(output, "{e}").map_err(Error::WriteOutput)?;
+    //                            Ok(None)
+    //                        }
+    //                        _ => Err(e),
+    //                    },
+    //                }
+    //                .map_err(Error::FileOpen)?;
+    //
+    //        if let Some(source) = source {
+    //            let ret = self.read(0, source)?;
+    //            match ret {
+    //                ReadResult::EOLAdded(bytes_read) => {
+    //                    writeln!(output, "missing line terminator appended\n{bytes_read}")
+    //                        .map_err(Error::WriteOutput)?;
+    //                }
+    //                ReadResult::AsIs(bytes_read) => {
+    //                    writeln!(output, "{bytes_read}").map_err(Error::WriteOutput)?;
+    //                }
+    //            }
+    //        }
+    //self.do_edit(filename.clone())
+    //}
+    //
+    //fn do_edit(&mut self, filename: PathBuf) -> Result<(), Error> {
+    //// fixme - create Diff::Change(0, self[..]))
+    //        if let Some(data) = data {
+    //            if data.lines_removed.is_empty() {
+    //                data.lines_removed.append(&mut self.text);
+    //            }
+    //        }
+    //        self.text.clear();
+    //
+    //        Ok(())
+    //    }
+    //
+    //    pub fn prepare_append(
+    //        &mut self,
+    //        input: &mut impl BufRead,
+    //        address: Option<Address>,
+    //    ) -> Result<(), Error> {
+    //        if address.is_some_and(|a| a.1 > self.len()) {
+    //            return Err(Error::InvalidAddress);
+    //        }
+    //        let mut lines = Vec::new();
+    //        Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
+    //        self.do_append(address, lines)
+    //    }
+
+    //    pub fn prepare_edit(
+    //        &mut self,
+    //        output: &mut impl Write,
+    //        filename: Option<&Path>,
+    //        prev_command: Option<&Cmd>,
+    //    ) -> Result<(), Error> {
+    //        if self.is_dirty() && !matches!(prev_command, Some(Cmd::Edit(_))) {
+    //            writeln!(
+    //                output,
+    //                "Unwritten changes - repeat edit command to discard changes."
+    //            )
+    //            .map_err(Error::WriteOutput)?;
+    //            return Ok(());
+    //        }
+    //
+    //        if let Some(filename) = filename {
+    //            self.filename = Some(filename.to_owned());
+    //        }
+    //        let filename = self.filename.as_ref().ok_or(Error::NoFilename)?;
+    //self.do_edit(filename.clone())
+    //}
+    //
+    //fn do_edit(&mut self, filename: PathBuf) -> Result<(), Error> {
+    //                let f = File::open(&data.filename);
+    //                let source = match f {
+    //                    Ok(f) => Ok(Some(BufReader::new(f))),
+    //                    Err(e) => match e.kind() {
+    //                        io::ErrorKind::NotFound => {
+    //                            writeln!(output, "{e}").map_err(Error::WriteOutput)?;
+    //                            Ok(None)
+    //                        }
+    //                        _ => Err(e),
+    //                    },
+    //}
+    //
+    //        let mut op = Op::Edit(EditData {
+    //            filename: filename.clone(),
+    //            current_line: self.current_line,
+    //            lines_removed: Vec::new(),
+    //            clean_fingerprint: self.clean_fingerprint,
+    //        });
+    //
+    //        let res = self.execute(output, &mut op);
+    //        self.undo_stack.push_undo(op);
+    //        self.clean_fingerprint = self.undo_stack.fingerprint();
+    //        res
+    //    }
 
     pub fn do_enumerate(
         &mut self,
@@ -574,12 +677,8 @@ impl EditBuffer {
         }
 
         match self.filename() {
-            None => output
-                .write_all(b"No current filename\n")
-                .map_err(Error::WriteOutput),
-            Some(f) => output
-                .write_all(format!("{}\n", f.display()).as_bytes())
-                .map_err(Error::WriteOutput),
+            None => writeln!(output, "No current filename").map_err(Error::WriteOutput),
+            Some(f) => writeln!(output, "{}", f.display()).map_err(Error::WriteOutput),
         }
     }
 
@@ -621,10 +720,9 @@ impl EditBuffer {
         Ok(())
     }
 
-    pub fn do_insert(
+    pub fn prepare_insert(
         &mut self,
         input: &mut impl BufRead,
-        output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<(), Error> {
         if address.is_some_and(|a| a.1 > self.len()) {
@@ -632,14 +730,15 @@ impl EditBuffer {
         }
         let mut lines = Vec::new();
         Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
-        let mut op = Op::Insert(Insertion {
-            address,
-            lines,
-            current_line: self.current_line,
-        });
-        let res = self.execute(output, &mut op);
-        self.undo_stack.push_undo(op);
-        res
+        let location = if lines.is_empty() {
+            address.map_or(self.current_line, |addr| addr.1)
+        } else {
+            // insertion point is just before addressed line
+            address
+                .map_or(self.current_line, |addr| addr.1)
+                .saturating_sub(1)
+        };
+        self.do_append(location, lines)
     }
 
     pub fn do_null(
@@ -691,26 +790,70 @@ impl EditBuffer {
         Ok(())
     }
 
-    pub fn do_undo(&mut self, output: &mut impl Write) -> Result<(), Error> {
-        match self.undo_stack.pop_undo() {
-            Some(mut item) => {
-                let res = self.revert(output, &mut item);
-                self.undo_stack.push_redo(item);
-                res
+    pub fn do_undo(&mut self) -> Result<(), Error> {
+        if let Some(undo) = self.undo_stack.pop_undo() {
+            debug_assert!(
+                undo.current_line_after == self.current_line,
+                "{} == {}",
+                undo.current_line_after,
+                self.current_line
+            );
+            self.current_line = undo.current_line_before;
+            {
+                let mut diffs = undo.diffs();
+                while let Some(diff) = diffs.next() {
+                    match diff {
+                        Diff::Add(p, l) => drop(self.text.splice(*p..*p + l.len(), None)),
+                        Diff::Remove(p, l) => drop(self.text.splice(*p..*p, l.iter().cloned())),
+                        Diff::Change(cp, cl) => {
+                            if let Some(Diff::Add(ap, al)) = diffs.next() {
+                                self.text.splice(*ap..*ap + al.len(), None);
+                                self.text.splice(*cp..*cp, cl.iter().cloned());
+                            } else {
+                                panic!("Diff::Change wasn't followed by matching Diff::Add");
+                            }
+                        }
+                    }
+                }
             }
-            None => Ok(()),
+            self.undo_stack.push_redo(undo);
         }
+        Ok(())
     }
 
-    pub fn do_redo(&mut self, output: &mut impl Write) -> Result<(), Error> {
-        match self.undo_stack.pop_redo() {
-            Some(mut item) => {
-                let res = self.execute(output, &mut item);
-                self.undo_stack.push_undo(item);
-                res
+    pub fn do_redo(&mut self) -> Result<(), Error> {
+        if let Some(redo) = self.undo_stack.pop_redo() {
+            debug_assert!(
+                redo.current_line_before == self.current_line,
+                "{} == {}",
+                redo.current_line_before,
+                self.current_line
+            );
+            self.current_line = redo.current_line_after;
+            {
+                let mut diffs = redo.diffs();
+                while let Some(diff) = diffs.next() {
+                    match diff {
+                        Diff::Add(p, l) => {
+                            self.text.splice(*p..*p, l.iter().cloned());
+                        }
+                        Diff::Remove(p, l) => {
+                            self.text.splice(*p..*p + l.len(), None);
+                        }
+                        Diff::Change(cp, cl) => {
+                            if let Some(Diff::Add(ap, al)) = diffs.next() {
+                                self.text.splice(*ap..*ap, al.iter().cloned());
+                                self.text.splice(*cp..*cp + cl.len(), None);
+                            } else {
+                                panic!("Diff::Change wasn't followed by matching Diff::Add");
+                            }
+                        }
+                    }
+                }
             }
-            None => Ok(()),
+            self.undo_stack.push_undo(redo);
         }
+        Ok(())
     }
 
     pub fn do_write(
@@ -840,60 +983,60 @@ mod tests {
         assert_eq!(b"0\n", &output[..]);
     }
 
-    #[test]
-    fn write_no_addr_leaves_clean_buffer() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        assert!(!buffer.is_dirty());
-        let mut output = Vec::new();
-        let mut input = "one more line\n.\n".as_bytes();
-        buffer
-            .do_append(&mut input, &mut output, Some(Address(0, 0)))
-            .unwrap();
-        assert!(buffer.is_dirty());
-        let mut dummy_file = Vec::new();
-        output.clear();
-        buffer.write(&mut output, None, &mut dummy_file).unwrap();
-        assert_eq!(b"20\n", &output[..]);
-        assert!(!buffer.is_dirty());
-    }
-
-    #[test]
-    fn write_full_buffer_leaves_clean_buffer() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        assert!(!buffer.is_dirty());
-        let mut output = Vec::new();
-        let mut input = "one more line\n.\n".as_bytes();
-        buffer
-            .do_append(&mut input, &mut output, Some(Address(0, 0)))
-            .unwrap();
-        assert!(buffer.is_dirty());
-        let mut dummy_file = Vec::new();
-        output.clear();
-        buffer
-            .write(&mut output, Some(Address(1, buffer.len())), &mut dummy_file)
-            .unwrap();
-        assert_eq!(b"20\n", &output[..]);
-        assert!(!buffer.is_dirty());
-    }
-
-    #[test]
-    fn write_partial_buffer_leaves_dirty_buffer() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        assert!(!buffer.is_dirty());
-        let mut output = Vec::new();
-        let mut input = "one more line\n.\n".as_bytes();
-        buffer
-            .do_append(&mut input, &mut output, Some(Address(0, 0)))
-            .unwrap();
-        assert!(buffer.is_dirty());
-        let mut dummy_file = Vec::new();
-        output.clear();
-        buffer
-            .write(&mut output, Some(Address(1, 2)), &mut dummy_file)
-            .unwrap();
-        assert_eq!(b"16\n", &output[..]);
-        assert!(buffer.is_dirty());
-    }
+    //    #[test]
+    //    fn write_no_addr_leaves_clean_buffer() {
+    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+    //        assert!(!buffer.is_dirty());
+    //        let mut output = Vec::new();
+    //        let mut input = "one more line\n.\n".as_bytes();
+    //        buffer
+    //            .do_append(&mut input, &mut output, Some(Address(0, 0)))
+    //            .unwrap();
+    //        assert!(buffer.is_dirty());
+    //        let mut dummy_file = Vec::new();
+    //        output.clear();
+    //        buffer.write(&mut output, None, &mut dummy_file).unwrap();
+    //        assert_eq!(b"20\n", &output[..]);
+    //        assert!(!buffer.is_dirty());
+    //    }
+    //
+    //    #[test]
+    //    fn write_full_buffer_leaves_clean_buffer() {
+    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+    //        assert!(!buffer.is_dirty());
+    //        let mut output = Vec::new();
+    //        let mut input = "one more line\n.\n".as_bytes();
+    //        buffer
+    //            .do_append(&mut input, &mut output, Some(Address(0, 0)))
+    //            .unwrap();
+    //        assert!(buffer.is_dirty());
+    //        let mut dummy_file = Vec::new();
+    //        output.clear();
+    //        buffer
+    //            .write(&mut output, Some(Address(1, buffer.len())), &mut dummy_file)
+    //            .unwrap();
+    //        assert_eq!(b"20\n", &output[..]);
+    //        assert!(!buffer.is_dirty());
+    //    }
+    //
+    //    #[test]
+    //    fn write_partial_buffer_leaves_dirty_buffer() {
+    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+    //        assert!(!buffer.is_dirty());
+    //        let mut output = Vec::new();
+    //        let mut input = "one more line\n.\n".as_bytes();
+    //        buffer
+    //            .do_append(&mut input, &mut output, Some(Address(0, 0)))
+    //            .unwrap();
+    //        assert!(buffer.is_dirty());
+    //        let mut dummy_file = Vec::new();
+    //        output.clear();
+    //        buffer
+    //            .write(&mut output, Some(Address(1, 2)), &mut dummy_file)
+    //            .unwrap();
+    //        assert_eq!(b"16\n", &output[..]);
+    //        assert!(buffer.is_dirty());
+    //    }
 
     /////
     // EditBuffer creation tests
@@ -1315,11 +1458,7 @@ mod tests {
         input.extend_from_slice(".\n".as_bytes());
         let mut input = &input[..];
         buffer
-            .do_append(
-                &mut input,
-                &mut output,
-                Some(Address(buffer.len(), buffer.len())),
-            )
+            .prepare_append(&mut input, Some(Address(buffer.len(), buffer.len())))
             .unwrap();
         buffer.set_current_line(2);
         assert_eq!(1024, buffer.len());
@@ -1393,7 +1532,7 @@ mod tests {
         let mut input = "one\n.\n".as_bytes();
         let expected = "one\n.\n".as_bytes();
         let res = buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
+            .prepare_append(&mut input, Some(Address(2, 2)))
             .expect_err("invalid addr");
         assert_eq!(0, buffer.len());
         assert_eq!(input, expected);
@@ -1406,7 +1545,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["one\n"]);
         let mut input = "one\n.\n".as_bytes();
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
+            .prepare_append(&mut input, Some(Address(0, 0)))
             .unwrap();
         assert_eq!(1, buffer.current_line);
         assert_eq!(1, buffer.len());
@@ -1419,7 +1558,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["a\n", "b", "c"]);
         let mut input = "a\nb\nc\n.\n".as_bytes();
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
+            .prepare_append(&mut input, Some(Address(0, 0)))
             .unwrap();
         assert_eq!(3, buffer.current_line);
         assert_eq!(3, buffer.len());
@@ -1432,7 +1571,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["a\n", "b", "c", "1", "2", "3"]);
         let mut input = "a\nb\nc\n.\n".as_bytes();
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
+            .prepare_append(&mut input, Some(Address(0, 0)))
             .unwrap();
         assert_eq!(3, buffer.current_line);
         assert_eq!(6, buffer.len());
@@ -1445,7 +1584,7 @@ mod tests {
         let mut input = "a\nb\nc\n.\n".as_bytes();
         let expected = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3"]);
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
+            .prepare_append(&mut input, Some(Address(2, 2)))
             .unwrap();
         assert_eq!(5, buffer.current_line());
         assert_eq!(6, buffer.len());
@@ -1458,7 +1597,7 @@ mod tests {
         let mut input = "a\nb\nc\n.\n".as_bytes();
         let expected = EditBuffer::from(vec!["1\n", "2", "3", "a", "b", "c", "4", "5", "6"]);
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 3)))
+            .prepare_append(&mut input, Some(Address(2, 3)))
             .unwrap();
         assert_eq!(6, buffer.current_line);
         assert_eq!(9, buffer.len());
@@ -1471,7 +1610,7 @@ mod tests {
         let mut input = "a\nb\nc\n.\n".as_bytes();
         let expected = EditBuffer::from(vec!["1\n", "2", "3", "a", "b", "c"]);
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(3, 3)))
+            .prepare_append(&mut input, Some(Address(3, 3)))
             .unwrap();
         assert_eq!(6, buffer.current_line);
         assert_eq!(6, buffer.len());
@@ -1485,7 +1624,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert_eq!(3, buffer.current_line());
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
+            .prepare_append(&mut input, Some(Address(2, 2)))
             .unwrap();
         assert_eq!(2, buffer.current_line);
         assert_eq!(3, buffer.len());
@@ -1496,9 +1635,7 @@ mod tests {
     fn do_delete_span() {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let expected = EditBuffer::from(vec!["1\r\n", "2", "6"]);
-        buffer
-            .do_delete(&mut Vec::new(), Some(Address(3, 5)))
-            .unwrap();
+        buffer.prepare_delete(Some(Address(3, 5))).unwrap();
         assert_eq!(3, buffer.len());
         assert!(&expected[..].eq(&buffer[..]));
     }
@@ -1507,9 +1644,7 @@ mod tests {
     fn do_delete_line() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let expected = EditBuffer::from(vec!["1\n", "2", "4", "5", "6"]);
-        buffer
-            .do_delete(&mut Vec::new(), Some(Address(3, 3)))
-            .unwrap();
+        buffer.prepare_delete(Some(Address(3, 3))).unwrap();
         assert_eq!(5, buffer.len());
         assert!(&expected[..].eq(&buffer[..]));
     }
@@ -1518,9 +1653,7 @@ mod tests {
     fn do_delete_span_at_start() {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let expected = EditBuffer::from(vec!["4\r\n", "5", "6"]);
-        buffer
-            .do_delete(&mut Vec::new(), Some(Address(1, 3)))
-            .unwrap();
+        buffer.prepare_delete(Some(Address(1, 3))).unwrap();
         assert_eq!(3, buffer.len());
         assert_eq!(expected[..], buffer[..]);
     }
@@ -1529,9 +1662,7 @@ mod tests {
     fn do_delete_span_at_end() {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let expected = EditBuffer::from(vec!["1\r\n", "2", "3", "4"]);
-        buffer
-            .do_delete(&mut Vec::new(), Some(Address(5, 6)))
-            .unwrap();
+        buffer.prepare_delete(Some(Address(5, 6))).unwrap();
         assert_eq!(4, buffer.len());
         assert_eq!(expected[..], buffer[..]);
     }
@@ -1541,7 +1672,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let expected = EditBuffer::from(vec!["1\n", "2", "4", "5", "6"]);
         buffer.set_current_line(3);
-        buffer.do_delete(&mut Vec::new(), None).unwrap();
+        buffer.prepare_delete(None).unwrap();
         assert_eq!(5, buffer.len());
         assert_eq!(expected[..], buffer[..]);
     }
@@ -1549,9 +1680,7 @@ mod tests {
     #[test]
     fn do_delete_empty_buffer() {
         let mut buffer = EditBuffer::new();
-        let _res = buffer
-            .do_delete(&mut Vec::new(), None)
-            .expect_err("invalid address");
+        let _res = buffer.prepare_delete(None).expect_err("invalid address");
         assert!(matches!(Error::InvalidAddress, _res));
     }
 
@@ -1559,7 +1688,7 @@ mod tests {
     fn do_delete_line_zero() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let res = buffer
-            .do_delete(&mut Vec::new(), Some(Address(0, 0)))
+            .prepare_delete(Some(Address(0, 0)))
             .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
     }
@@ -1568,7 +1697,7 @@ mod tests {
     fn do_delete_span_starting_at_zero() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5"]);
         let res = buffer
-            .do_delete(&mut Vec::new(), Some(Address(0, 3)))
+            .prepare_delete(Some(Address(0, 3)))
             .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
     }
@@ -1579,7 +1708,7 @@ mod tests {
         let mut input = "1\n2\n3\n.\n".as_bytes();
         assert!(!buffer.is_dirty());
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
+            .prepare_append(&mut input, Some(Address(0, 0)))
             .unwrap();
         assert!(buffer.is_dirty());
     }
@@ -1589,10 +1718,10 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let mut input = "1\n2\n3\n.\n".as_bytes();
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
+            .prepare_append(&mut input, Some(Address(0, 0)))
             .unwrap();
         assert_eq!(&EditBuffer::from(vec!["1\n", "2", "3"])[..], &buffer[..]);
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(EditBuffer::new()[..], buffer[..]);
     }
 
@@ -1602,13 +1731,13 @@ mod tests {
         let mut input = "1\n2\n3\n.\n".as_bytes();
         let expected_final = buffer.clone();
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 3)))
+            .prepare_append(&mut input, Some(Address(2, 3)))
             .unwrap();
         assert_eq!(
             &EditBuffer::from(vec!["one\n", "two", "three", "1\n", "2", "3"])[..],
             &buffer[..]
         );
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected_final[..], &buffer[..]);
     }
 
@@ -1618,12 +1747,12 @@ mod tests {
         let mut input = "1\n2\n3\n.\n".as_bytes();
         buffer.set_current_line(2);
         let expected_final = buffer.clone();
-        buffer.do_append(&mut input, &mut Vec::new(), None).unwrap();
+        buffer.prepare_append(&mut input, None).unwrap();
         assert_eq!(
             &EditBuffer::from(vec!["one\n", "two", "1\n", "2", "3", "three"])[..],
             &buffer[..]
         );
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected_final[..], &buffer[..]);
     }
 
@@ -1631,11 +1760,9 @@ mod tests {
     fn do_undo_delete_span() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let expected = buffer.clone();
-        buffer
-            .do_delete(&mut Vec::new(), Some(Address(1, 4)))
-            .unwrap();
+        buffer.prepare_delete(Some(Address(1, 4))).unwrap();
         assert_eq!(&EditBuffer::from(vec!["5\n", "6"])[..], &buffer[..]);
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected[..], &buffer[..]);
     }
 
@@ -1643,14 +1770,12 @@ mod tests {
     fn do_undo_delete_line() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let expected = buffer.clone();
-        buffer
-            .do_delete(&mut Vec::new(), Some(Address(3, 3)))
-            .unwrap();
+        buffer.prepare_delete(Some(Address(3, 3))).unwrap();
         assert_eq!(
             &EditBuffer::from(vec!["1\n", "2", "4", "5", "6"])[..],
             &buffer[..]
         );
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected[..], &buffer[..]);
     }
 
@@ -1659,44 +1784,44 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(4);
         let expected = buffer.clone();
-        buffer.do_delete(&mut Vec::new(), None).unwrap();
+        buffer.prepare_delete(None).unwrap();
         assert_eq!(
             &EditBuffer::from(vec!["1\n", "2", "3", "5", "6"])[..],
             &buffer[..]
         );
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected[..], &buffer[..]);
     }
 
-    #[test]
-    fn do_undo_edit() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_line(4);
-        let expected = buffer.clone();
-        let mut output = Vec::new();
-        let filename = Path::new("test/assets/text_with_final_eol.txt");
-        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-        assert_eq!(buffer.filename(), Some(filename));
-        assert!(buffer.current_line() != 4);
-        assert!(buffer[..] != expected[..]);
-        buffer.do_undo(&mut output).unwrap();
-        assert_eq!(&buffer[..], &expected[..]);
-    }
-
-    #[test]
-    fn do_undo_edit_empty_buffer() {
-        let mut buffer = EditBuffer::new();
-        let expected = buffer.clone();
-        let mut output = Vec::new();
-        let filename = Path::new("test/assets/text_with_final_eol.txt");
-        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-        assert_eq!(buffer.filename(), Some(filename));
-        assert!(buffer.current_line() != 0);
-        assert!(buffer[..] != expected[..]);
-        buffer.do_undo(&mut output).unwrap();
-        assert_eq!(&buffer[..], &expected[..]);
-    }
-
+    //    #[test]
+    //    fn do_undo_edit() {
+    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+    //        buffer.set_current_line(4);
+    //        let expected = buffer.clone();
+    //        let mut output = Vec::new();
+    //        let filename = Path::new("test/assets/text_with_final_eol.txt");
+    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
+    //        assert_eq!(buffer.filename(), Some(filename));
+    //        assert!(buffer.current_line() != 4);
+    //        assert!(buffer[..] != expected[..]);
+    //        buffer.do_undo().unwrap();
+    //        assert_eq!(&buffer[..], &expected[..]);
+    //    }
+    //
+    //    #[test]
+    //    fn do_undo_edit_empty_buffer() {
+    //        let mut buffer = EditBuffer::new();
+    //        let expected = buffer.clone();
+    //        let mut output = Vec::new();
+    //        let filename = Path::new("test/assets/text_with_final_eol.txt");
+    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
+    //        assert_eq!(buffer.filename(), Some(filename));
+    //        assert!(buffer.current_line() != 0);
+    //        assert!(buffer[..] != expected[..]);
+    //        buffer.do_undo().unwrap();
+    //        assert_eq!(&buffer[..], &expected[..]);
+    //    }
+    //
     #[test]
     fn do_undo_redo_insert() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
@@ -1705,12 +1830,12 @@ mod tests {
             EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
         let mut input = "a\nb\nc\n.\n".as_bytes();
         buffer
-            .do_insert(&mut input, &mut Vec::new(), Some(Address(3, 3)))
+            .prepare_insert(&mut input, Some(Address(3, 3)))
             .unwrap();
         assert_eq!(buffer[..], expected_modified[..]);
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(expected_final[..], buffer[..]);
-        buffer.do_redo(&mut Vec::new()).unwrap();
+        buffer.do_redo().unwrap();
         assert_eq!(buffer[..], expected_modified[..]);
     }
 
@@ -1722,22 +1847,20 @@ mod tests {
         assert_eq!(6, buffer.current_line());
 
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
+            .prepare_append(&mut input, Some(Address(2, 2)))
             .unwrap();
         let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
         assert_eq!(&expected_1[..], &buffer[..]);
         assert_eq!(5, buffer.current_line());
 
-        buffer
-            .do_delete(&mut Vec::new(), Some(Address(4, 7)))
-            .unwrap();
+        buffer.prepare_delete(Some(Address(4, 7))).unwrap();
         let expected_2 = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
         assert_eq!(&expected_2[..], &buffer[..]);
 
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected_1[..], &buffer[..]);
 
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected_final[..], &buffer[..]);
     }
 
@@ -1746,44 +1869,43 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let mut input = "a\nb\nc\n.\n".as_bytes();
         let expected_final = buffer.clone();
-        let mut output = Vec::new();
         assert_eq!(6, buffer.current_line());
 
         buffer
-            .do_append(&mut input, &mut output, Some(Address(2, 2)))
+            .prepare_append(&mut input, Some(Address(2, 2)))
             .unwrap();
         let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
         assert_eq!(&expected_1[..], &buffer[..]);
         assert_eq!(5, buffer.current_line());
 
-        buffer.do_delete(&mut output, Some(Address(4, 7))).unwrap();
+        buffer.prepare_delete(Some(Address(4, 7))).unwrap();
         let expected_2 = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
         assert_eq!(&expected_2[..], &buffer[..]);
 
-        buffer.do_undo(&mut output).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected_1[..], &buffer[..]);
 
         input = "spam!\n.\n".as_bytes();
         buffer
-            .do_append(&mut input, &mut output, Some(Address(4, 5)))
+            .prepare_append(&mut input, Some(Address(4, 5)))
             .unwrap();
         let expected_3 =
             EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "spam!", "3", "4", "5", "6"]);
         assert_eq!(&buffer[..], &expected_3[..]);
 
-        buffer.do_undo(&mut output).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected_1[..], &buffer[..]);
 
-        buffer.do_undo(&mut output).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected_2[..], &buffer[..]);
 
-        buffer.do_undo(&mut output).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected_1[..], &buffer[..]);
 
-        buffer.do_undo(&mut output).unwrap();
+        buffer.do_undo().unwrap();
         assert_eq!(&expected_final[..], &buffer[..]);
 
-        buffer.do_undo(&mut output).unwrap();
+        buffer.do_undo().unwrap();
         // Undo stack should be empty here, so buffer shouldn't change
         assert_eq!(&expected_final[..], &buffer[..]);
     }
@@ -1794,77 +1916,79 @@ mod tests {
         let mut input = "a\nb\nc\n.\n".as_bytes();
 
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
+            .prepare_append(&mut input, Some(Address(2, 2)))
             .unwrap();
 
-        buffer
-            .do_delete(&mut Vec::new(), Some(Address(4, 7)))
-            .unwrap();
+        buffer.prepare_delete(Some(Address(4, 7))).unwrap();
 
         input = "x\ny\nz\n.\n".as_bytes();
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(0, 0)))
+            .prepare_append(&mut input, Some(Address(0, 0)))
             .unwrap();
 
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
 
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
 
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
 
         assert!(!buffer.is_dirty());
 
-        buffer.do_undo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
         assert!(!buffer.is_dirty()); // still not dirty
     }
 
-    #[test]
-    fn do_redo_edit() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let original = buffer.clone();
-        let mut output = Vec::new();
-        let filename = Path::new("test/assets/text_with_no_trailing_eol.txt");
-
-        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-        assert!(buffer[..] != original[..]);
-        let from_file = buffer.clone();
-
-        buffer.do_undo(&mut output).unwrap();
-        assert_eq!(&buffer[..], &original[..]);
-
-        buffer.do_redo(&mut output).unwrap();
-        assert_eq!(&buffer[..], &from_file[..]);
-    }
-
+    //    #[test]
+    //    fn do_redo_edit() {
+    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+    //        let original = buffer.clone();
+    //        let mut output = Vec::new();
+    //        let filename = Path::new("test/assets/text_with_no_trailing_eol.txt");
+    //
+    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
+    //        assert!(buffer[..] != original[..]);
+    //        let from_file = buffer.clone();
+    //
+    //        buffer.do_undo().unwrap();
+    //        assert_eq!(&buffer[..], &original[..]);
+    //
+    //        buffer.do_redo().unwrap();
+    //        assert_eq!(&buffer[..], &from_file[..]);
+    //    }
+    //
     #[test]
     fn do_redo_multi() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let buffer_orig = buffer.clone();
         assert_eq!(6, buffer.current_line());
 
         let mut input = "a\nb\nc\n.\n".as_bytes();
         buffer
-            .do_append(&mut input, &mut Vec::new(), Some(Address(2, 2)))
+            .prepare_append(&mut input, Some(Address(2, 2)))
             .unwrap();
         let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
         assert_eq!(&expected_1[..], &buffer[..]);
         assert_eq!(5, buffer.current_line());
 
-        buffer
-            .do_delete(&mut Vec::new(), Some(Address(4, 7)))
-            .unwrap();
+        buffer.prepare_delete(Some(Address(4, 7))).unwrap();
         let expected_final = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
         assert_eq!(&expected_final[..], &buffer[..]);
 
-        buffer.do_undo(&mut Vec::new()).unwrap();
-        buffer.do_undo(&mut Vec::new()).unwrap();
-        buffer.do_redo(&mut Vec::new()).unwrap();
+        buffer.do_undo().unwrap();
+        assert_eq!(buffer[..], expected_1[..]);
+        buffer.do_undo().unwrap();
+        assert_eq!(buffer[..], buffer_orig[..]);
+        buffer.do_undo().unwrap();
+        assert_eq!(buffer[..], buffer_orig[..]); // buffer unchanged
+
+        buffer.do_redo().unwrap();
         assert_eq!(&expected_1[..], &buffer[..]);
 
-        buffer.do_redo(&mut Vec::new()).unwrap();
-        assert_eq!(&expected_final[..], &buffer[..]);
+        buffer.do_redo().unwrap();
+        assert_eq!(buffer[..], expected_final[..]);
 
-        buffer.do_redo(&mut Vec::new()).unwrap();
-        assert_eq!(&expected_final[..], &buffer[..]); // buffer unchanged
+        buffer.do_redo().unwrap();
+        assert_eq!(buffer[..], expected_final[..]); // buffer unchanged
     }
 
     #[test]
@@ -2054,7 +2178,7 @@ mod tests {
         let mut input = "one\n.\n".as_bytes();
         let expected = "one\n.\n".as_bytes();
         let res = buffer
-            .do_insert(&mut input, &mut Vec::new(), Some(Address(2, 2)))
+            .prepare_insert(&mut input, Some(Address(2, 2)))
             .expect_err("invalid addr");
         assert_eq!(0, buffer.len());
         assert_eq!(input, expected);
@@ -2067,7 +2191,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["one\n"]);
         let mut input = "one\n.\n".as_bytes();
         buffer
-            .do_insert(&mut input, &mut Vec::new(), Some(Address(0, 0)))
+            .prepare_insert(&mut input, Some(Address(0, 0)))
             .unwrap();
         assert_eq!(1, buffer.current_line);
         assert_eq!(1, buffer.len());
@@ -2080,7 +2204,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["a\n", "b", "c"]);
         let mut input = "a\nb\nc\n.\n".as_bytes();
         buffer
-            .do_insert(&mut input, &mut Vec::new(), Some(Address(0, 0)))
+            .prepare_insert(&mut input, Some(Address(0, 0)))
             .unwrap();
         assert_eq!(3, buffer.current_line);
         assert_eq!(3, buffer.len());
@@ -2093,7 +2217,7 @@ mod tests {
         let expected = EditBuffer::from(vec!["a\n", "b", "c", "1", "2", "3"]);
         let mut input = "a\nb\nc\n.\n".as_bytes();
         buffer
-            .do_insert(&mut input, &mut Vec::new(), Some(Address(0, 0)))
+            .prepare_insert(&mut input, Some(Address(0, 0)))
             .unwrap();
         assert_eq!(3, buffer.current_line);
         assert_eq!(6, buffer.len());
@@ -2106,7 +2230,7 @@ mod tests {
         let mut input = "a\nb\nc\n.\n".as_bytes();
         let expected = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
         buffer
-            .do_insert(&mut input, &mut Vec::new(), Some(Address(2, 3)))
+            .prepare_insert(&mut input, Some(Address(2, 3)))
             .unwrap();
         assert_eq!(5, buffer.current_line);
         assert_eq!(9, buffer.len());
@@ -2119,7 +2243,7 @@ mod tests {
         let mut input = "a\nb\nc\n.\n".as_bytes();
         let expected = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3"]);
         buffer
-            .do_insert(&mut input, &mut Vec::new(), Some(Address(3, 3)))
+            .prepare_insert(&mut input, Some(Address(3, 3)))
             .unwrap();
         assert_eq!(5, buffer.current_line);
         assert_eq!(6, buffer.len());
@@ -2133,145 +2257,145 @@ mod tests {
         let expected = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert_eq!(3, buffer.current_line());
         buffer
-            .do_insert(&mut input, &mut Vec::new(), Some(Address(2, 2)))
+            .prepare_insert(&mut input, Some(Address(2, 2)))
             .unwrap();
         assert_eq!(2, buffer.current_line);
         assert_eq!(3, buffer.len());
         assert!(&expected[..].eq(&buffer[..]));
     }
 
-    #[test]
-    fn do_edit_no_file() {
-        let mut buffer = EditBuffer::new();
-        let mut output = Vec::new();
-        let res = buffer
-            .do_edit(&mut output, None, None)
-            .expect_err("no filename");
-        assert!(matches!(res, Error::NoFilename));
-    }
-
-    #[test]
-    fn do_edit_file_not_found() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let file_to_edit = "a_file_that_is_not_there.ext";
-        let mut output = Vec::new();
-        buffer
-            .do_edit(&mut output, Some(Path::new(file_to_edit)), None)
-            .unwrap();
-        assert!(buffer.is_empty());
-        assert!(!buffer.is_dirty());
-        assert_eq!(buffer.filename(), Some(Path::new(file_to_edit)));
-    }
-
-    #[test]
-    fn do_edit_default_filename() {
-        let filename = Path::new(r"test/assets/text_with_final_eol.txt");
-        let mut buffer = EditBuffer::new();
-        let mut output = Vec::new();
-        buffer.do_file(&mut output, Some(filename)).unwrap();
-        assert_eq!(buffer.filename(), Some(filename));
-        output.clear();
-        buffer.do_edit(&mut output, None, None).unwrap();
-        assert_eq!(&b"312\n"[..], &output[..]);
-    }
-
-    #[test]
-    fn do_edit() {
-        let filename = Path::new(r"test/assets/text_with_final_eol.txt");
-        let mut buffer = EditBuffer::new();
-        let mut output = Vec::new();
-        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-        assert_eq!(&b"312\n"[..], &output[..]);
-    }
-
-    #[test]
-    fn do_edit_no_final_eol() {
-        let filename = Path::new(r"test/assets/text_with_no_final_eol.txt");
-        let mut buffer = EditBuffer::new();
-        let mut output = Vec::new();
-        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-        let expected = b"missing line terminator appended\n319\n";
-        assert_eq!(&output[..], &expected[..]);
-    }
-
-    #[test]
-    fn read_replace_io_error() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let reader = BadReader {};
-        let source = Some(BufReader::new(reader));
-        let mut output = Vec::new();
-        let mut data = EditData {
-            ..Default::default()
-        };
-        let res = buffer.read_replace(&mut output, source, Some(&mut data));
-        assert!(matches!(res, Err(Error::Read(_))));
-    }
-
-    #[test]
-    fn read_replace_zero_length() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let reader = &b""[..];
-        let source = Some(BufReader::new(reader));
-        let mut output = Vec::new();
-        let mut data = EditData {
-            ..Default::default()
-        };
-        buffer
-            .read_replace(&mut output, source, Some(&mut data))
-            .unwrap();
-        assert_eq!(buffer[..], Vec::<String>::new());
-    }
-
-    #[test]
-    fn read_replace_empty_buffer() {
-        let mut buffer = EditBuffer::new();
-        let reader = &b"one\ntwo\nthree\n"[..];
-        let source = Some(BufReader::new(reader));
-        let mut output = Vec::new();
-        assert_eq!(buffer.current_line(), 0);
-
-        let mut data = EditData {
-            ..Default::default()
-        };
-        buffer
-            .read_replace(&mut output, source, Some(&mut data))
-            .unwrap();
-        assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
-        assert_eq!(buffer.current_line(), 3usize);
-    }
-
-    #[test]
-    fn read_replace_non_empty_buffer() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4"]);
-        let reader = &b"one\ntwo\nthree\n"[..];
-        let source = Some(BufReader::new(reader));
-        let mut output = Vec::new();
-        assert_eq!(buffer.current_line(), 4);
-
-        let mut data = EditData {
-            ..Default::default()
-        };
-        buffer
-            .read_replace(&mut output, source, Some(&mut data))
-            .unwrap();
-        assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
-        assert_eq!(buffer.current_line(), 3usize);
-    }
-
-    #[test]
-    fn read_replace_prints_chars_read() {
-        let mut buffer = EditBuffer::new();
-        let reader = &b"one\ntwo\nthree\n"[..];
-        let source = Some(BufReader::new(reader));
-        let mut output = Vec::new();
-        assert_eq!(buffer.current_line(), 0);
-
-        let mut data = EditData {
-            ..Default::default()
-        };
-        buffer
-            .read_replace(&mut output, source, Some(&mut data))
-            .unwrap();
-        assert_eq!(&output[..], &b"14\n"[..]);
-    }
+    //    #[test]
+    //    fn do_edit_no_file() {
+    //        let mut buffer = EditBuffer::new();
+    //        let mut output = Vec::new();
+    //        let res = buffer
+    //            .do_edit(&mut output, None, None)
+    //            .expect_err("no filename");
+    //        assert!(matches!(res, Error::NoFilename));
+    //    }
+    //
+    //    #[test]
+    //    fn do_edit_file_not_found() {
+    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+    //        let file_to_edit = "a_file_that_is_not_there.ext";
+    //        let mut output = Vec::new();
+    //        buffer
+    //            .do_edit(&mut output, Some(Path::new(file_to_edit)), None)
+    //            .unwrap();
+    //        assert!(buffer.is_empty());
+    //        assert!(!buffer.is_dirty());
+    //        assert_eq!(buffer.filename(), Some(Path::new(file_to_edit)));
+    //    }
+    //
+    //    #[test]
+    //    fn do_edit_default_filename() {
+    //        let filename = Path::new(r"test/assets/text_with_final_eol.txt");
+    //        let mut buffer = EditBuffer::new();
+    //        let mut output = Vec::new();
+    //        buffer.do_file(&mut output, Some(filename)).unwrap();
+    //        assert_eq!(buffer.filename(), Some(filename));
+    //        output.clear();
+    //        buffer.do_edit(&mut output, None, None).unwrap();
+    //        assert_eq!(&b"312\n"[..], &output[..]);
+    //    }
+    //
+    //    #[test]
+    //    fn do_edit() {
+    //        let filename = Path::new(r"test/assets/text_with_final_eol.txt");
+    //        let mut buffer = EditBuffer::new();
+    //        let mut output = Vec::new();
+    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
+    //        assert_eq!(&b"312\n"[..], &output[..]);
+    //    }
+    //
+    //    #[test]
+    //    fn do_edit_no_final_eol() {
+    //        let filename = Path::new(r"test/assets/text_with_no_final_eol.txt");
+    //        let mut buffer = EditBuffer::new();
+    //        let mut output = Vec::new();
+    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
+    //        let expected = b"missing line terminator appended\n319\n";
+    //        assert_eq!(&output[..], &expected[..]);
+    //    }
+    //
+    //    #[test]
+    //    fn read_replace_io_error() {
+    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+    //        let reader = BadReader {};
+    //        let source = Some(BufReader::new(reader));
+    //        let mut output = Vec::new();
+    //        let mut data = EditData {
+    //            ..Default::default()
+    //        };
+    //        let res = buffer.read_replace(&mut output, source, Some(&mut data));
+    //        assert!(matches!(res, Err(Error::Read(_))));
+    //    }
+    //
+    //    #[test]
+    //    fn read_replace_zero_length() {
+    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+    //        let reader = &b""[..];
+    //        let source = Some(BufReader::new(reader));
+    //        let mut output = Vec::new();
+    //        let mut data = EditData {
+    //            ..Default::default()
+    //        };
+    //        buffer
+    //            .read_replace(&mut output, source, Some(&mut data))
+    //            .unwrap();
+    //        assert_eq!(buffer[..], Vec::<String>::new());
+    //    }
+    //
+    //    #[test]
+    //    fn read_replace_empty_buffer() {
+    //        let mut buffer = EditBuffer::new();
+    //        let reader = &b"one\ntwo\nthree\n"[..];
+    //        let source = Some(BufReader::new(reader));
+    //        let mut output = Vec::new();
+    //        assert_eq!(buffer.current_line(), 0);
+    //
+    //        let mut data = EditData {
+    //            ..Default::default()
+    //        };
+    //        buffer
+    //            .read_replace(&mut output, source, Some(&mut data))
+    //            .unwrap();
+    //        assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
+    //        assert_eq!(buffer.current_line(), 3usize);
+    //    }
+    //
+    //    #[test]
+    //    fn read_replace_non_empty_buffer() {
+    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4"]);
+    //        let reader = &b"one\ntwo\nthree\n"[..];
+    //        let source = Some(BufReader::new(reader));
+    //        let mut output = Vec::new();
+    //        assert_eq!(buffer.current_line(), 4);
+    //
+    //        let mut data = EditData {
+    //            ..Default::default()
+    //        };
+    //        buffer
+    //            .read_replace(&mut output, source, Some(&mut data))
+    //            .unwrap();
+    //        assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
+    //        assert_eq!(buffer.current_line(), 3usize);
+    //    }
+    //
+    //    #[test]
+    //    fn read_replace_prints_chars_read() {
+    //        let mut buffer = EditBuffer::new();
+    //        let reader = &b"one\ntwo\nthree\n"[..];
+    //        let source = Some(BufReader::new(reader));
+    //        let mut output = Vec::new();
+    //        assert_eq!(buffer.current_line(), 0);
+    //
+    //        let mut data = EditData {
+    //            ..Default::default()
+    //        };
+    //        buffer
+    //            .read_replace(&mut output, source, Some(&mut data))
+    //            .unwrap();
+    //        assert_eq!(&output[..], &b"14\n"[..]);
+    //    }
 }
