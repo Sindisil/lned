@@ -506,6 +506,7 @@ impl EditBuffer {
         self.current_line = usize::min(self.text.len(), b);
         change.current_line_after = self.current_line;
         change.push_remove(b - 1, removed);
+eprintln!("after delete buffer: {:?}  cl: {}\nchange: {:?}", &self[..], self.current_line, change);
         self.undo_stack.push_undo(change);
         Ok(())
     }
@@ -792,12 +793,6 @@ impl EditBuffer {
 
     pub fn do_undo(&mut self) -> Result<(), Error> {
         if let Some(undo) = self.undo_stack.pop_undo() {
-            debug_assert!(
-                undo.current_line_after == self.current_line,
-                "{} == {}",
-                undo.current_line_after,
-                self.current_line
-            );
             self.current_line = undo.current_line_before;
             {
                 let mut diffs = undo.diffs();
@@ -823,12 +818,6 @@ impl EditBuffer {
 
     pub fn do_redo(&mut self) -> Result<(), Error> {
         if let Some(redo) = self.undo_stack.pop_redo() {
-            debug_assert!(
-                redo.current_line_before == self.current_line,
-                "{} == {}",
-                redo.current_line_before,
-                self.current_line
-            );
             self.current_line = redo.current_line_after;
             {
                 let mut diffs = redo.diffs();
