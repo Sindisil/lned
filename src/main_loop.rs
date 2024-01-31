@@ -1,18 +1,27 @@
-/// Main event loop for lned.
-///
+use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, prelude::*};
 
+use regex::Regex;
+
 use crate::cli;
-use crate::command::{self, Cmd};
+use crate::command::{self, Address, Cmd};
 use crate::edit_buffer::{self, EditBuffer};
+use crate::num_utils::NumUtils;
 
 #[derive(Debug)]
 pub enum Error {
-    /// I/O Error writing output
     WriteOutput(io::Error),
     ParseCmd(command::Error),
     BufferCmd(edit_buffer::Error),
+    InvalidAddress,
+    NoFilename,
+    FileOpen(io::Error),
+    WriteLines(io::Error),
+    ReadLines(io::Error),
+    NestedGlobalCmd,
+    UnsupportedGlobalCmd,
+    ReadGlobalCmd,
 }
 
 impl std::error::Error for Error {}
@@ -20,9 +29,17 @@ impl std::error::Error for Error {}
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
+            Error::WriteOutput(e) => write!(f, "error writing output: {e}"),
             Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
             Error::BufferCmd(e) => write!(f, "{e}"),
+            Error::InvalidAddress => write!(f, "invalid address"),
+            Error::NoFilename => write!(f, "No filename"),
+            Error::FileOpen(e) => write!(f, "Error opening file: {e}"),
+            Error::WriteLines(e) => write!(f, "Error writing lines to file: {e}"),
+            Error::ReadLines(e) => write!(f, "{e} reading input lines"),
+            Error::NestedGlobalCmd => write!(f, "invalid nested global command"),
+            Error::UnsupportedGlobalCmd => write!(f, "unsupported global command"),
+            Error::ReadGlobalCmd => write!(f, "error reading global command"),
         }
     }
 }
@@ -57,38 +74,172 @@ pub fn run(
             .and_then(|cmd| {
                 let res = match &cmd {
                     // dispatch editor commands
-                    Cmd::Append(address) => buffer.prepare_append(&mut input, *address),
-                    Cmd::Delete(address) => buffer.prepare_delete(*address),
+                    Cmd::Append(address) => buffer
+                        .prepare_append(&mut input, *address)
+                        .map_err(Error::BufferCmd),
+                    Cmd::Delete(address) => {
+                        buffer.prepare_delete(*address).map_err(Error::BufferCmd)
+                    }
                     Cmd::Edit(_file) => {
                         todo!()
                     }
-                    Cmd::Enumerate(address) => buffer.do_enumerate(&mut output, *address),
-                    Cmd::File(filename) => buffer.do_file(&mut output, filename.as_deref()),
-                    Cmd::Global(address, pattern, commands) => buffer.do_global(
+                    Cmd::Enumerate(address) => do_enumerate(&mut buffer, &mut output, *address),
+                    Cmd::File(filename) => buffer
+                        .do_file(&mut output, filename.as_deref())
+                        .map_err(Error::BufferCmd),
+                    Cmd::Global(address, pattern, commands) => do_global(
+                        &mut buffer,
                         &mut output,
                         *address,
                         pattern,
                         commands,
                         &mut previous_pattern,
                     ),
-                    Cmd::Insert(address) => buffer.prepare_insert(&mut input, *address),
-                    Cmd::Null(address) => buffer.do_null(&mut output, *address),
-                    Cmd::Print(address) => buffer.do_print(&mut output, *address),
+                    Cmd::Insert(address) => buffer
+                        .prepare_insert(&mut input, *address)
+                        .map_err(Error::BufferCmd),
+                    Cmd::Null(address) => do_null(&mut buffer, &mut output, *address),
+                    Cmd::Print(address) => do_print(&mut buffer, &mut output, *address),
                     Cmd::Quit => do_quit(&mut output, &buffer, &prev_command).map(|ok_to_exit| {
                         done = ok_to_exit;
                     }),
-                    Cmd::Write(address, filename) => {
-                        buffer.do_write(&mut output, *address, filename.as_deref())
-                    }
-                    Cmd::Undo => buffer.do_undo(),
-                    Cmd::Redo => buffer.do_redo(),
-                }
-                .map_err(Error::BufferCmd);
+                    Cmd::Write(address, filename) => buffer
+                        .do_write(&mut output, *address, filename.as_deref())
+                        .map_err(Error::BufferCmd),
+                    Cmd::Undo => buffer.do_undo().map_err(Error::BufferCmd),
+                    Cmd::Redo => buffer.do_redo().map_err(Error::BufferCmd),
+                };
                 prev_command = Some(cmd);
                 res
             })
             .or_else(|e| writeln!(output, "{e}").map_err(Error::WriteOutput))?;
     }
+    Ok(())
+}
+
+pub fn do_enumerate(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    address: Option<Address>,
+) -> Result<(), Error> {
+    let span = if let Some(Address(b, e)) = address {
+        b..=e
+    } else {
+        if buffer.current_line() == 0 {
+            return Err(Error::InvalidAddress);
+        }
+        buffer.current_line()..=buffer.current_line()
+    };
+
+    if *span.start() < 1
+        || *span.start() > buffer.len()
+        || *span.end() < 1
+        || *span.end() > buffer.len()
+    {
+        return Err(Error::InvalidAddress);
+    }
+
+    let width = span.end().decimal_digits();
+    let start = *span.start();
+    buffer.set_current_line(*span.end());
+
+    for (i, l) in buffer[span].iter().enumerate() {
+        output
+            .write_all(format!("{:>width$}  {l}", start + i).as_bytes())
+            .map_err(Error::WriteOutput)?;
+    }
+    output.flush().map_err(Error::WriteOutput)?;
+    Ok(())
+}
+
+pub fn do_global(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    address: Option<Address>,
+    pattern: &Regex,
+    commands: &str,
+    previous_pattern: &mut Option<Regex>,
+) -> Result<(), Error> {
+    // make a list of matching lines
+    let search_range = address.map_or_else(|| 1..=buffer.len(), |a| a.0..=a.1);
+    let mut matched_lines = (search_range)
+        .filter(|&n| {
+            buffer[n]
+                .lines()
+                .next()
+                .map_or(false, |l| pattern.is_match(l))
+        })
+        .collect::<VecDeque<usize>>();
+
+    // iterate over list
+    while let Some(line_num) = matched_lines.pop_front() {
+        buffer.set_current_line(line_num);
+        let mut input = commands.as_bytes();
+
+        // parse and execute command list for line
+        let cmd =
+            Cmd::read(&mut input, buffer, previous_pattern).map_err(|_| Error::ReadGlobalCmd)?;
+        match cmd {
+            Cmd::Enumerate(address) => do_enumerate(buffer, output, address)?,
+            Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
+            Cmd::Null(address) | Cmd::Print(address) => do_print(buffer, output, address)?,
+            _ => return Err(Error::UnsupportedGlobalCmd),
+        }
+    }
+
+    Ok(())
+}
+
+pub fn do_null(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    address: Option<Address>,
+) -> Result<(), Error> {
+    match address {
+        None => {
+            if buffer.is_empty() || buffer.current_line() == buffer.len() {
+                return Err(Error::InvalidAddress);
+            }
+            do_print(
+                buffer,
+                output,
+                Some(Address(
+                    buffer.current_line() + 1,
+                    buffer.current_line() + 1,
+                )),
+            )
+        }
+        _ => do_print(buffer, output, address),
+    }
+}
+
+pub fn do_print(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    address: Option<Address>,
+) -> Result<(), Error> {
+    let span = if let Some(Address(b, e)) = address {
+        b..=e
+    } else {
+        if buffer.current_line() == 0 {
+            return Err(Error::InvalidAddress);
+        }
+        buffer.current_line()..=buffer.current_line()
+    };
+
+    if *span.start() < 1
+        || *span.start() > buffer.len()
+        || *span.end() < 1
+        || *span.end() > buffer.len()
+    {
+        return Err(Error::InvalidAddress);
+    }
+
+    buffer.set_current_line(*span.end());
+    for l in &buffer[span] {
+        output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
+    }
+    output.flush().map_err(Error::WriteOutput)?;
     Ok(())
 }
 
@@ -100,7 +251,7 @@ fn do_quit(
     output: &mut impl Write,
     buffer: &EditBuffer,
     prev_command: &Option<Cmd>,
-) -> Result<bool, edit_buffer::Error> {
+) -> Result<bool, Error> {
     match prev_command {
         Some(Cmd::Quit) => Ok(true),
         _ if !buffer.is_dirty() => Ok(true),
@@ -109,7 +260,7 @@ fn do_quit(
                 output,
                 "Unwritten changes - repeat quit command to discard changes."
             )
-            .map_err(edit_buffer::Error::WriteOutput)?;
+            .map_err(Error::WriteOutput)?;
             Ok(false)
         }
     }
@@ -166,6 +317,291 @@ mod tests {
     }
 
     #[test]
+    fn do_null_no_addr() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        do_null(&mut buffer, &mut output, None).unwrap();
+        assert_eq!(&output[..], b"3\r\n");
+    }
+
+    #[test]
+    fn do_null_single_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        do_null(&mut buffer, &mut output, Some(Address(3, 3))).unwrap();
+        assert_eq!(&output[..], b"3\r\n");
+    }
+
+    #[test]
+    fn do_null_span() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        do_null(&mut buffer, &mut output, Some(Address(2, 4))).unwrap();
+        assert_eq!(&output[..], b"2\r\n3\r\n4\r\n");
+    }
+
+    #[test]
+    fn do_null_sets_current_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        do_null(&mut buffer, &mut output, Some(Address(2, 4))).unwrap();
+        assert_eq!(4, buffer.current_line());
+    }
+
+    #[test]
+    fn do_null_empty_buffer_gives_error() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::new();
+        let res = do_null(&mut buffer, &mut output, None).expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
+        let res =
+            do_null(&mut buffer, &mut output, Some(Address(0, 0))).expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn enumerate_empty_buffer_error() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::new();
+        let res = do_enumerate(&mut buffer, &mut output, None).expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
+        let res = do_enumerate(&mut buffer, &mut output, Some(Address(1, 1)))
+            .expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn enumerate_sm_buffer() {
+        let mut output = Vec::new();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        buffer.set_current_line(2);
+        do_enumerate(&mut buffer, &mut output, None).unwrap();
+        assert_eq!(&output[..], b"2  2\r\n", "output line 2");
+    }
+
+    #[test]
+    fn enumerate_sets_current_line() {
+        let mut output = Vec::new();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        buffer.set_current_line(2);
+
+        do_enumerate(&mut buffer, &mut output, Some(Address(6, 9))).unwrap();
+    }
+
+    #[test]
+    fn enumerate_lg_buffer() {
+        let mut output = Vec::new();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        let mut input: Vec<u8> = Vec::new();
+        for i in 11..=1024 {
+            input.extend_from_slice(format!("{i}\r\n").as_bytes());
+        }
+        input.extend_from_slice(".\n".as_bytes());
+        let mut input = &input[..];
+
+        buffer
+            .prepare_append(&mut input, Some(Address(buffer.len(), buffer.len())))
+            .unwrap();
+        buffer.set_current_line(2);
+        assert_eq!(1024, buffer.len());
+        output.clear();
+
+        do_enumerate(&mut buffer, &mut output, Some(Address(4, 900))).unwrap();
+        let expected = b"  4  4\r\n";
+        assert_eq!(&expected[..], &output[0..expected.len()]);
+        output.clear();
+
+        do_enumerate(&mut buffer, &mut output, Some(Address(999, 999))).unwrap();
+        let expected = b"999  999\r\n";
+        assert_eq!(&expected[..], &output[0..expected.len()]);
+    }
+
+    #[test]
+    fn do_global_no_matches() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("four").unwrap();
+        let commands = "p\n".to_owned();
+        do_global(
+            &mut buffer,
+            &mut output,
+            None,
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .unwrap();
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn do_global_illegal_nested_gobal() {
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three"]);
+        buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("t..").unwrap();
+        let commands = "1,2g/ee/n\n".to_owned();
+        let res = do_global(
+            &mut buffer,
+            &mut output,
+            None,
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .expect_err("nested global");
+        assert!(matches!(res, Error::NestedGlobalCmd));
+    }
+
+    #[test]
+    fn do_global_blank_command_print() {
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "tweedle dee"]);
+        buffer.set_current_line(3);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("t..").unwrap();
+        let commands = "\n".to_owned();
+        do_global(
+            &mut buffer,
+            &mut output,
+            Some(Address(1, 3)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .unwrap();
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\r\nthree\r\n");
+    }
+
+    #[test]
+    fn do_global_print() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("t..").unwrap();
+        let commands = "p\r\n".to_owned();
+        do_global(
+            &mut buffer,
+            &mut output,
+            None,
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .unwrap();
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\nthree\n");
+    }
+
+    #[test]
+    fn do_global_enumerate() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("t..").unwrap();
+        let commands = "n\r\n".to_owned();
+        do_global(
+            &mut buffer,
+            &mut output,
+            Some(Address(1, 3)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .unwrap();
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "2  two\n3  three\n");
+    }
+
+    #[test]
+    fn do_global_enumerate_with_addresses() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three", "four", "five", "six"]);
+        buffer.set_current_line(6);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "-1,.n\r\n".to_owned();
+        do_global(
+            &mut buffer,
+            &mut output,
+            Some(Address(2, 5)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .unwrap();
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "2  two\n3  three\n4  four\n5  five\n"
+        );
+    }
+
+    #[test]
+    fn do_global_unsupported_commands() {
+        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three"]);
+        buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new(r"t..").unwrap();
+        let commands = "e filename.txt\n".to_owned();
+        let res = do_global(
+            &mut buffer,
+            &mut output,
+            Some(Address(1, 3)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .expect_err("unsupported global command");
+        assert!(matches!(res, Error::UnsupportedGlobalCmd));
+    }
+
+    #[test]
+    fn do_print_no_addr() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        do_print(&mut buffer, &mut output, None).unwrap();
+        assert_eq!(&output[..], b"2\r\n");
+    }
+
+    #[test]
+    fn do_print_single_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        do_print(&mut buffer, &mut output, Some(Address(3, 3))).unwrap();
+        assert_eq!(&output[..], b"3\r\n");
+    }
+
+    #[test]
+    fn do_print_span() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        do_print(&mut buffer, &mut output, Some(Address(2, 4))).unwrap();
+        assert_eq!(&output[..], b"2\r\n3\r\n4\r\n");
+    }
+
+    #[test]
+    fn do_print_sets_current_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        do_print(&mut buffer, &mut output, Some(Address(2, 4))).unwrap();
+        assert_eq!(4, buffer.current_line());
+    }
+
+    #[test]
     fn do_quit_unchanged() {
         let input = &b"q\n"[..];
         let mut output = Vec::new();
@@ -183,6 +619,17 @@ mod tests {
             &b"::Unwritten changes - repeat quit command to discard changes.\n:"[..],
             &output[..]
         );
+    }
+
+    #[test]
+    fn do_print_empty_buffer_gives_error() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::new();
+        let res = do_print(&mut buffer, &mut output, None).expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
+        let res =
+            do_print(&mut buffer, &mut output, Some(Address(0, 0))).expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
