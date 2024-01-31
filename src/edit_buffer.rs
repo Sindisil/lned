@@ -2,7 +2,6 @@
 // editor. All public interface uses one based indexing, and any such function
 // is responsible for translating into the 0 based indexing of the Vec<String>
 // containing the lines of text.
-mod operation;
 mod undo_stack;
 
 use std::borrow::ToOwned;
@@ -506,7 +505,6 @@ impl EditBuffer {
         self.current_line = usize::min(self.text.len(), b);
         change.current_line_after = self.current_line;
         change.push_remove(b - 1, removed);
-eprintln!("after delete buffer: {:?}  cl: {}\nchange: {:?}", &self[..], self.current_line, change);
         self.undo_stack.push_undo(change);
         Ok(())
     }
@@ -800,14 +798,6 @@ eprintln!("after delete buffer: {:?}  cl: {}\nchange: {:?}", &self[..], self.cur
                     match diff {
                         Diff::Add(p, l) => drop(self.text.splice(*p..*p + l.len(), None)),
                         Diff::Remove(p, l) => drop(self.text.splice(*p..*p, l.iter().cloned())),
-                        Diff::Change(cp, cl) => {
-                            if let Some(Diff::Add(ap, al)) = diffs.next() {
-                                self.text.splice(*ap..*ap + al.len(), None);
-                                self.text.splice(*cp..*cp, cl.iter().cloned());
-                            } else {
-                                panic!("Diff::Change wasn't followed by matching Diff::Add");
-                            }
-                        }
                     }
                 }
             }
@@ -828,14 +818,6 @@ eprintln!("after delete buffer: {:?}  cl: {}\nchange: {:?}", &self[..], self.cur
                         }
                         Diff::Remove(p, l) => {
                             self.text.splice(*p..*p + l.len(), None);
-                        }
-                        Diff::Change(cp, cl) => {
-                            if let Some(Diff::Add(ap, al)) = diffs.next() {
-                                self.text.splice(*ap..*ap, al.iter().cloned());
-                                self.text.splice(*cp..*cp + cl.len(), None);
-                            } else {
-                                panic!("Diff::Change wasn't followed by matching Diff::Add");
-                            }
                         }
                     }
                 }
@@ -1782,35 +1764,6 @@ mod tests {
         assert_eq!(&expected[..], &buffer[..]);
     }
 
-    //    #[test]
-    //    fn do_undo_edit() {
-    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-    //        buffer.set_current_line(4);
-    //        let expected = buffer.clone();
-    //        let mut output = Vec::new();
-    //        let filename = Path::new("test/assets/text_with_final_eol.txt");
-    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-    //        assert_eq!(buffer.filename(), Some(filename));
-    //        assert!(buffer.current_line() != 4);
-    //        assert!(buffer[..] != expected[..]);
-    //        buffer.do_undo().unwrap();
-    //        assert_eq!(&buffer[..], &expected[..]);
-    //    }
-    //
-    //    #[test]
-    //    fn do_undo_edit_empty_buffer() {
-    //        let mut buffer = EditBuffer::new();
-    //        let expected = buffer.clone();
-    //        let mut output = Vec::new();
-    //        let filename = Path::new("test/assets/text_with_final_eol.txt");
-    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-    //        assert_eq!(buffer.filename(), Some(filename));
-    //        assert!(buffer.current_line() != 0);
-    //        assert!(buffer[..] != expected[..]);
-    //        buffer.do_undo().unwrap();
-    //        assert_eq!(&buffer[..], &expected[..]);
-    //    }
-    //
     #[test]
     fn do_undo_redo_insert() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
@@ -1927,24 +1880,6 @@ mod tests {
         assert!(!buffer.is_dirty()); // still not dirty
     }
 
-    //    #[test]
-    //    fn do_redo_edit() {
-    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-    //        let original = buffer.clone();
-    //        let mut output = Vec::new();
-    //        let filename = Path::new("test/assets/text_with_no_trailing_eol.txt");
-    //
-    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-    //        assert!(buffer[..] != original[..]);
-    //        let from_file = buffer.clone();
-    //
-    //        buffer.do_undo().unwrap();
-    //        assert_eq!(&buffer[..], &original[..]);
-    //
-    //        buffer.do_redo().unwrap();
-    //        assert_eq!(&buffer[..], &from_file[..]);
-    //    }
-    //
     #[test]
     fn do_redo_multi() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);

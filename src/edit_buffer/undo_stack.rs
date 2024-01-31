@@ -1,3 +1,4 @@
+use std::mem;
 /// `UndoStack` ecapsulates the undo and redo stacks, with methods that
 /// maintain the correct invarients.
 ///
@@ -29,7 +30,6 @@ pub struct ChangeSet {
 pub enum Diff {
     Add(usize, Vec<String>),    // Add/Insert of lines
     Remove(usize, Vec<String>), // Removal of lines
-    Change(usize, Vec<String>), // Lines removed for change (paired with following Add)
 }
 
 static INST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -56,44 +56,26 @@ impl ChangeSet {
         self.diffs.push(Diff::Remove(position, lines_removed));
     }
 
-    pub fn push_change(
-        &mut self,
-        position: usize,
-        lines_added: Vec<String>,
-        lines_removed: Vec<String>,
-    ) {
-        self.diffs.push(Diff::Change(position, lines_removed));
-        self.diffs.push(Diff::Add(position, lines_added));
-    }
-
     pub fn diffs(&self) -> impl Iterator<Item = &Diff> {
         self.diffs.iter()
     }
-
-    //    fn to_inverse(&self) -> ChangeSet {
-    //        let mut inv = ChangeSet::new();
-    //        inv.id = next_id();
-    //        //        (inv.current_line_before, inv.current_line_after) =
-    //        //            (self.current_line_after, self.current_line_before);
-    //        inv.current_line_after = self.current_line_after;
-    //        inv.current_line_before = self.current_line_before;
-    //        let mut diffs = self.diffs.iter();
-    //        while let Some(diff) = diffs.next() {
-    //            match diff {
-    //                Diff::Remove(p, l) => inv.diffs.push(Diff::Add(*p, l.clone())),
-    //                Diff::Add(p, l) => inv.diffs.push(Diff::Remove(*p, l.clone())),
-    //                Diff::Change(cp, cl) => {
-    //                    if let Some(Diff::Add(ap, al)) = diffs.next() {
-    //                        inv.diffs.push(Diff::Change(*ap, al.clone()));
-    //                        inv.diffs.push(Diff::Add(*cp, cl.clone()));
-    //                    } else {
-    //                        panic!("Expected matching Diff::Add after Diff::Change!");
-    //                    }
-    //                }
-    //            }
-    //        }
-    //        inv
-    //    }
+    fn invert(mut change: ChangeSet) -> ChangeSet {
+        mem::swap(
+            &mut change.current_line_before,
+            &mut change.current_line_after,
+        );
+        let inv = change
+            .diffs
+            .into_iter()
+            .rev()
+            .map(|d| match d {
+                Diff::Add(p, l) => Diff::Remove(p, l),
+                Diff::Remove(p, l) => Diff::Add(p, l),
+            })
+            .collect::<Vec<Diff>>();
+        change.diffs = inv;
+        change
+    }
 }
 
 impl UndoStack {
@@ -120,11 +102,12 @@ impl UndoStack {
     pub fn push_undo(&mut self, mut change: ChangeSet) {
         if change.id.is_none() {
             change.id = next_id();
-            //            if !self.redo.is_empty() {
-            //                let mut inv: Vec<ChangeSet> = self.redo.iter().map(ChangeSet::to_inverse).collect();
-            //                self.undo.extend(self.redo.drain(..).rev());
-            //                self.undo.append(&mut inv);
-            //            }
+            if !self.redo.is_empty() {
+                // replay redo stack in reverse onto undo stack
+                self.undo.extend(self.redo.iter().rev().cloned());
+                // replay redo stack from bottom, with inverted operations
+                self.undo.extend(self.redo.drain(..).map(ChangeSet::invert));
+            }
         }
         self.undo.push(change);
     }

@@ -355,7 +355,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn redo_cmd_dispatch() {
         let input = b"a\n1\n2\n3\n.\n2,3d\nu\nU\n3p\nq\nq\n";
         let mut output = Vec::new();
