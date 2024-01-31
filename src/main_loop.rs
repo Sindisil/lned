@@ -106,8 +106,14 @@ pub fn run(
                     Cmd::Write(address, filename) => buffer
                         .do_write(&mut output, *address, filename.as_deref())
                         .map_err(Error::BufferCmd),
-                    Cmd::Undo => buffer.do_undo().map_err(Error::BufferCmd),
-                    Cmd::Redo => buffer.do_redo().map_err(Error::BufferCmd),
+                    Cmd::Undo => {
+                        buffer.do_undo();
+                        Ok(())
+                    }
+                    Cmd::Redo => {
+                        buffer.do_redo();
+                        Ok(())
+                    }
                 };
                 prev_command = Some(cmd);
                 res

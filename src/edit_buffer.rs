@@ -454,10 +454,11 @@ impl EditBuffer {
         let mut lines = Vec::new();
         Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
         let location = address.map_or(self.current_line, |addr| addr.1);
-        self.do_append(location, lines)
+        self.do_append(location, lines);
+        Ok(())
     }
 
-    fn do_append(&mut self, location: usize, lines: Vec<String>) -> Result<(), Error> {
+    fn do_append(&mut self, location: usize, lines: Vec<String>) {
         let mut change = ChangeSet::new();
         change.current_line_before = self.current_line;
         if lines.is_empty() {
@@ -472,18 +473,20 @@ impl EditBuffer {
         }
         change.current_line_after = self.current_line;
         self.undo_stack.push_undo(change);
-        Ok(())
     }
 
     pub fn prepare_delete(&mut self, address: Option<Address>) -> Result<(), Error> {
         match address {
             Some(Address(0, _)) => Err(Error::InvalidAddress),
             None if self.current_line == 0 => Err(Error::InvalidAddress),
-            _ => self.do_delete(address),
+            _ => {
+                self.do_delete(address);
+                Ok(())
+            }
         }
     }
 
-    pub fn do_delete(&mut self, address: Option<Address>) -> Result<(), Error> {
+    pub fn do_delete(&mut self, address: Option<Address>) {
         let (b, e) = address.map_or((self.current_line, self.current_line), |addr| {
             (addr.0, addr.1)
         });
@@ -496,7 +499,6 @@ impl EditBuffer {
         change.current_line_after = self.current_line;
         change.push_remove(b - 1, removed);
         self.undo_stack.push_undo(change);
-        Ok(())
     }
 
     // fixme - in second phase, implement edit properly
@@ -671,7 +673,6 @@ impl EditBuffer {
         }
     }
 
-
     pub fn prepare_insert(
         &mut self,
         input: &mut impl BufRead,
@@ -690,10 +691,11 @@ impl EditBuffer {
                 .map_or(self.current_line, |addr| addr.1)
                 .saturating_sub(1)
         };
-        self.do_append(location, lines)
+        self.do_append(location, lines);
+        Ok(())
     }
 
-    pub fn do_undo(&mut self) -> Result<(), Error> {
+    pub fn do_undo(&mut self) {
         if let Some(undo) = self.undo_stack.pop_undo() {
             self.current_line = undo.current_line_before;
             {
@@ -707,10 +709,9 @@ impl EditBuffer {
             }
             self.undo_stack.push_redo(undo);
         }
-        Ok(())
     }
 
-    pub fn do_redo(&mut self) -> Result<(), Error> {
+    pub fn do_redo(&mut self) {
         if let Some(redo) = self.undo_stack.pop_redo() {
             self.current_line = redo.current_line_after;
             {
@@ -728,7 +729,6 @@ impl EditBuffer {
             }
             self.undo_stack.push_undo(redo);
         }
-        Ok(())
     }
 
     pub fn do_write(
@@ -1236,7 +1236,6 @@ mod tests {
     /////
     // cmd impl tests
 
-
     #[test]
     fn do_append_past_end_gives_error_before_input() {
         let mut buffer = EditBuffer::new();
@@ -1432,7 +1431,7 @@ mod tests {
             .prepare_append(&mut input, Some(Address(0, 0)))
             .unwrap();
         assert_eq!(&EditBuffer::from(vec!["1\n", "2", "3"])[..], &buffer[..]);
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(EditBuffer::new()[..], buffer[..]);
     }
 
@@ -1448,7 +1447,7 @@ mod tests {
             &EditBuffer::from(vec!["one\n", "two", "three", "1\n", "2", "3"])[..],
             &buffer[..]
         );
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected_final[..], &buffer[..]);
     }
 
@@ -1463,7 +1462,7 @@ mod tests {
             &EditBuffer::from(vec!["one\n", "two", "1\n", "2", "3", "three"])[..],
             &buffer[..]
         );
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected_final[..], &buffer[..]);
     }
 
@@ -1473,7 +1472,7 @@ mod tests {
         let expected = buffer.clone();
         buffer.prepare_delete(Some(Address(1, 4))).unwrap();
         assert_eq!(&EditBuffer::from(vec!["5\n", "6"])[..], &buffer[..]);
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected[..], &buffer[..]);
     }
 
@@ -1486,7 +1485,7 @@ mod tests {
             &EditBuffer::from(vec!["1\n", "2", "4", "5", "6"])[..],
             &buffer[..]
         );
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected[..], &buffer[..]);
     }
 
@@ -1500,7 +1499,7 @@ mod tests {
             &EditBuffer::from(vec!["1\n", "2", "3", "5", "6"])[..],
             &buffer[..]
         );
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected[..], &buffer[..]);
     }
 
@@ -1515,9 +1514,9 @@ mod tests {
             .prepare_insert(&mut input, Some(Address(3, 3)))
             .unwrap();
         assert_eq!(buffer[..], expected_modified[..]);
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(expected_final[..], buffer[..]);
-        buffer.do_redo().unwrap();
+        buffer.do_redo();
         assert_eq!(buffer[..], expected_modified[..]);
     }
 
@@ -1539,10 +1538,10 @@ mod tests {
         let expected_2 = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
         assert_eq!(&expected_2[..], &buffer[..]);
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected_1[..], &buffer[..]);
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected_final[..], &buffer[..]);
     }
 
@@ -1564,7 +1563,7 @@ mod tests {
         let expected_2 = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
         assert_eq!(&expected_2[..], &buffer[..]);
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected_1[..], &buffer[..]);
 
         input = "spam!\n.\n".as_bytes();
@@ -1575,19 +1574,19 @@ mod tests {
             EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "spam!", "3", "4", "5", "6"]);
         assert_eq!(&buffer[..], &expected_3[..]);
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected_1[..], &buffer[..]);
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected_2[..], &buffer[..]);
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected_1[..], &buffer[..]);
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(&expected_final[..], &buffer[..]);
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         // Undo stack should be empty here, so buffer shouldn't change
         assert_eq!(&expected_final[..], &buffer[..]);
     }
@@ -1608,15 +1607,15 @@ mod tests {
             .prepare_append(&mut input, Some(Address(0, 0)))
             .unwrap();
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
 
         assert!(!buffer.is_dirty());
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert!(!buffer.is_dirty()); // still not dirty
     }
 
@@ -1638,20 +1637,20 @@ mod tests {
         let expected_final = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
         assert_eq!(&expected_final[..], &buffer[..]);
 
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(buffer[..], expected_1[..]);
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(buffer[..], buffer_orig[..]);
-        buffer.do_undo().unwrap();
+        buffer.do_undo();
         assert_eq!(buffer[..], buffer_orig[..]); // buffer unchanged
 
-        buffer.do_redo().unwrap();
+        buffer.do_redo();
         assert_eq!(&expected_1[..], &buffer[..]);
 
-        buffer.do_redo().unwrap();
+        buffer.do_redo();
         assert_eq!(buffer[..], expected_final[..]);
 
-        buffer.do_redo().unwrap();
+        buffer.do_redo();
         assert_eq!(buffer[..], expected_final[..]); // buffer unchanged
     }
 

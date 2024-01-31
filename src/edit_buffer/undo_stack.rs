@@ -34,8 +34,8 @@ pub enum Diff {
 
 static INST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn next_id() -> Option<u64> {
-    Some(INST_COUNTER.fetch_add(1, Ordering::SeqCst))
+fn next_id() -> u64 {
+    INST_COUNTER.fetch_add(1, Ordering::SeqCst)
 }
 
 impl ChangeSet {
@@ -88,7 +88,7 @@ impl UndoStack {
 
     /// Push the supplied Undoable onto the undo stack.
     ///
-    /// If the pushed ChangeSet doesn't yet have an id value, it
+    /// If the pushed `ChangeSet` doesn't yet have an id value, it
     /// must be a new operation, rather than a redone operation.
     ///
     /// In that case, if the redo stack is not
@@ -101,7 +101,7 @@ impl UndoStack {
     /// commands issued before the current change.
     pub fn push_undo(&mut self, mut change: ChangeSet) {
         if change.id.is_none() {
-            change.id = next_id();
+            change.id = Some(next_id());
             if !self.redo.is_empty() {
                 // replay redo stack in reverse onto undo stack
                 self.undo.extend(self.redo.iter().rev().cloned());
