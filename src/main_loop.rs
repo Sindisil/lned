@@ -15,10 +15,6 @@ pub enum Error {
     ParseCmd(command::Error),
     BufferCmd(edit_buffer::Error),
     InvalidAddress,
-    NoFilename,
-    FileOpen(io::Error),
-    WriteLines(io::Error),
-    ReadLines(io::Error),
     NestedGlobalCmd,
     UnsupportedGlobalCmd,
     ReadGlobalCmd,
@@ -33,10 +29,6 @@ impl fmt::Display for Error {
             Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
             Error::BufferCmd(e) => write!(f, "{e}"),
             Error::InvalidAddress => write!(f, "invalid address"),
-            Error::NoFilename => write!(f, "No filename"),
-            Error::FileOpen(e) => write!(f, "Error opening file: {e}"),
-            Error::WriteLines(e) => write!(f, "Error writing lines to file: {e}"),
-            Error::ReadLines(e) => write!(f, "{e} reading input lines"),
             Error::NestedGlobalCmd => write!(f, "invalid nested global command"),
             Error::UnsupportedGlobalCmd => write!(f, "unsupported global command"),
             Error::ReadGlobalCmd => write!(f, "error reading global command"),
@@ -58,9 +50,7 @@ pub fn run(
     let mut previous_pattern: Option<regex::Regex> = None;
 
     if let Some(_file) = &args.file {
-        //        buffer
-        //            .do_edit(&mut output, Some(file), prev_command.as_ref())
-        //            .or_else(|e| writeln!(output, "{e}").map_err(Error::WriteOutput))?;
+        todo!("attempt to edit specified file");
     }
 
     // Accept and process commands until fatal error or exit

@@ -27,8 +27,6 @@ pub struct EditBuffer {
 
 #[derive(Debug)]
 pub enum Error {
-    Read(io::Error),
-    ReadBadIndex(usize, usize),
     InvalidAddress,
     WriteOutput(io::Error),
     NoFilename,
@@ -42,11 +40,6 @@ impl std::error::Error for Error {}
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Read(e) => write!(f, "error reading lines: {e}"),
-            Error::ReadBadIndex(sz, i) => write!(
-                f,
-                "error reading lines: location {i} beyond end of buffer {sz}"
-            ),
             Error::InvalidAddress => write!(f, "invalid address"),
             Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
             Error::NoFilename => write!(f, "No filename"),
@@ -133,11 +126,6 @@ impl Index<RangeFull> for EditBuffer {
         &self.text[index]
     }
 }
-#[derive(Debug, PartialEq)]
-enum ReadResult {
-    AsIs(usize),
-    EOLAdded(usize),
-}
 
 impl EditBuffer {
     /// Creates a new empty `EditBuffer`.
@@ -205,64 +193,6 @@ impl EditBuffer {
 
     pub fn filename(&self) -> Option<&Path> {
         self.filename.as_deref()
-    }
-
-    /// Reads lines from reader into the buffer at the specified line.
-    ///
-    /// Default EOL auto-detect:
-    ///     If this call to read is on a buffer that has no default EOL, then new lines
-    ///     read are examined, and the default is set to the most frequently used EOL
-    ///     sequence.
-    ///
-    /// EOL Correction:
-    /// If the final line read has no line terminator, one will be added.
-    ///     Added EOLs will be the default EOL for the
-    ///    buffer. This is determined either by configuration, or auto-detected
-    ///    (e.g., as described above, or similarly when first lines are appended
-    ///    or inserted).
-    ///
-    /// Returns number of bytes read, or an error if read fails
-    fn read(&mut self, at_line: usize, mut reader: impl BufRead) -> Result<ReadResult, Error> {
-        if at_line > self.text.len() {
-            return Err(Error::ReadBadIndex(self.len(), at_line));
-        }
-        let mut lines = Vec::new();
-        let mut line = String::new();
-        let mut bytes_read = 0;
-        loop {
-            let len = reader.read_line(&mut line).map_err(Error::Read)?;
-            if len == 0 {
-                break;
-            }
-            bytes_read += len;
-            lines.push(line);
-            line = String::new();
-        }
-        let lines_added = lines.len();
-
-        // set default_eol if neccessary
-        let default_eol = self
-            .default_eol
-            .get_or_insert_with(|| compute_default_eol(&lines));
-
-        // Add in missing eol as needed
-        let eol_added = match lines.last_mut() {
-            Some(last) if !(last.ends_with("\r\n") || last.ends_with('\n')) => {
-                last.push_str(default_eol);
-                bytes_read += default_eol.len();
-                true
-            }
-            _ => false,
-        };
-
-        // actually add new lines to buffer
-        self.text.splice(at_line..at_line, lines);
-        self.current_line = at_line + lines_added;
-        if eol_added {
-            Ok(ReadResult::EOLAdded(bytes_read))
-        } else {
-            Ok(ReadResult::AsIs(bytes_read))
-        }
     }
 
     // fixme - move out into io module or main_loop
@@ -501,163 +431,6 @@ impl EditBuffer {
         self.undo_stack.push_undo(change);
     }
 
-    // fixme - in second phase, implement edit properly
-    //    pub fn prepare_edit(
-    //        &mut self,
-    //        output: &mut impl Write,
-    //        filename: Option<&Path>,
-    //        prev_command: Option<&Cmd>,
-    //    ) -> Result<(), Error> {
-    //// This will all move to main_loop in later phase of rewrite
-    //        if self.is_dirty() && !matches!(prev_command, Some(Cmd::Edit(_))) {
-    //            writeln!(
-    //                output,
-    //                "Unwritten changes - repeat edit command to discard changes."
-    //            )
-    //            .map_err(Error::WriteOutput)?;
-    //            return Ok(());
-    //        }
-    //
-    //        if let Some(filename) = filename {
-    //            self.filename = Some(filename.to_owned());
-    //        }
-    //        let filename = self.filename.as_ref().ok_or(Error::NoFilename)?;
-    //                let f = File::open(&data.filename);
-    //                let source = match f {
-    //                    Ok(f) => Ok(Some(BufReader::new(f))),
-    //                    Err(e) => match e.kind() {
-    //                        io::ErrorKind::NotFound => {
-    //                            writeln!(output, "{e}").map_err(Error::WriteOutput)?;
-    //                            Ok(None)
-    //                        }
-    //                        _ => Err(e),
-    //                    },
-    //                }
-    //                .map_err(Error::FileOpen)?;
-    //
-    //        if let Some(source) = source {
-    //            let ret = self.read(0, source)?;
-    //            match ret {
-    //                ReadResult::EOLAdded(bytes_read) => {
-    //                    writeln!(output, "missing line terminator appended\n{bytes_read}")
-    //                        .map_err(Error::WriteOutput)?;
-    //                }
-    //                ReadResult::AsIs(bytes_read) => {
-    //                    writeln!(output, "{bytes_read}").map_err(Error::WriteOutput)?;
-    //                }
-    //            }
-    //        }
-    //self.do_edit(filename.clone())
-    //}
-    //
-    //fn do_edit(&mut self, filename: PathBuf) -> Result<(), Error> {
-    //// fixme - create Diff::Change(0, self[..]))
-    //        if let Some(data) = data {
-    //            if data.lines_removed.is_empty() {
-    //                data.lines_removed.append(&mut self.text);
-    //            }
-    //        }
-    //        self.text.clear();
-    //
-    //        Ok(())
-    //    }
-    //
-    //    pub fn prepare_append(
-    //        &mut self,
-    //        input: &mut impl BufRead,
-    //        address: Option<Address>,
-    //    ) -> Result<(), Error> {
-    //        if address.is_some_and(|a| a.1 > self.len()) {
-    //            return Err(Error::InvalidAddress);
-    //        }
-    //        let mut lines = Vec::new();
-    //        Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
-    //        self.do_append(address, lines)
-    //    }
-
-    //    pub fn prepare_edit(
-    //        &mut self,
-    //        output: &mut impl Write,
-    //        filename: Option<&Path>,
-    //        prev_command: Option<&Cmd>,
-    //    ) -> Result<(), Error> {
-    //        if self.is_dirty() && !matches!(prev_command, Some(Cmd::Edit(_))) {
-    //            writeln!(
-    //                output,
-    //                "Unwritten changes - repeat edit command to discard changes."
-    //            )
-    //            .map_err(Error::WriteOutput)?;
-    //            return Ok(());
-    //        }
-    //
-    //        if let Some(filename) = filename {
-    //            self.filename = Some(filename.to_owned());
-    //        }
-    //        let filename = self.filename.as_ref().ok_or(Error::NoFilename)?;
-    //self.do_edit(filename.clone())
-    //}
-    //
-    //fn do_edit(&mut self, filename: PathBuf) -> Result<(), Error> {
-    //                let f = File::open(&data.filename);
-    //                let source = match f {
-    //                    Ok(f) => Ok(Some(BufReader::new(f))),
-    //                    Err(e) => match e.kind() {
-    //                        io::ErrorKind::NotFound => {
-    //                            writeln!(output, "{e}").map_err(Error::WriteOutput)?;
-    //                            Ok(None)
-    //                        }
-    //                        _ => Err(e),
-    //                    },
-    //}
-    //
-    //        let mut op = Op::Edit(EditData {
-    //            filename: filename.clone(),
-    //            current_line: self.current_line,
-    //            lines_removed: Vec::new(),
-    //            clean_fingerprint: self.clean_fingerprint,
-    //        });
-    //
-    //        let res = self.execute(output, &mut op);
-    //        self.undo_stack.push_undo(op);
-    //        self.clean_fingerprint = self.undo_stack.fingerprint();
-    //        res
-    //    }
-
-    //    pub fn do_enumerate(
-    //        &mut self,
-    //        output: &mut impl Write,
-    //        address: Option<Address>,
-    //    ) -> Result<(), Error> {
-    //        let span = if let Some(Address(b, e)) = address {
-    //            b..=e
-    //        } else {
-    //            if self.current_line == 0 {
-    //                return Err(Error::InvalidAddress);
-    //            }
-    //            self.current_line..=self.current_line
-    //        };
-    //
-    //        if *span.start() < 1
-    //            || *span.start() > self.len()
-    //            || *span.end() < 1
-    //            || *span.end() > self.len()
-    //        {
-    //            return Err(Error::InvalidAddress);
-    //        }
-    //
-    //        let width = span.end().decimal_digits();
-    //        let start = *span.start();
-    //        self.current_line = *span.end();
-    //
-    //        for (i, l) in self[span].iter().enumerate() {
-    //            output
-    //                .write_all(format!("{:>width$}  {l}", start + i).as_bytes())
-    //                .map_err(Error::WriteOutput)?;
-    //        }
-    //        output.flush().map_err(Error::WriteOutput)?;
-    //        Ok(())
-    //    }
-    //
     pub fn do_file(
         &mut self,
         output: &mut impl Write,
@@ -784,17 +557,11 @@ fn compute_default_eol(lines: impl IntoIterator<Item = impl AsRef<str>>) -> &'st
     }
 }
 
-// Read lines of text input until a line with a single . is entered
-// Clears previous content of buffer, but doesn't shrink capacity.
-// Returns a Vec of all lines entered *except* the terminating line
-// containing a single dot.
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use std::io::{BufReader, Read};
-    use std::ops::Deref;
+    use std::io::Read;
     use std::str;
 
     struct BadReader {}
@@ -996,113 +763,6 @@ mod tests {
     fn default_eol_when_equal_lf_crlf() {
         let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n"];
         assert_eq!(compute_native_eol(), compute_default_eol(&lines));
-    }
-
-    /////
-    /////
-    // read() tests
-
-    fn new_input_buf(content: &[impl Deref<Target = str>]) -> Vec<u8> {
-        let mut input = Vec::new();
-        for line in content {
-            input.extend(line.bytes());
-        }
-        input
-    }
-
-    #[test]
-    fn read_append_equal_eol_no_final() {
-        let initial = vec!["Line1\n", "Line2\r\n", "Line3"];
-        let mut buffer = EditBuffer::from(initial);
-        assert!(buffer
-            .default_eol
-            .is_some_and(|eol| eol == compute_native_eol()));
-        let def_eol = buffer.default_eol.unwrap();
-        assert!(buffer[..].last().unwrap().ends_with(def_eol));
-
-        let at = 3;
-        let added = ["New1\n", "New2\r\n", "New3"];
-        let input = new_input_buf(&added[..]);
-        let ret = buffer.read(at, &input[..]).unwrap();
-
-        let mut line3 = "Line3".to_string();
-        line3.push_str(def_eol);
-        let mut new3 = added[2].to_owned();
-        new3.push_str(def_eol);
-        let expect = vec![
-            "Line1\n",
-            "Line2\r\n",
-            &line3[..],
-            "New1\n",
-            "New2\r\n",
-            &new3[..],
-        ];
-        assert_eq!(buffer.text, expect);
-        assert_eq!(buffer.current_line(), 6);
-        assert!(if let ReadResult::EOLAdded(bytes) = ret {
-            bytes == 15 + def_eol.len()
-        } else {
-            false
-        });
-    }
-
-    #[test]
-    fn read_insert_equal_eol_no_final() {
-        let initial = vec!["Line1\r\n", "Line2\n", "Line3\n", "Line4\r\n"];
-        let mut buffer = EditBuffer::from(initial);
-
-        let at = 2;
-        let added = ["New1\r\n", "New2\r\n", "New3"];
-        let input = new_input_buf(&added[..]);
-        let ret = buffer.read(at, &input[..]).unwrap();
-
-        let mut new3 = "New3".to_string();
-        new3.push_str(compute_native_eol());
-        let expect = vec![
-            "Line1\r\n",
-            "Line2\n",
-            "New1\r\n",
-            "New2\r\n",
-            &new3[..],
-            "Line3\n",
-            "Line4\r\n",
-        ];
-        assert_eq!(expect, buffer.text);
-        assert!(if let ReadResult::EOLAdded(bytes) = ret {
-            bytes == 16 + buffer.default_eol.unwrap().len()
-        } else {
-            false
-        });
-        assert_eq!(buffer.current_line(), 5);
-    }
-
-    #[test]
-    fn read_with_bad_index() {
-        let mut buffer = EditBuffer::new();
-        let content = vec!["Line1\n"];
-        let input = new_input_buf(&content);
-        let res = buffer.read(999, &input[..]).expect_err("bad index");
-        assert!(matches!(res, Error::ReadBadIndex(0, 999)));
-    }
-
-    #[test]
-    fn read_with_io_error() {
-        let reader = BadReader {};
-        let mut input = BufReader::new(reader);
-        let mut buffer = EditBuffer::new();
-        let res = buffer.read(0, &mut input).expect_err("IO error");
-        assert!(matches!(res, Error::Read(_)));
-    }
-
-    #[test]
-    fn read_with_io_error_preserves_text() {
-        let reader = BadReader {};
-        let mut input = BufReader::new(reader);
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let expected = buffer.clone();
-        let res = buffer.read(0, &mut input).expect_err("IO error");
-        assert!(matches!(res, Error::Read(_)));
-        assert_eq!(buffer[..], expected[..]);
     }
 
     /////
@@ -1802,139 +1462,4 @@ mod tests {
         assert_eq!(3, buffer.len());
         assert!(&expected[..].eq(&buffer[..]));
     }
-
-    //    #[test]
-    //    fn do_edit_no_file() {
-    //        let mut buffer = EditBuffer::new();
-    //        let mut output = Vec::new();
-    //        let res = buffer
-    //            .do_edit(&mut output, None, None)
-    //            .expect_err("no filename");
-    //        assert!(matches!(res, Error::NoFilename));
-    //    }
-    //
-    //    #[test]
-    //    fn do_edit_file_not_found() {
-    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-    //        let file_to_edit = "a_file_that_is_not_there.ext";
-    //        let mut output = Vec::new();
-    //        buffer
-    //            .do_edit(&mut output, Some(Path::new(file_to_edit)), None)
-    //            .unwrap();
-    //        assert!(buffer.is_empty());
-    //        assert!(!buffer.is_dirty());
-    //        assert_eq!(buffer.filename(), Some(Path::new(file_to_edit)));
-    //    }
-    //
-    //    #[test]
-    //    fn do_edit_default_filename() {
-    //        let filename = Path::new(r"test/assets/text_with_final_eol.txt");
-    //        let mut buffer = EditBuffer::new();
-    //        let mut output = Vec::new();
-    //        buffer.do_file(&mut output, Some(filename)).unwrap();
-    //        assert_eq!(buffer.filename(), Some(filename));
-    //        output.clear();
-    //        buffer.do_edit(&mut output, None, None).unwrap();
-    //        assert_eq!(&b"312\n"[..], &output[..]);
-    //    }
-    //
-    //    #[test]
-    //    fn do_edit() {
-    //        let filename = Path::new(r"test/assets/text_with_final_eol.txt");
-    //        let mut buffer = EditBuffer::new();
-    //        let mut output = Vec::new();
-    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-    //        assert_eq!(&b"312\n"[..], &output[..]);
-    //    }
-    //
-    //    #[test]
-    //    fn do_edit_no_final_eol() {
-    //        let filename = Path::new(r"test/assets/text_with_no_final_eol.txt");
-    //        let mut buffer = EditBuffer::new();
-    //        let mut output = Vec::new();
-    //        buffer.do_edit(&mut output, Some(filename), None).unwrap();
-    //        let expected = b"missing line terminator appended\n319\n";
-    //        assert_eq!(&output[..], &expected[..]);
-    //    }
-    //
-    //    #[test]
-    //    fn read_replace_io_error() {
-    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-    //        let reader = BadReader {};
-    //        let source = Some(BufReader::new(reader));
-    //        let mut output = Vec::new();
-    //        let mut data = EditData {
-    //            ..Default::default()
-    //        };
-    //        let res = buffer.read_replace(&mut output, source, Some(&mut data));
-    //        assert!(matches!(res, Err(Error::Read(_))));
-    //    }
-    //
-    //    #[test]
-    //    fn read_replace_zero_length() {
-    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-    //        let reader = &b""[..];
-    //        let source = Some(BufReader::new(reader));
-    //        let mut output = Vec::new();
-    //        let mut data = EditData {
-    //            ..Default::default()
-    //        };
-    //        buffer
-    //            .read_replace(&mut output, source, Some(&mut data))
-    //            .unwrap();
-    //        assert_eq!(buffer[..], Vec::<String>::new());
-    //    }
-    //
-    //    #[test]
-    //    fn read_replace_empty_buffer() {
-    //        let mut buffer = EditBuffer::new();
-    //        let reader = &b"one\ntwo\nthree\n"[..];
-    //        let source = Some(BufReader::new(reader));
-    //        let mut output = Vec::new();
-    //        assert_eq!(buffer.current_line(), 0);
-    //
-    //        let mut data = EditData {
-    //            ..Default::default()
-    //        };
-    //        buffer
-    //            .read_replace(&mut output, source, Some(&mut data))
-    //            .unwrap();
-    //        assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
-    //        assert_eq!(buffer.current_line(), 3usize);
-    //    }
-    //
-    //    #[test]
-    //    fn read_replace_non_empty_buffer() {
-    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4"]);
-    //        let reader = &b"one\ntwo\nthree\n"[..];
-    //        let source = Some(BufReader::new(reader));
-    //        let mut output = Vec::new();
-    //        assert_eq!(buffer.current_line(), 4);
-    //
-    //        let mut data = EditData {
-    //            ..Default::default()
-    //        };
-    //        buffer
-    //            .read_replace(&mut output, source, Some(&mut data))
-    //            .unwrap();
-    //        assert_eq!(buffer[..], vec!["one\n", "two\n", "three\n"]);
-    //        assert_eq!(buffer.current_line(), 3usize);
-    //    }
-    //
-    //    #[test]
-    //    fn read_replace_prints_chars_read() {
-    //        let mut buffer = EditBuffer::new();
-    //        let reader = &b"one\ntwo\nthree\n"[..];
-    //        let source = Some(BufReader::new(reader));
-    //        let mut output = Vec::new();
-    //        assert_eq!(buffer.current_line(), 0);
-    //
-    //        let mut data = EditData {
-    //            ..Default::default()
-    //        };
-    //        buffer
-    //            .read_replace(&mut output, source, Some(&mut data))
-    //            .unwrap();
-    //        assert_eq!(&output[..], &b"14\n"[..]);
-    //    }
 }
