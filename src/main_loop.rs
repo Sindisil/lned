@@ -82,9 +82,7 @@ pub fn run(
                         todo!()
                     }
                     Cmd::Enumerate(address) => do_enumerate(&mut buffer, &mut output, *address),
-                    Cmd::File(filename) => buffer
-                        .do_file(&mut output, filename.as_deref())
-                        .map_err(Error::BufferCmd),
+                    Cmd::File(filename) => file(&mut buffer, &mut output, filename.as_deref()),
                     Cmd::Global(address, pattern, commands) => do_global(
                         &mut buffer,
                         &mut output,
@@ -154,6 +152,21 @@ pub fn do_enumerate(
     }
     output.flush().map_err(Error::WriteOutput)?;
     Ok(())
+}
+
+fn file(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    filename: Option<&Path>,
+) -> Result<(), Error> {
+    if let Some(filename) = filename {
+        buffer.set_filename(Some(filename.to_owned()));
+    }
+
+    match buffer.filename() {
+        None => writeln!(output, "no current filename").map_err(Error::WriteOutput),
+        Some(f) => writeln!(output, "{}", f.display()).map_err(Error::WriteOutput),
+    }
 }
 
 pub fn do_global(
@@ -297,6 +310,7 @@ fn write_file(
     .map_err(Error::WriteOutput)?;
     Ok(())
 }
+
 fn write_lines(
     destination: &mut impl Write,
     buffer: &mut EditBuffer,
@@ -484,6 +498,70 @@ mod tests {
         do_enumerate(&mut buffer, &mut output, Some(Address(999, 999))).unwrap();
         let expected = b"999  999\r\n";
         assert_eq!(&expected[..], &output[0..expected.len()]);
+    }
+
+    #[test]
+    fn print_filename_none_set() {
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut output = Vec::new();
+        file(&mut buffer, &mut output, None).unwrap();
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "no current filename\n"
+        );
+        assert_eq!(None, buffer.filename());
+    }
+
+    #[test]
+    fn set_filename() {
+        let new_filename = "a_new_filename.txt\n";
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut output = Vec::new();
+        assert_eq!(None, buffer.filename());
+        file(
+            &mut buffer,
+            &mut output,
+            Some(Path::new(new_filename.trim())),
+        )
+        .unwrap();
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
+        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
+    }
+
+    #[test]
+    fn print_filename() {
+        let new_filename = "a_new_filename.txt\n";
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut output = Vec::new();
+        assert_eq!(None, buffer.filename());
+        file(
+            &mut buffer,
+            &mut output,
+            Some(Path::new(new_filename.trim())),
+        )
+        .unwrap();
+        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
+        output.clear();
+        file(&mut buffer, &mut output, None).unwrap();
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
+    }
+
+    #[test]
+    fn change_filename() {
+        let orig_filename = "a_filename.md";
+        let new_filename = "a_new_filename.txt\n";
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut output = Vec::new();
+        file(&mut buffer, &mut output, Some(Path::new(orig_filename))).unwrap();
+        output.clear();
+        file(
+            &mut buffer,
+            &mut output,
+            Some(Path::new(new_filename.trim())),
+        )
+        .unwrap();
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
+        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
 
     #[test]
@@ -795,7 +873,7 @@ mod tests {
         run(&mut &input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         //        assert!(output.contains("test/assets/text_with_final_eol.txt"));
-        assert!(output.contains("No current filename"));
+        assert!(output.contains("no current filename"));
         assert!(output.contains("new_file_name.txt"));
     }
 

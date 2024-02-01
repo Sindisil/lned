@@ -4,11 +4,9 @@
 // containing the lines of text.
 mod undo_stack;
 
-use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-//use std::fs::OpenOptions;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead};
 use std::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use std::path::{Path, PathBuf};
 
@@ -28,7 +26,6 @@ pub struct EditBuffer {
 #[derive(Debug)]
 pub enum Error {
     InvalidAddress,
-    WriteOutput(io::Error),
     ReadLines(io::Error),
 }
 
@@ -38,7 +35,6 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Error::InvalidAddress => write!(f, "invalid address"),
-            Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
             Error::ReadLines(e) => write!(f, "{e} reading input lines"),
         }
     }
@@ -193,10 +189,6 @@ impl EditBuffer {
         self.filename = filename;
     }
 
-    pub fn clean_fingerprint(&self) -> Option<u64> {
-        self.clean_fingerprint
-    }
-
     pub fn reset_clean_fingerprint(&mut self) -> Option<u64> {
         self.clean_fingerprint = self.undo_stack.fingerprint();
         self.clean_fingerprint
@@ -258,21 +250,6 @@ impl EditBuffer {
         change.current_line_after = self.current_line;
         change.push_remove(b - 1, removed);
         self.undo_stack.push_undo(change);
-    }
-
-    pub fn do_file(
-        &mut self,
-        output: &mut impl Write,
-        filename: Option<&Path>,
-    ) -> Result<(), Error> {
-        if let Some(filename) = filename {
-            self.filename = Some(filename.to_owned());
-        }
-
-        match self.filename() {
-            None => writeln!(output, "No current filename").map_err(Error::WriteOutput),
-            Some(f) => writeln!(output, "{}", f.display()).map_err(Error::WriteOutput),
-        }
     }
 
     pub fn prepare_insert(
@@ -367,8 +344,7 @@ fn compute_default_eol(lines: impl IntoIterator<Item = impl AsRef<str>>) -> &'st
 mod tests {
     use super::*;
 
-    use std::io::Read;
-    use std::str;
+    use std::io::{Read, Write};
 
     struct BadReader {}
 
@@ -1022,63 +998,6 @@ mod tests {
 
         buffer.do_redo();
         assert_eq!(buffer[..], expected_final[..]); // buffer unchanged
-    }
-
-    #[test]
-    fn print_filename_none_set() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
-        let mut output = Vec::new();
-        buffer.do_file(&mut output, None).unwrap();
-        assert_eq!(
-            str::from_utf8(&output[..]).unwrap(),
-            "No current filename\n"
-        );
-        assert_eq!(None, buffer.filename());
-    }
-
-    #[test]
-    fn set_filename() {
-        let new_filename = "a_new_filename.txt\n";
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let mut output = Vec::new();
-        assert_eq!(None, buffer.filename());
-        buffer
-            .do_file(&mut output, Some(Path::new(new_filename.trim())))
-            .unwrap();
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
-        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
-    }
-
-    #[test]
-    fn print_filename() {
-        let new_filename = "a_new_filename.txt\n";
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let mut output = Vec::new();
-        assert_eq!(None, buffer.filename());
-        buffer
-            .do_file(&mut output, Some(Path::new(new_filename.trim())))
-            .unwrap();
-        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
-        output.clear();
-        buffer.do_file(&mut output, None).unwrap();
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
-    }
-
-    #[test]
-    fn change_filename() {
-        let orig_filename = "a_filename.md";
-        let new_filename = "a_new_filename.txt\n";
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let mut output = Vec::new();
-        buffer
-            .do_file(&mut output, Some(Path::new(orig_filename)))
-            .unwrap();
-        output.clear();
-        buffer
-            .do_file(&mut output, Some(Path::new(new_filename.trim())))
-            .unwrap();
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
-        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
 
     #[test]
