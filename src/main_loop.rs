@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt;
-use std::fs::OpenOptions;
-use std::io::{self, prelude::*};
+use std::fs::{File, OpenOptions};
+use std::io::{self, prelude::*, BufReader};
 use std::path::Path;
 
 use regex::Regex;
@@ -54,11 +54,12 @@ pub fn run(
 ) -> Result<(), Error> {
     let mut buffer = EditBuffer::new();
 
-    let mut prev_command: Option<Cmd> = None;
+    let mut previous_cmd: Option<Cmd> = None;
     let mut previous_pattern: Option<regex::Regex> = None;
 
-    if let Some(_file) = &args.file {
-        todo!("attempt to edit specified file");
+    if let Some(file) = &args.file {
+        edit_cmd(&mut buffer, &mut output, Some(file), &previous_cmd)
+            .or_else(|e| writeln!(output, "{e}").map_err(Error::WriteOutput))?;
     }
 
     // Accept and process commands until fatal error or exit
@@ -74,8 +75,8 @@ pub fn run(
                     // dispatch editor commands
                     Cmd::Append(address) => append_cmd(&mut buffer, &mut input, *address),
                     Cmd::Delete(address) => delete_cmd(&mut buffer, *address),
-                    Cmd::Edit(_file) => {
-                        todo!()
+                    Cmd::Edit(filename) => {
+                        edit_cmd(&mut buffer, &mut output, filename.as_deref(), &previous_cmd)
                     }
                     Cmd::Enumerate(address) => enumerate_cmd(&mut buffer, &mut output, *address),
                     Cmd::File(filename) => file_cmd(&mut buffer, &mut output, filename.as_deref()),
@@ -90,7 +91,7 @@ pub fn run(
                     Cmd::Insert(address) => insert_cmd(&mut buffer, &mut input, *address),
                     Cmd::Null(address) => null_cmd(&mut buffer, &mut output, *address),
                     Cmd::Print(address) => print_cmd(&mut buffer, &mut output, *address),
-                    Cmd::Quit => quit_cmd(&mut output, &buffer, &prev_command).map(|ok_to_exit| {
+                    Cmd::Quit => quit_cmd(&mut output, &buffer, &previous_cmd).map(|ok_to_exit| {
                         done = ok_to_exit;
                     }),
                     Cmd::Write(address, filename) => {
@@ -105,7 +106,7 @@ pub fn run(
                         Ok(())
                     }
                 };
-                prev_command = Some(cmd);
+                previous_cmd = Some(cmd);
                 res
             })
             .or_else(|e| writeln!(output, "{e}").map_err(Error::WriteOutput))?;
@@ -113,7 +114,7 @@ pub fn run(
     Ok(())
 }
 
-pub fn append_cmd(
+fn append_cmd(
     buffer: &mut EditBuffer,
     input: &mut impl BufRead,
     address: Option<Address>,
@@ -139,7 +140,56 @@ fn delete_cmd(buffer: &mut EditBuffer, address: Option<Address>) -> Result<(), E
     }
 }
 
-pub fn enumerate_cmd(
+fn edit_cmd(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    filename: Option<&Path>,
+    previous_cmd: &Option<Cmd>,
+) -> Result<(), Error> {
+    if buffer.is_dirty() && !matches!(previous_cmd, Some(Cmd::Edit(_))) {
+        writeln!(
+            output,
+            "unwritten changes - repeat edit command to discard changes"
+        )
+        .map_err(Error::WriteOutput)?;
+        return Ok(());
+    }
+
+    if let Some(filename) = filename {
+        buffer.set_filename(Some(filename.to_owned()));
+    }
+    let filename = buffer.filename();
+    let filename = filename.as_ref().ok_or(Error::NoFilename)?;
+
+    let file = File::open(filename);
+    let mut source = match file {
+        Ok(f) => BufReader::new(f),
+        Err(e) => {
+            return match e.kind() {
+                io::ErrorKind::NotFound => {
+                    writeln!(output, "{} not found", filename.display())
+                        .map_err(Error::WriteOutput)?;
+                    buffer.clear_text();
+                    Ok(())
+                }
+                _ => Err(Error::FileOpen(e)),
+            }
+        }
+    };
+
+    let mut lines = Vec::new();
+    let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
+
+    buffer.clear_text();
+    if buffer.append(0, lines) {
+        writeln!(output, "missing line terminator appended").map_err(Error::WriteOutput)?;
+    }
+    writeln!(output, "{} lines ({} bytes) read", lines_read, bytes_read)
+        .map_err(Error::WriteOutput)?;
+    Ok(())
+}
+
+fn enumerate_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     address: Option<Address>,
@@ -189,7 +239,7 @@ fn file_cmd(
     }
 }
 
-pub fn global_cmd(
+fn global_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     address: Option<Address>,
@@ -227,7 +277,7 @@ pub fn global_cmd(
     Ok(())
 }
 
-pub fn insert_cmd(
+fn insert_cmd(
     buffer: &mut EditBuffer,
     input: &mut impl BufRead,
     address: Option<Address>,
@@ -241,7 +291,7 @@ pub fn insert_cmd(
     Ok(())
 }
 
-pub fn null_cmd(
+fn null_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     address: Option<Address>,
@@ -264,7 +314,7 @@ pub fn null_cmd(
     }
 }
 
-pub fn print_cmd(
+fn print_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     address: Option<Address>,
@@ -301,9 +351,9 @@ pub fn print_cmd(
 fn quit_cmd(
     output: &mut impl Write,
     buffer: &EditBuffer,
-    prev_command: &Option<Cmd>,
+    previous_cmd: &Option<Cmd>,
 ) -> Result<bool, Error> {
-    match prev_command {
+    match previous_cmd {
         Some(Cmd::Quit) => Ok(true),
         _ if !buffer.is_dirty() => Ok(true),
         _ => {
@@ -315,6 +365,25 @@ fn quit_cmd(
             Ok(false)
         }
     }
+}
+
+fn read_lines(source: &mut impl BufRead, lines: &mut Vec<String>) -> Result<(usize, usize), Error> {
+    let mut line = String::new();
+    let mut bytes_read = 0;
+    let mut lines_read = 0;
+    loop {
+        let len = source.read_line(&mut line).map_err(Error::ReadLines)?;
+        if len == 0 {
+            break;
+        }
+        bytes_read += len;
+        lines_read += 1;
+        line.shrink_to_fit();
+        lines.push(line);
+        line = String::new();
+    }
+
+    Ok((lines_read, bytes_read))
 }
 
 fn write_file(
@@ -806,15 +875,15 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn do_edit_twice_overrides_warning() {
+    fn edit_cmd_twice_overrides_warning() {
         let input =
-            b"a\n1\n2\n3\n.\ne a_file_that_is_not_there.ext\ne a_file_that_is_not_there.ext\nq\n";
+            b"a\n1\n2\n3\n.\ne a_file_that_is_not_there.ext\ne a_file_that_is_not_there.ext\nq\nq\n";
         let mut output = Vec::new();
 
         run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert!(&output[..]
-            .starts_with(b"::Unwritten changes - repeat edit command to discard changes.\n:"));
+        assert!(str::from_utf8(&output[..])
+            .unwrap()
+            .contains("unwritten changes - repeat edit command to discard changes"));
     }
 
     #[test]
@@ -827,7 +896,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn file_on_cmd_line() {
         let args = cli::CmdArgs {
             file: Some(
@@ -839,11 +907,11 @@ mod tests {
         let input = b"q\n";
         let mut output = Vec::new();
         run(&mut &input[..], &mut output, &args).unwrap();
-        assert!(str::from_utf8(&output[..]).unwrap().contains("312\n"));
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("312"));
     }
 
     #[test]
-    #[ignore]
     fn file_on_cmd_line_not_found() {
         let args = cli::CmdArgs {
             file: Some(PathBuf::from("not_a_file")),
@@ -851,7 +919,8 @@ mod tests {
         let input = b"q\n";
         let mut output = Vec::new();
         run(&mut &input[..], &mut output, &args).unwrap();
-        assert!(str::from_utf8(&output[..]).unwrap().contains("cannot find"));
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("not found"));
     }
 
     #[test]
@@ -876,7 +945,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn edit_cmd_dispatch() {
         let input = b"e test/assets/text_with_final_eol.txt\nq\n";
         let mut output = Vec::new();
@@ -1109,5 +1177,32 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5"]);
         let res = delete_cmd(&mut buffer, Some(Address(0, 3))).expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn edit_cmd_no_filename_error() {
+        let mut buffer = EditBuffer::new();
+        let res = edit_cmd(&mut buffer, &mut Vec::new(), None, &None).expect_err("no filename");
+        assert!(matches!(res, Error::NoFilename));
+    }
+
+    #[test]
+    fn edit_cmd_missing_file_not_an_error() {
+        let mut buffer = EditBuffer::new();
+        let mut output = Vec::new();
+        let not_a_file = Some(Path::new("non-existant_file.txt"));
+        edit_cmd(&mut buffer, &mut output, not_a_file, &None).expect("no error");
+        assert_eq!(buffer.filename(), not_a_file);
+        assert!(str::from_utf8(&output[..]).unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn edit_cmd_io_error() {
+        todo!();
+    }
+
+    #[test]
+    fn edit_cmd_reads_file() {
+        todo!();
     }
 }

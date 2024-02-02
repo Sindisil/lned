@@ -182,15 +182,30 @@ impl EditBuffer {
         if lines.is_empty() {
             self.current_line = location;
         } else {
-            // set default_eol if neccessary
-            self.default_eol
-                .get_or_insert_with(|| compute_default_eol(&lines));
-            self.text.splice(location..location, lines.iter().cloned());
+            self.append(location, lines.clone());
             self.current_line = location + lines.len();
             change.push_add(location, lines);
         }
         change.current_line_after = self.current_line;
         self.undo_stack.push_undo(change);
+    }
+
+    pub fn append(&mut self, location: usize, mut lines: Vec<String>) -> bool {
+        let default_eol = self
+            .default_eol
+            .get_or_insert_with(|| compute_default_eol(&lines));
+
+        // Add missing EOL if necessary
+        let eol_added = match lines.last_mut() {
+            Some(last) if !(last.ends_with("\r\n") || last.ends_with('\n')) => {
+                last.push_str(default_eol);
+                true
+            }
+            _ => false,
+        };
+
+        self.text.splice(location..location, lines);
+        eol_added
     }
 
     pub fn do_delete(&mut self, address: Option<Address>) {
@@ -267,6 +282,11 @@ impl EditBuffer {
             }
             self.undo_stack.push_undo(redo);
         }
+    }
+
+    pub fn clear_text(&mut self) {
+        self.text.clear();
+        self.default_eol = None;
     }
 }
 
