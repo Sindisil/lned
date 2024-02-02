@@ -172,4 +172,28 @@ mod tests {
         assert!(s.fingerprint().is_none());
         assert!(s.undo.is_empty());
     }
+
+    #[test]
+    fn invert_swaps_add_and_remove() {
+        let mut orig = ChangeSet::new();
+        orig.current_line_before = 13;
+        orig.current_line_after = 42;
+        orig.push_add(2, vec!["added\n".to_owned()]);
+        orig.push_remove(1, vec!["removed\n".to_owned()]);
+        let inverted = ChangeSet::invert(orig.clone());
+        assert_eq!(inverted.current_line_before, orig.current_line_after);
+        assert_eq!(inverted.current_line_after, orig.current_line_before);
+        for diff in inverted.diffs() {
+            match diff {
+                Diff::Add(p, l) => {
+                    assert_eq!(*p, 1);
+                    assert_eq!(*l, vec!["removed\n".to_owned()]);
+                }
+                Diff::Remove(p, l) => {
+                    assert_eq!(*p, 2);
+                    assert_eq!(*l, vec!["added\n".to_owned()]);
+                }
+            }
+        }
+    }
 }
