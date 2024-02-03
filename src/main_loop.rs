@@ -211,7 +211,7 @@ fn enumerate_cmd(
         return Err(Error::InvalidAddress);
     }
 
-    let width = span.end().decimal_digits();
+    let width = buffer.len().decimal_digits();
     let start = *span.start();
     buffer.set_current_line(*span.end());
 
@@ -561,7 +561,7 @@ mod tests {
             EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
         buffer.set_current_line(2);
         enumerate_cmd(&mut buffer, &mut output, None).unwrap();
-        assert_eq!(&output[..], b"2  2\r\n", "output line 2");
+        assert_eq!(&output[..], b" 2  2\r\n", "output line 2");
     }
 
     #[test]
@@ -592,12 +592,12 @@ mod tests {
         output.clear();
 
         enumerate_cmd(&mut buffer, &mut output, Some(Address(4, 900))).unwrap();
-        let expected = b"  4  4\r\n";
+        let expected = b"   4  4\r\n";
         assert_eq!(&expected[..], &output[0..expected.len()]);
         output.clear();
 
         enumerate_cmd(&mut buffer, &mut output, Some(Address(999, 999))).unwrap();
-        let expected = b"999  999\r\n";
+        let expected = b" 999  999\r\n";
         assert_eq!(&expected[..], &output[0..expected.len()]);
     }
 
