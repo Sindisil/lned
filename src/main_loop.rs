@@ -31,7 +31,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::WriteOutput(e) => write!(f, "error writing output: {e}"),
-            Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
+            Error::ParseCmd(e) => write!(f, "{e}"),
             Error::InvalidAddress => write!(f, "invalid address"),
             Error::NestedGlobalCmd => write!(f, "invalid nested global command"),
             Error::UnsupportedGlobalCmd => write!(f, "unsupported global command"),
