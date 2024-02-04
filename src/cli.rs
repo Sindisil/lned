@@ -27,9 +27,28 @@ The first edit buffer will initially be the active buffer.
 
 #[derive(Debug)]
 pub enum Error {
-    WroteMessage,                 // Wrote message to ouput and should exit with no error
-    NextArg(lexopt::Error),       // Error reading next argument
-    UnexpectedArg(lexopt::Error), // Unexpected cmd line argument
+    WroteMessage, // Wrote message to ouput and should exit with no error
+    NextArg { source: lexopt::Error }, // Error reading next argument
+    UnexpectedArg { source: lexopt::Error }, // Unexpected cmd line argument
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Error::WroteMessage => None,
+            Error::NextArg { ref source } | Error::UnexpectedArg { ref source } => Some(source),
+        }
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::WroteMessage => write!(f, "message output, no error"),
+            Error::NextArg { .. } => write!(f, "error parsing next command line argument"),
+            Error::UnexpectedArg { .. } => write!(f, "unexpected command line argument"),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -45,7 +64,7 @@ pub fn parse_args(
     let mut cmd_args = CmdArgs { file: None };
 
     let mut parser = lexopt::Parser::from_iter(args);
-    while let Some(arg) = parser.next().map_err(Error::NextArg)? {
+    while let Some(arg) = parser.next().map_err(|source| Error::NextArg { source })? {
         match arg {
             Short('h') | Long("help") => {
                 writeln!(&mut output, "{APP_NAME} - {APP_DESCRIPTION}")
@@ -61,23 +80,15 @@ pub fn parse_args(
                 return Err(Error::WroteMessage);
             }
             Value(val) if cmd_args.file.is_none() => cmd_args.file = Some(PathBuf::from(val)),
-            _ => return Err(Error::UnexpectedArg(arg.unexpected())),
+            _ => {
+                return Err(Error::UnexpectedArg {
+                    source: arg.unexpected(),
+                })
+            }
         }
     }
     Ok(cmd_args)
 }
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::WroteMessage => write!(f, "message output, no error"),
-            Error::NextArg(_) => write!(f, "Error parsing next command line argument"),
-            Error::UnexpectedArg(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
 
 #[cfg(test)]
 mod tests {
@@ -120,7 +131,7 @@ mod tests {
         let mut output = Vec::new();
         let args = &["test", "--unexpected-arg"];
         let res = parse_args(&mut output, args);
-        assert!(matches!(res, Err(Error::UnexpectedArg(_))));
+        assert!(matches!(res, Err(Error::UnexpectedArg { .. })));
     }
 
     #[test]
@@ -136,6 +147,6 @@ mod tests {
         let args = &["test", r"src\cli.rs", r"src\main.rs"];
         let mut output = Vec::new();
         let res = parse_args(&mut output, args).expect_err("unexpected arg");
-        assert!(matches!(res, Error::UnexpectedArg(_)));
+        assert!(matches!(res, Error::UnexpectedArg { .. }));
     }
 }

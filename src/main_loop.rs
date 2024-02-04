@@ -13,33 +13,48 @@ use crate::num_utils::NumUtils;
 
 #[derive(Debug)]
 pub enum Error {
-    WriteOutput(io::Error),
+    WriteOutput { source: std::io::Error },
     ParseCmd(command::Error),
     InvalidAddress,
     NestedGlobalCmd,
     UnsupportedGlobalCmd,
     ReadGlobalCmd,
     NoFilename,
-    FileOpen(io::Error),
-    WriteLines(io::Error),
-    ReadLines(io::Error),
+    FileOpen { source: std::io::Error },
+    WriteLines { source: std::io::Error },
+    ReadLines { source: std::io::Error },
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Error::ParseCmd(_)
+            | Error::InvalidAddress
+            | Error::NestedGlobalCmd
+            | Error::UnsupportedGlobalCmd
+            | Error::ReadGlobalCmd
+            | Error::NoFilename => None,
+            Error::WriteOutput { ref source }
+            | Error::FileOpen { ref source }
+            | Error::WriteLines { ref source }
+            | Error::ReadLines { ref source } => Some(source),
+        }
+    }
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::WriteOutput(e) => write!(f, "error writing output: {e}"),
+            Error::WriteOutput { .. } => write!(f, "error writing output"),
             Error::ParseCmd(e) => write!(f, "{e}"),
             Error::InvalidAddress => write!(f, "invalid address"),
             Error::NestedGlobalCmd => write!(f, "invalid nested global command"),
             Error::UnsupportedGlobalCmd => write!(f, "unsupported global command"),
             Error::ReadGlobalCmd => write!(f, "error reading global command"),
             Error::NoFilename => write!(f, "no filename"),
-            Error::FileOpen(_) => write!(f, "error opening file"),
-            Error::WriteLines(_) => write!(f, "error writing lines"),
-            Error::ReadLines(e) => write!(f, "{e} reading input lines"),
+            Error::FileOpen { .. } => write!(f, "error opening file"),
+            Error::WriteLines { .. } => write!(f, "error writing lines"),
+            Error::ReadLines { .. } => write!(f, "error reading input lines"),
         }
     }
 }
@@ -59,7 +74,7 @@ pub fn run(
 
     if let Some(file) = &args.file {
         edit_cmd(&mut buffer, &mut output, Some(file), &previous_cmd)
-            .or_else(|e| writeln!(output, "{e}").map_err(Error::WriteOutput))?;
+            .or_else(|e| writeln!(output, "{e}").map_err(|source| Error::WriteOutput { source }))?;
     }
 
     // Accept and process commands until fatal error or exit
@@ -109,7 +124,7 @@ pub fn run(
                 previous_cmd = Some(cmd);
                 res
             })
-            .or_else(|e| writeln!(output, "{e}").map_err(Error::WriteOutput))?;
+            .or_else(|e| writeln!(output, "{e}").map_err(|source| Error::WriteOutput { source }))?;
     }
     Ok(())
 }
@@ -123,7 +138,7 @@ fn append_cmd(
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
+    Cmd::read_lines(input, &mut lines).map_err(|source| Error::ReadLines { source })?;
     //    let location = address.map_or(buffer.current_line(), |addr| addr.1);
     buffer.do_append(address, lines);
     Ok(())
@@ -151,7 +166,7 @@ fn edit_cmd(
             output,
             "unwritten changes - repeat edit command to discard changes"
         )
-        .map_err(Error::WriteOutput)?;
+        .map_err(|source| Error::WriteOutput { source })?;
         return Ok(());
     }
 
@@ -168,23 +183,24 @@ fn edit_cmd(
             return match e.kind() {
                 io::ErrorKind::NotFound => {
                     writeln!(output, "{} not found", filename.display())
-                        .map_err(Error::WriteOutput)?;
+                        .map_err(|source| Error::WriteOutput { source })?;
                     buffer.clear_text();
                     Ok(())
                 }
-                _ => Err(Error::FileOpen(e)),
+                _ => Err(Error::FileOpen { source: e }),
             }
         }
     };
 
     let mut lines = Vec::new();
     let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
-    writeln!(output, "{} lines ({} bytes) read", lines_read, bytes_read)
-        .map_err(Error::WriteOutput)?;
+    writeln!(output, "{lines_read} lines ({bytes_read} bytes) read")
+        .map_err(|source| Error::WriteOutput { source })?;
 
     buffer.clear_text();
     if buffer.append(0, lines) {
-        writeln!(output, "missing line terminator appended").map_err(Error::WriteOutput)?;
+        writeln!(output, "missing line terminator appended")
+            .map_err(|source| Error::WriteOutput { source })?;
     }
     Ok(())
 }
@@ -218,9 +234,11 @@ fn enumerate_cmd(
     for (i, l) in buffer[span].iter().enumerate() {
         output
             .write_all(format!("{:>width$}  {l}", start + i).as_bytes())
-            .map_err(Error::WriteOutput)?;
+            .map_err(|source| Error::WriteOutput { source })?;
     }
-    output.flush().map_err(Error::WriteOutput)?;
+    output
+        .flush()
+        .map_err(|source| Error::WriteOutput { source })?;
     Ok(())
 }
 
@@ -234,8 +252,12 @@ fn file_cmd(
     }
 
     match buffer.filename() {
-        None => writeln!(output, "no current filename").map_err(Error::WriteOutput),
-        Some(f) => writeln!(output, "{}", f.display()).map_err(Error::WriteOutput),
+        None => {
+            writeln!(output, "no current filename").map_err(|source| Error::WriteOutput { source })
+        }
+        Some(f) => {
+            writeln!(output, "{}", f.display()).map_err(|source| Error::WriteOutput { source })
+        }
     }
 }
 
@@ -286,7 +308,7 @@ fn insert_cmd(
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
+    Cmd::read_lines(input, &mut lines).map_err(|source| Error::ReadLines { source })?;
     buffer.do_insert(address, lines);
     Ok(())
 }
@@ -338,9 +360,13 @@ fn print_cmd(
 
     buffer.set_current_line(*span.end());
     for l in &buffer[span] {
-        output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
+        output
+            .write_all(l.as_bytes())
+            .map_err(|source| Error::WriteOutput { source })?;
     }
-    output.flush().map_err(Error::WriteOutput)?;
+    output
+        .flush()
+        .map_err(|source| Error::WriteOutput { source })?;
     Ok(())
 }
 
@@ -361,7 +387,7 @@ fn quit_cmd(
                 output,
                 "Unwritten changes - repeat quit command to discard changes."
             )
-            .map_err(Error::WriteOutput)?;
+            .map_err(|source| Error::WriteOutput { source })?;
             Ok(false)
         }
     }
@@ -372,7 +398,9 @@ fn read_lines(source: &mut impl BufRead, lines: &mut Vec<String>) -> Result<(usi
     let mut bytes_read = 0;
     let mut lines_read = 0;
     loop {
-        let len = source.read_line(&mut line).map_err(Error::ReadLines)?;
+        let len = source
+            .read_line(&mut line)
+            .map_err(|source| Error::ReadLines { source })?;
         if len == 0 {
             break;
         }
@@ -403,14 +431,14 @@ fn write_file(
         .write(true)
         .create(true)
         .open(buffer.filename().as_ref().unwrap())
-        .map_err(Error::FileOpen)?;
+        .map_err(|source| Error::FileOpen { source })?;
 
     let (bytes_written, lines_written) = write_lines(&mut destination, buffer, address)?;
     writeln!(
         output,
         "{bytes_written} bytes written ({lines_written} lines)"
     )
-    .map_err(Error::WriteOutput)?;
+    .map_err(|source| Error::WriteOutput { source })?;
     Ok(())
 }
 
@@ -433,7 +461,7 @@ fn write_lines(
                 bytes_written = bytes_written
                     + destination
                         .write(line[bytes_written..].as_bytes())
-                        .map_err(Error::WriteLines)?;
+                        .map_err(|source| Error::WriteLines { source })?;
             }
             total_bytes_written += bytes_written;
             lines_written += 1;
@@ -447,8 +475,10 @@ fn write_lines(
 }
 
 fn write_prompt(output: &mut impl Write) -> Result<(), Error> {
-    write!(output, ":").map_err(Error::WriteOutput)?;
-    output.flush().map_err(Error::WriteOutput)?;
+    write!(output, ":").map_err(|source| Error::WriteOutput { source })?;
+    output
+        .flush()
+        .map_err(|source| Error::WriteOutput { source })?;
     Ok(())
 }
 
@@ -485,8 +515,8 @@ mod tests {
     #[test]
     fn write_prompt_io_error_gives_correct_error() {
         let mut output = BadWriter {};
-        let _res = write_prompt(&mut output);
-        assert!(matches!(Err::<Error, _>(Error::WriteOutput), _res));
+        let res = write_prompt(&mut output).expect_err("io::error");
+        assert!(matches!(res, Error::WriteOutput { .. }));
     }
 
     #[test]
@@ -1058,7 +1088,7 @@ mod tests {
         let mut dummy_file = BadWriter {};
         let res =
             write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 2))).expect_err("io error");
-        assert!(matches!(res, Error::WriteLines(_)));
+        assert!(matches!(res, Error::WriteLines { .. }));
     }
 
     #[test]
@@ -1210,7 +1240,7 @@ mod tests {
     fn read_lines_io_error() {
         let mut source = BufReader::new(BadReader {});
         let res = read_lines(&mut source, &mut Vec::new()).expect_err("io error");
-        assert!(matches!(res, Error::ReadLines(_)));
+        assert!(matches!(res, Error::ReadLines { .. }));
     }
 
     #[test]

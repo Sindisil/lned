@@ -44,23 +44,44 @@ pub enum Error {
     InvalidPatternDelimiter,
     InvalidCmdSuffix,
     InvalidFilename,
-    ReadCommand(io::Error),
+    ReadCommand { source: io::Error },
     MissingEol,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct Address(pub usize, pub usize);
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match *self {
+            Error::Unknown(_)
+            | Error::UnexpectedAddress
+            | Error::OffsetTooLarge
+            | Error::OffsetTooSmall
+            | Error::OffsetOverflow
+            | Error::InvalidAddress
+            | Error::Regex(_)
+            | Error::NoMatchingLine
+            | Error::NoPreviousPattern
+            | Error::NumberParse
+            | Error::TrailingBackslash
+            | Error::InvalidPatternDelimiter
+            | Error::InvalidCmdSuffix
+            | Error::InvalidFilename
+            | Error::MissingEol => None,
+            Error::ReadCommand { ref source } => Some(source),
+        }
+    }
+}
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Error::UnexpectedAddress => write!(f, "Command takes no line address."),
-            Error::Unknown(c) => write!(f, "Unknown command '{c}'"),
-            Error::OffsetTooLarge => write!(f, "Offset too large"),
-            Error::OffsetOverflow => write!(f, "Offset results in invalid line number"),
-            Error::OffsetTooSmall => write!(f, "Offset too small"),
+            Error::UnexpectedAddress => write!(f, "command takes no line address."),
+            Error::Unknown(c) => write!(f, "unknown command '{c}'"),
+            Error::OffsetTooLarge => write!(f, "offset too large"),
+            Error::OffsetOverflow => write!(f, "offset results in invalid line number"),
+            Error::OffsetTooSmall => write!(f, "offset too small"),
             Error::InvalidAddress => write!(f, "invalid address"),
             Error::Regex(e) => write!(f, "{e}"),
             Error::NoMatchingLine => write!(f, "no matching line"),
@@ -69,7 +90,7 @@ impl Display for Error {
             Error::InvalidPatternDelimiter => write!(f, "invalid pattern delimiter"),
             Error::InvalidCmdSuffix => write!(f, "invalid command suffix"),
             Error::InvalidFilename => write!(f, "invalid filename"),
-            Error::ReadCommand(e) => write!(f, "{e} reading command input"),
+            Error::ReadCommand { .. } => write!(f, "error reading command input"),
             Error::MissingEol => write!(f, "missing line terminator"),
             Error::NumberParse => write!(f, "invalid numeric string"),
         }
@@ -100,7 +121,9 @@ impl Cmd {
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
         let mut line = String::with_capacity(120);
-        input.read_line(&mut line).map_err(Error::ReadCommand)?;
+        input
+            .read_line(&mut line)
+            .map_err(|source| Error::ReadCommand { source })?;
         let mut graphemes = line.as_mut_str().graphemes(true).peekable();
         let address = eval_address(&mut graphemes, buffer, previous_pattern)?;
         match graphemes.next() {
@@ -435,7 +458,7 @@ fn parse_global_cmd<'a>(
     // if the EOL was escaped, use read_lines() to read in rest of command list
     if more_lines {
         let mut lines = Vec::new();
-        if Cmd::read_lines(input, &mut lines).map_err(Error::ReadCommand)? > 0 {
+        if Cmd::read_lines(input, &mut lines).map_err(|source| Error::ReadCommand { source })? > 0 {
             for line in lines {
                 commands.push_str(&line);
             }
