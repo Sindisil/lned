@@ -124,7 +124,11 @@ pub fn run(
                 previous_cmd = Some(cmd);
                 res
             })
-            .or_else(|e| writeln!(output, "{e}").map_err(|source| Error::WriteOutput { source }))?;
+            .or_else(|e| match e {
+                Error::WriteOutput { .. } => Err(e),
+                non_fatal_error => writeln!(output, "{non_fatal_error}")
+                    .map_err(|source| Error::WriteOutput { source }),
+            })?;
     }
     Ok(())
 }
