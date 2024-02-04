@@ -129,9 +129,9 @@ pub fn run(
                     Cmd::Insert(address) => insert_cmd(&mut buffer, &mut input, *address),
                     Cmd::Null(address) => null_cmd(&mut buffer, &mut stdout, *address),
                     Cmd::Print(address) => print_cmd(&mut buffer, &mut stdout, *address),
-                    Cmd::Quit => quit_cmd(&buffer, &previous_cmd).map(|_| done = true),
+                    Cmd::Quit => quit_cmd(&buffer, &previous_cmd).map(|()| done = true),
                     Cmd::Write(address, filename) => {
-                        write_file(&mut buffer, &mut stdout, *address, filename.as_deref())
+                        write_cmd(&mut buffer, &mut stdout, *address, filename.as_deref())
                     }
                     Cmd::Undo => {
                         buffer.do_undo();
@@ -408,7 +408,7 @@ fn read_lines(source: &mut impl BufRead, lines: &mut Vec<String>) -> Result<(usi
     Ok((lines_read, bytes_read))
 }
 
-fn write_file(
+fn write_cmd(
     buffer: &mut EditBuffer,
     stdout: &mut impl Write,
     address: Option<Address>,
