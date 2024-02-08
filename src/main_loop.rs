@@ -1230,8 +1230,8 @@ mod tests {
     fn edit_cmd_reads_file() {
         let mut buffer = EditBuffer::new();
         let mut output = Vec::new();
-        let filename1 = Some(Path::new(r"test\assets\text_with_final_eol.txt"));
-        let filename2 = Some(Path::new(r"test\assets\text_with_no_final_eol.txt"));
+        let filename1 = Some(Path::new(r"test/assets/text_with_final_eol.txt"));
+        let filename2 = Some(Path::new(r"test/assets/text_with_no_final_eol.txt"));
 
         edit_cmd(&mut buffer, &mut output, filename1, &None).unwrap();
         assert_eq!(buffer.len(), 10);
