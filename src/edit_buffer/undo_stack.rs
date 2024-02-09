@@ -56,9 +56,10 @@ impl ChangeSet {
         self.diffs.push(Diff::Remove(position, lines_removed));
     }
 
-    pub fn diffs(&self) -> impl Iterator<Item = &Diff> {
+    pub fn diffs(&self) -> impl DoubleEndedIterator<Item = &Diff> {
         self.diffs.iter()
     }
+
     fn invert(mut change: ChangeSet) -> ChangeSet {
         mem::swap(
             &mut change.current_line_before,

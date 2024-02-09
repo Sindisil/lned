@@ -268,7 +268,7 @@ impl EditBuffer {
         if let Some(redo) = self.undo_stack.pop_redo() {
             self.current_line = redo.current_line_after;
             {
-                let mut diffs = redo.diffs();
+                let mut diffs = redo.diffs().rev();
                 while let Some(diff) = diffs.next() {
                     match diff {
                         Diff::Add(p, l) => {
