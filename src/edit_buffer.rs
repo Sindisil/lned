@@ -283,8 +283,7 @@ impl EditBuffer {
         if let Some(undo) = self.undo_stack.pop_undo() {
             self.current_line = undo.current_line_before;
             {
-                let mut diffs = undo.diffs();
-                while let Some(diff) = diffs.next() {
+                for diff in undo.diffs() {
                     match diff {
                         Diff::Add(p, l) => drop(self.text.splice(*p..*p + l.len(), None)),
                         Diff::Remove(p, l) => drop(self.text.splice(*p..*p, l.iter().cloned())),
@@ -299,8 +298,7 @@ impl EditBuffer {
         if let Some(redo) = self.undo_stack.pop_redo() {
             self.current_line = redo.current_line_after;
             {
-                let mut diffs = redo.diffs().rev();
-                while let Some(diff) = diffs.next() {
+                for diff in redo.diffs().rev() {
                     match diff {
                         Diff::Add(p, l) => {
                             self.text.splice(*p..*p, l.iter().cloned());
