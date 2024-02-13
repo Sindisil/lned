@@ -1,17 +1,8 @@
-[package]
-name = "lned"
-description = "A line oriented text editor"
-version = "0.1.0"
-edition = "2021"
+[workspace]
 
-[dependencies]
-lexopt = "0.3.0"
-regex = "1.8.1"
-unicode-segmentation = "1.10.1"
-wild = "2.1.0"
+members = [ "line_input",
+  "lned",
+"line_input",
+]
 
-[lints.rust]
-elided_lifetimes_in_paths = "deny"
-
-[lints.clippy]
-pedantic = "warn"
+resolver = "2"
