@@ -1,6 +1,6 @@
 use core::cmp;
 use core::fmt::{self, Debug, Display, Formatter};
-use std::io::{self, };
+use std::io::{self};
 use std::iter::{Iterator, Peekable};
 use std::path::PathBuf;
 
@@ -263,17 +263,7 @@ fn eval_address<'a>(
                 let re = previous_pattern
                     .as_ref()
                     .ok_or(Error::NoPreviousPattern)?;
-                let line = if buffer.current_line() == buffer.len() {
-                    (1..=buffer.len()).find(|&i| re.is_match(&buffer[i]))
-                } else {
-                    (buffer.current_line() + 1..=buffer.len())
-                        .find(|&i| re.is_match(&buffer[i]))
-                        .or_else(|| {
-                            (1..=buffer.current_line())
-                                .find(|&i| re.is_match(&buffer[i]))
-                        })
-                }
-                .ok_or(Error::NoMatchingLine)?;
+                let line = buffer.find_line(re).ok_or(Error::NoMatchingLine)?;
                 right = Some(eval_line_number(graphemes, line)?);
             }
             Some(&"?") => {
@@ -285,19 +275,8 @@ fn eval_address<'a>(
                 let re = previous_pattern
                     .as_ref()
                     .ok_or(Error::NoPreviousPattern)?;
-                let line = if buffer.current_line() == 1 {
-                    (1..=buffer.len()).rev().find(|&i| re.is_match(&buffer[i]))
-                } else {
-                    (1..buffer.current_line())
-                        .rev()
-                        .find(|&i| re.is_match(&buffer[i]))
-                        .or_else(|| {
-                            (buffer.current_line()..=buffer.len())
-                                .rev()
-                                .find(|&i| re.is_match(&buffer[i]))
-                        })
-                }
-                .ok_or(Error::NoMatchingLine)?;
+                let line =
+                    buffer.find_line_rev(re).ok_or(Error::NoMatchingLine)?;
                 right = Some(eval_line_number(graphemes, line)?);
             }
             Some(s) if s.is_blank() => {

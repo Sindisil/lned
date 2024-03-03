@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 use crate::command::Address;
 use crate::edit_buffer::undo_stack::{ChangeSet, Diff, UndoStack};
 
+use regex::Regex;
+
 #[derive(Debug, Clone)]
 pub struct EditBuffer {
     pub current_line: usize,
@@ -175,6 +177,34 @@ impl EditBuffer {
         self.clean_fingerprint
     }
 
+    pub fn find_line(&self, pattern: &Regex) -> Option<usize> {
+        if self.current_line == self.len() {
+            (1..=self.len()).find(|&i| pattern.is_match(&self[i]))
+        } else {
+            (self.current_line + 1..=self.len())
+                .find(|&i| pattern.is_match(&self[i]))
+                .or_else(|| {
+                    (1..=self.current_line)
+                        .find(|&i| pattern.is_match(&self[i]))
+                })
+        }
+    }
+
+    pub fn find_line_rev(&self, pattern: &Regex) -> Option<usize> {
+        if self.current_line == 1 {
+            (1..=self.len()).rev().find(|&i| pattern.is_match(&self[i]))
+        } else {
+            (1..self.current_line)
+                .rev()
+                .find(|&i| pattern.is_match(&self[i]))
+                .or_else(|| {
+                    (self.current_line..=self.len())
+                        .rev()
+                        .find(|&i| pattern.is_match(&self[i]))
+                })
+        }
+    }
+
     pub fn do_append(&mut self, address: Option<Address>, lines: Vec<String>) {
         let location = address.map_or(self.current_line, |addr| addr.1);
         let mut change = ChangeSet::new();
@@ -284,10 +314,10 @@ impl EditBuffer {
                 for diff in undo.diffs() {
                     match diff {
                         Diff::Add(p, l) => {
-                            drop(self.text.splice(*p..*p + l.len(), None))
+                            drop(self.text.splice(*p..*p + l.len(), None));
                         }
                         Diff::Remove(p, l) => {
-                            drop(self.text.splice(*p..*p, l.iter().cloned()))
+                            drop(self.text.splice(*p..*p, l.iter().cloned()));
                         }
                     }
                 }

@@ -10,11 +10,18 @@ use crossterm::terminal::{self, Clear, ClearType};
 use crossterm::{ExecutableCommand, QueueableCommand};
 use unicode_width::UnicodeWidthStr;
 
-//// Public structs, enums, and traits
-////////
+// Public structs, enums, and traits
+///////////
 
 pub trait LineRead {
+    /// # Errors
+    ///
+    /// Will return `io::Error` if an error is encountered reading a line
     fn read_line(&mut self, buffer: &mut String) -> io::Result<usize>;
+
+    /// # Errors
+    ///
+    /// Will return `io::Error` if an error is encountered reading a line
 
     fn read_line_or_cancel(
         &mut self,
@@ -29,7 +36,7 @@ pub struct LineInput {
     input: GapBuffer,
 }
 
-//// Private structs and enums
+// Private structs and enums
 ////////
 
 #[derive(Debug)]
@@ -55,7 +62,7 @@ enum Response {
     Continue,
 }
 
-//// impls for LineInput
+// impls for LineInput
 ////////
 
 impl Default for LineInput {
@@ -70,6 +77,10 @@ impl LineInput {
         LineInput { input: GapBuffer::new() }
     }
 
+    /// # Errors
+    ///
+    /// Will return `io::Error` if an error is encountered reading line
+    #[allow(clippy::missing_panics_doc)]
     pub fn read(
         &mut self,
         buffer: &mut String,
@@ -80,6 +91,9 @@ impl LineInput {
         })
     }
 
+    /// # Errors
+    ///
+    /// Will return `io::Error` if an error is encountered reading line
     pub fn read_or_cancel(
         &mut self,
         buffer: &mut String,
@@ -108,7 +122,7 @@ impl LineInput {
             let event = event::read()?;
 
             // handle event
-            let response = self.handle_event(buffer, event)?;
+            let response = self.handle_event(buffer, &event);
 
             match response {
                 Response::Accept(bytes_read) => {
@@ -126,39 +140,35 @@ impl LineInput {
         }
     }
 
-    fn handle_event(
-        &mut self,
-        buffer: &mut String,
-        event: Event,
-    ) -> io::Result<Response> {
+    fn handle_event(&mut self, buffer: &mut String, event: &Event) -> Response {
         match event {
             Event::Key(event) => self.handle_key_event(buffer, event),
-            _ => Ok(Response::Continue),
+            _ => Response::Continue,
         }
     }
 
     fn handle_key_event(
         &mut self,
         buffer: &mut String,
-        event: KeyEvent,
-    ) -> io::Result<Response> {
+        event: &KeyEvent,
+    ) -> Response {
         match event.code {
             KeyCode::Char('d') if event.modifiers == KeyModifiers::CONTROL => {
-                Ok(Response::Cancel)
+                Response::Cancel
             }
             KeyCode::Enter => {
                 let bytes_read = self.input.len();
                 buffer.extend(self.input.before_gap.drain(..));
                 buffer.extend(self.input.after_gap.drain(..));
                 self.input.cursor = 0;
-                Ok(Response::Accept(bytes_read))
+                Response::Accept(bytes_read)
             }
-            _ => Ok(Response::Continue),
+            _ => Response::Continue,
         }
     }
 }
 
-//// impls for GapBuffer
+// impls for GapBuffer
 ////////
 
 impl Default for GapBuffer {
@@ -208,7 +218,7 @@ impl GapBuffer {
     }
 }
 
-//// impls for RenderContext
+// impls for RenderContext
 ////////
 
 impl<'a> RenderContext<'a> {
@@ -245,11 +255,13 @@ impl<'a> RenderContext<'a> {
             + buffer.before_gap.width()
             + buffer.after_gap.width();
         let width = usize::from(self.terminal_width());
-        let lines_to_print = ((width + column_estimate) / width) as u16;
+        let lines_to_print = (width + column_estimate) / width;
 
         // if necessary, scroll to make room (nb: manual scroll because of bugs)
-        let lines_needed =
-            lines_to_print.saturating_sub(self.lines_available().into());
+        let lines_needed = u16::try_from(
+            lines_to_print.saturating_sub(self.lines_available().into()),
+        )
+        .unwrap_or(self.terminal_height());
         if lines_needed > 0 {
             self.scroll(lines_needed)?;
             self.prompt_line = self.prompt_line.saturating_sub(lines_needed);
@@ -283,7 +295,7 @@ impl<'a> RenderContext<'a> {
     /// Scroll the terminal up by the specified number of lines.
     /// Using this instead of crossterm scroll command because
     /// of a bug in terminal scrollback.
-    /// see https://github.com/nushell/nushell/issues/9166
+    /// see <https://github.com/nushell/nushell/issues/9166>
     fn scroll(&mut self, lines: u16) -> io::Result<()> {
         self.stdout.queue(MoveTo(0, self.terminal_height() - 1))?;
         for _ in 0..lines {
@@ -300,7 +312,7 @@ impl Drop for RenderContext<'_> {
     }
 }
 
-//// impls for LineRead
+// impls for LineRead
 ////////
 
 impl<T> LineRead for T
@@ -316,7 +328,7 @@ where
 mod tests {
     use super::*;
 
-    //// tests for GapBuffer
+    // tests for GapBuffer
     ////////
 
     #[test]
@@ -360,7 +372,7 @@ mod tests {
         assert_eq!(buf.after_gap, "buffer");
     }
 
-    //// tests for LineInput
+    // tests for LineInput
     ////////
 
     #[test]
@@ -371,7 +383,7 @@ mod tests {
             KeyCode::Char('d'),
             KeyModifiers::CONTROL,
         ));
-        let res = input.handle_event(&mut buffer, event).unwrap();
+        let res = input.handle_event(&mut buffer, &event);
         assert!(matches!(res, Response::Cancel));
         assert!(buffer.is_empty());
     }
@@ -389,7 +401,7 @@ mod tests {
         let mut buffer = String::new();
         let event =
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let res = input.handle_event(&mut buffer, event).unwrap();
+        let res = input.handle_event(&mut buffer, &event);
         assert!(
             matches!(res, Response::Accept(bytes) if bytes == expected.len())
         );

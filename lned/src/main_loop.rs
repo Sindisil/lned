@@ -355,7 +355,7 @@ fn global_cmd(
             Cmd::Enumerate(address) => enumerate_cmd(buffer, stdout, address)?,
             Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
             Cmd::Null(address) | Cmd::Print(address) => {
-                print_cmd(buffer, stdout, address)?
+                print_cmd(buffer, stdout, address)?;
             }
             _ => return Err(Error::UnsupportedGlobalCmd),
         }

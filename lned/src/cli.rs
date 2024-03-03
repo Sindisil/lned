@@ -86,7 +86,7 @@ pub fn parse_args(
                 return Err(Error::WroteMessage);
             }
             Value(val) if cmd_args.file.is_none() => {
-                cmd_args.file = Some(PathBuf::from(val))
+                cmd_args.file = Some(PathBuf::from(val));
             }
             _ => return Err(Error::UnexpectedArg { source: arg.unexpected() }),
         }
