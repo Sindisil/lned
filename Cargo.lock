@@ -84,6 +84,7 @@ version = "0.1.0"
 dependencies = [
  "crossterm",
  "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]
@@ -91,6 +92,7 @@ name = "lned"
 version = "0.2.0"
 dependencies = [
  "lexopt",
+ "line_input",
  "regex",
  "unicode-segmentation",
  "wild",
@@ -238,6 +240,12 @@ name = "unicode-segmentation"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4c87d22b6e3f4a18d4d40ef354e97c90fcb14dd91d7dc0aa9d8a1172ebf7202"
+
+[[package]]
+name = "unicode-width"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e51733f11c9c4f72aa0c160008246859e340b00807569a0da0e7a1079b27ba85"
 
 [[package]]
 name = "wasi"

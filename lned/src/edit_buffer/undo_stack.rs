@@ -35,7 +35,7 @@ pub enum Diff {
 static INST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn next_id() -> u64 {
-    INST_COUNTER.fetch_add(1, Ordering::SeqCst)
+    INST_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 impl ChangeSet {

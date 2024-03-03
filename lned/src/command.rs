@@ -1,15 +1,17 @@
 use core::cmp;
 use core::fmt::{self, Debug, Display, Formatter};
-use std::io::{self, BufRead};
+use std::io::{self, };
 use std::iter::{Iterator, Peekable};
 use std::path::PathBuf;
+
+use regex::Regex;
+use unicode_segmentation::UnicodeSegmentation;
+
+use line_input::LineRead;
 
 use crate::edit_buffer::EditBuffer;
 use crate::iter_utils::Peeking;
 use crate::str_utils::StrUtils;
-
-use regex::Regex;
-use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Clone)]
 pub enum Cmd {
@@ -112,7 +114,7 @@ impl Cmd {
     // Returns number of bytes read or Error::Readlines if an error is
     // encountered.
     pub fn read_lines(
-        input: &mut impl BufRead,
+        input: &mut impl LineRead,
         buf: &mut Vec<String>,
     ) -> Result<usize, io::Error> {
         buf.clear();
@@ -128,7 +130,7 @@ impl Cmd {
 
     /// Read input, parsing into a Cmd
     pub fn read(
-        input: &mut impl BufRead,
+        input: &mut impl LineRead,
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
@@ -469,7 +471,7 @@ fn parse_global_cmd<'a>(
     graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
     address: Option<Address>,
     previous_pattern: &mut Option<Regex>,
-    input: &mut impl BufRead,
+    input: &mut impl LineRead,
 ) -> Result<Cmd, Error> {
     let pattern = parse_pattern(graphemes)?;
     if !(pattern.is_empty()) {
