@@ -120,7 +120,7 @@ impl Cmd {
         buf.clear();
         loop {
             let mut line = String::new();
-            let n = input.read_line(&mut line)?;
+            let n = input.read_line(&mut line, "")?;
             if n == 0 || line == ".\n" || line == ".\r\n" {
                 return Ok(buf.len());
             }
@@ -136,7 +136,7 @@ impl Cmd {
     ) -> Result<Cmd, Error> {
         let mut line = String::with_capacity(120);
         input
-            .read_line(&mut line)
+            .read_line(&mut line, ":")
             .map_err(|source| Error::ReadCommand { source })?;
         let mut graphemes = line.as_mut_str().graphemes(true).peekable();
         let address = eval_address(&mut graphemes, buffer, previous_pattern)?;

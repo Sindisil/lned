@@ -112,9 +112,6 @@ pub fn run(
     // Accept and process commands until fatal error or exit
     let mut done = false;
     while !done {
-        // write prompt
-        write_prompt(&mut stdout);
-
         Cmd::read(&mut input, &mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
             .and_then(|cmd| {
@@ -931,14 +928,6 @@ mod tests {
     }
 
     #[test]
-    fn quit_cmd_unchanged() {
-        let input = &b"q\n"[..];
-        let mut output = Vec::new();
-        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert_eq!(&output[..], &b":"[..]);
-    }
-
-    #[test]
     fn quit_cmd_twice_exits() {
         let input = b"a\n1\n2\n3\n.\nq\nq\n";
         let mut output = Vec::new();
@@ -970,15 +959,6 @@ mod tests {
         assert!(str::from_utf8(&output[..]).unwrap().contains(
             "unwritten changes - repeat edit command to discard changes"
         ));
-    }
-
-    #[test]
-    fn new_prompt_on_line_after_error_message() {
-        let input = b"1p\nq\n";
-        let mut output = Vec::new();
-
-        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert_eq!(&output[..], &b":invalid address\n:"[..],);
     }
 
     #[test]
@@ -1113,7 +1093,6 @@ mod tests {
         let input = b"q\r\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert!(str::from_utf8(&output[..]).unwrap() == ":");
     }
 
     #[test]

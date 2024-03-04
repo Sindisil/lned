@@ -11,6 +11,8 @@ use std::error::Error;
 use std::io;
 use std::iter;
 
+use line_input::LineInput;
+
 fn main() {
     let args = match cli::parse_args(&mut io::stdout().lock(), wild::args_os())
     {
@@ -21,8 +23,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+
     if let Err(err) =
-        main_loop::run(io::stdin().lock(), io::stdout().lock(), &args)
+        main_loop::run(LineInput::new(), io::stdout().lock(), &args)
     {
         eprintln!("Error: {err}");
         if let Some(cause) = err.source() {

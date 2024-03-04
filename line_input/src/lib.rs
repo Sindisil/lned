@@ -3,7 +3,7 @@ use std::fmt;
 use std::io::{self, BufRead, Stdout, Write};
 
 use crossterm::cursor::{
-    Hide, MoveTo, MoveToNextLine, RestorePosition, SavePosition, Show,
+    self, Hide, MoveTo, MoveToNextLine, RestorePosition, SavePosition, Show,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{self, Clear, ClearType};
@@ -17,7 +17,11 @@ pub trait LineRead {
     /// # Errors
     ///
     /// Will return `io::Error` if an error is encountered reading a line
-    fn read_line(&mut self, buffer: &mut String) -> io::Result<usize>;
+    fn read_line(
+        &mut self,
+        buffer: &mut String,
+        prompt: &str,
+    ) -> io::Result<usize>;
 
     /// # Errors
     ///
@@ -26,8 +30,9 @@ pub trait LineRead {
     fn read_line_or_cancel(
         &mut self,
         buffer: &mut String,
+        prompt: &str,
     ) -> io::Result<Option<usize>> {
-        self.read_line(buffer).map_or(Ok(None), |bytes| Ok(Some(bytes)))
+        self.read_line(buffer, prompt).map_or(Ok(None), |bytes| Ok(Some(bytes)))
     }
 }
 
@@ -77,32 +82,7 @@ impl LineInput {
         LineInput { input: GapBuffer::new() }
     }
 
-    /// # Errors
-    ///
-    /// Will return `io::Error` if an error is encountered reading line
-    #[allow(clippy::missing_panics_doc)]
-    pub fn read(
-        &mut self,
-        buffer: &mut String,
-        prompt: &str,
-    ) -> io::Result<usize> {
-        self.read_line(buffer, prompt, false).map(|r| {
-            r.expect("shouldn't receive cancel response when not enabled")
-        })
-    }
-
-    /// # Errors
-    ///
-    /// Will return `io::Error` if an error is encountered reading line
-    pub fn read_or_cancel(
-        &mut self,
-        buffer: &mut String,
-        prompt: &str,
-    ) -> io::Result<Option<usize>> {
-        self.read_line(buffer, prompt, true)
-    }
-
-    fn read_line(
+    fn input_line(
         &mut self,
         buffer: &mut String,
         prompt: &str,
@@ -110,9 +90,11 @@ impl LineInput {
     ) -> io::Result<Option<usize>> {
         // clear gap buffer
         self.input.clear();
+
         // init render_ctx
         let mut stdout = io::stdout();
         let mut render_ctx = RenderContext::new(prompt, &mut stdout);
+        render_ctx.initialize()?;
 
         // loop handling events until handle_event() returns a Reponse
         loop {
@@ -168,6 +150,23 @@ impl LineInput {
     }
 }
 
+impl LineRead for LineInput {
+    fn read_line(
+        &mut self,
+        buffer: &mut String,
+        prompt: &str,
+    ) -> io::Result<usize> {
+        Ok(self.input_line(buffer, prompt, false)?.unwrap_or(0))
+    }
+
+    fn read_line_or_cancel(
+        &mut self,
+        buffer: &mut String,
+        prompt: &str,
+    ) -> io::Result<Option<usize>> {
+        self.input_line(buffer, prompt, true)
+    }
+}
 // impls for GapBuffer
 ////////
 
@@ -230,6 +229,13 @@ impl<'a> RenderContext<'a> {
             terminal_size: (0, 0),
             previous_required_lines: 0,
         }
+    }
+
+    fn initialize(&mut self) -> io::Result<()> {
+        self.terminal_size = terminal::size()?;
+        let cursor_pos = cursor::position()?;
+        self.prompt_line = cursor_pos.1;
+        terminal::enable_raw_mode()
     }
 
     /// Returns terminal width in columns
@@ -312,14 +318,18 @@ impl Drop for RenderContext<'_> {
     }
 }
 
-// impls for LineRead
+// impls of LineRead
 ////////
 
 impl<T> LineRead for T
 where
     T: BufRead,
 {
-    fn read_line(&mut self, buffer: &mut String) -> io::Result<usize> {
+    fn read_line(
+        &mut self,
+        buffer: &mut String,
+        _prompt: &str,
+    ) -> io::Result<usize> {
         BufRead::read_line(self, buffer)
     }
 }
