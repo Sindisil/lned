@@ -36,7 +36,7 @@ pub trait LineRead {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct LineReader {
     buffer: GapBuffer,
 }
@@ -44,7 +44,7 @@ pub struct LineReader {
 // Private structs and enums
 ////////
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct GapBuffer {
     before_gap: String,
     after_gap: String,
@@ -82,18 +82,13 @@ pub fn native_eol() -> &'static str {
 // impls for LineReader
 ////////
 
-impl Default for LineReader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl LineReader {
     #[must_use]
     pub fn new() -> LineReader {
         LineReader { buffer: GapBuffer::new() }
     }
 
+    #[cfg(not(tarpaulin_include))]
     fn accept_line(
         &mut self,
         output_buffer: &mut String,
@@ -165,7 +160,6 @@ impl LineReader {
                 todo!("remove base char at cursor, along with any zero width code points to its right up until next base char");
             }
             KeyCode::Char(c) => {
-                self.buffer.gap_to_cursor();
                 self.buffer.before_gap.push(c);
                 self.buffer.cursor = self.buffer.before_gap.len();
                 Response::Continue
@@ -176,6 +170,7 @@ impl LineReader {
 }
 
 impl LineRead for LineReader {
+    #[cfg(not(tarpaulin_include))]
     fn read_line(
         &mut self,
         buffer: &mut String,
@@ -195,12 +190,6 @@ impl LineRead for LineReader {
 
 // impls for GapBuffer
 ////////
-
-impl Default for GapBuffer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 impl fmt::Display for GapBuffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -225,10 +214,6 @@ impl GapBuffer {
         self.before_gap.clear();
         self.after_gap.clear();
         self.cursor = 0;
-    }
-
-    fn ends_with(&self, needle: &str) -> bool {
-        self.before_gap.ends_with(needle) || self.after_gap.ends_with(needle)
     }
 
     /// Moves characters in buffer so that cursor is logically on the first
@@ -268,6 +253,7 @@ impl<'a> RenderContext<'a> {
         }
     }
 
+    #[cfg(not(tarpaulin_include))]
     fn initialize(&mut self) -> io::Result<()> {
         self.terminal_size = terminal::size()?;
         let cursor_pos = cursor::position()?;
@@ -290,6 +276,7 @@ impl<'a> RenderContext<'a> {
         self.terminal_height().saturating_sub(self.prompt_line)
     }
 
+    #[cfg(not(tarpaulin_include))]
     fn move_to_end(&mut self, buffer: &mut GapBuffer) -> io::Result<()> {
         let (mut cur_col, mut cur_line) = cursor::position()?;
         let after_gap_width = buffer.after_gap.width();
@@ -321,6 +308,7 @@ impl<'a> RenderContext<'a> {
         self.stdout.flush()
     }
 
+    #[cfg(not(tarpaulin_include))]
     fn repaint(&mut self, buffer: &GapBuffer) -> io::Result<()> {
         self.stdout.queue(Hide)?;
 
@@ -372,6 +360,7 @@ impl<'a> RenderContext<'a> {
     /// Using this instead of crossterm scroll command because
     /// of a bug in terminal scrollback.
     /// see <https://github.com/nushell/nushell/issues/9166>
+    #[cfg(not(tarpaulin_include))]
     fn scroll(&mut self, lines: u16) -> io::Result<()> {
         self.stdout.queue(MoveTo(0, self.terminal_height() - 1))?;
         for _ in 0..lines {
@@ -382,6 +371,7 @@ impl<'a> RenderContext<'a> {
 }
 
 impl Drop for RenderContext<'_> {
+    #[cfg(not(tarpaulin_include))]
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
         let _ = self.stdout.execute(Show);
@@ -430,6 +420,19 @@ mod tests {
     }
 
     #[test]
+    fn gap_buffer_clears() {
+        let text = "Text before; text after".to_owned();
+        let cursor = 12usize;
+        let mut buffer = GapBuffer {
+            before_gap: text[..cursor].to_owned(),
+            after_gap: text[cursor..].to_owned(),
+            cursor,
+        };
+        buffer.clear();
+        assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
     fn gap_to_cursor_moves_cursor_to_end_of_before_gap() {
         // init buffer as if text was just typed,
         // so cursor is at end of before_gap.
@@ -454,6 +457,35 @@ mod tests {
 
     // tests for LineReader
     ////////
+
+    #[test]
+    fn create_new_reader() {
+        let reader = LineReader::new();
+        assert_eq!(reader.buffer.len(), 0);
+    }
+
+    #[test]
+    fn create_default_reader() {
+        let reader = LineReader { ..Default::default() };
+        assert_eq!(reader.buffer.len(), 0);
+    }
+
+    #[test]
+    fn unimplemented_event_ignored() {
+        let mut reader = LineReader::new();
+        let event = Event::FocusLost;
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+    }
+
+    #[test]
+    fn unimplemented_key_event_ignored() {
+        let mut reader = LineReader::new();
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+    }
 
     #[test]
     fn handle_event_ctrl_d_returns_canceled() {
@@ -483,5 +515,32 @@ mod tests {
         assert!(
             matches!(res, Response::Accept(bytes) if bytes == expected.len())
         );
+    }
+
+    #[test]
+    fn handle_event_char_adds_char_to_buffer() {
+        let buffer_text = "This is some text";
+        let expected = format!("{buffer_text}.{}", native_eol());
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: buffer_text.to_owned(),
+                cursor: buffer_text.len(),
+                ..Default::default()
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        let res = reader.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )));
+        if let Response::Accept(bytes) = res {
+            assert_eq!(bytes, expected.len());
+        } else {
+            panic!("response was not Accept");
+        }
+        assert_eq!(reader.buffer.to_string(), expected);
     }
 }
