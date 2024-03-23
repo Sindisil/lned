@@ -525,8 +525,8 @@ mod tests {
 
     #[test]
     fn handle_event_backspace_removes_only_one_code_point() {
-        let buffer_text = "Å";
-        let expected = "A";
+        let buffer_text = "2⁵";
+        let expected = "2";
         let mut reader = LineReader {
             buffer: GapBuffer {
                 before_gap: buffer_text.to_owned(),
