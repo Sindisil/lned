@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::fmt;
 use std::io::{self, BufRead, Stdout, Write};
 
@@ -48,7 +47,6 @@ pub struct LineReader {
 struct GapBuffer {
     before_gap: String,
     after_gap: String,
-    cursor: usize,
 }
 
 #[derive(Debug)]
@@ -161,7 +159,6 @@ impl LineReader {
             }
             KeyCode::Char(c) => {
                 self.buffer.before_gap.push(c);
-                self.buffer.cursor = self.buffer.before_gap.len();
                 Response::Continue
             }
             _ => Response::Continue,
@@ -199,11 +196,7 @@ impl fmt::Display for GapBuffer {
 
 impl GapBuffer {
     fn new() -> GapBuffer {
-        GapBuffer {
-            before_gap: String::new(),
-            after_gap: String::new(),
-            cursor: 0,
-        }
+        GapBuffer { before_gap: String::new(), after_gap: String::new() }
     }
 
     fn len(&self) -> usize {
@@ -213,29 +206,6 @@ impl GapBuffer {
     fn clear(&mut self) {
         self.before_gap.clear();
         self.after_gap.clear();
-        self.cursor = 0;
-    }
-
-    /// Moves characters in buffer so that cursor is logically on the first
-    /// char of `after_gap`, meaning that the insertion point (where new chars
-    /// are added) is logically at the end of `before_gap`.
-    ///
-    /// Cursor will always be pointing to the base character of any
-    /// multi-character grapheme, and no grapheme will be split by the
-    /// gap.
-    fn gap_to_cursor(&mut self) {
-        match self.cursor.cmp(&self.before_gap.len()) {
-            Ordering::Less => {
-                self.after_gap.insert_str(0, &self.before_gap[self.cursor..]);
-                self.before_gap.drain(self.cursor..);
-            }
-            Ordering::Greater => {
-                let to_move = self.cursor - self.before_gap.len();
-                self.before_gap.push_str(&self.after_gap[..to_move]);
-                self.after_gap.drain(..to_move);
-            }
-            Ordering::Equal => (),
-        }
     }
 }
 
@@ -414,7 +384,6 @@ mod tests {
         let buffer = GapBuffer {
             before_gap: text[..cursor].to_owned(),
             after_gap: text[cursor..].to_owned(),
-            cursor,
         };
         assert_eq!(buffer.to_string(), text);
     }
@@ -426,33 +395,9 @@ mod tests {
         let mut buffer = GapBuffer {
             before_gap: text[..cursor].to_owned(),
             after_gap: text[cursor..].to_owned(),
-            cursor,
         };
         buffer.clear();
         assert_eq!(buffer.len(), 0);
-    }
-
-    #[test]
-    fn gap_to_cursor_moves_cursor_to_end_of_before_gap() {
-        // init buffer as if text was just typed,
-        // so cursor is at end of before_gap.
-        let mut buf = GapBuffer {
-            before_gap: "Text in buffer".to_owned(),
-            after_gap: String::new(),
-            cursor: 14,
-        };
-
-        // simulate moving cursor to space after 'in' (pos 7)
-        buf.cursor = 7;
-        buf.gap_to_cursor();
-        assert_eq!(buf.before_gap, "Text in");
-        assert_eq!(buf.after_gap, " buffer");
-
-        // move cursor to first letter in "buffer" (pos: 8)
-        buf.cursor = 8;
-        buf.gap_to_cursor();
-        assert_eq!(buf.before_gap, "Text in ");
-        assert_eq!(buf.after_gap, "buffer");
     }
 
     // tests for LineReader
@@ -506,7 +451,6 @@ mod tests {
             buffer: GapBuffer {
                 before_gap: buffer_text[..8].to_owned(),
                 after_gap: buffer_text[8..].to_owned(),
-                cursor: 8,
             },
         };
         let event =
@@ -524,7 +468,6 @@ mod tests {
         let mut reader = LineReader {
             buffer: GapBuffer {
                 before_gap: buffer_text.to_owned(),
-                cursor: buffer_text.len(),
                 ..Default::default()
             },
         };
