@@ -4,7 +4,9 @@ use std::io::{self, BufRead, Stdout, Write};
 use crossterm::cursor::{
     self, Hide, MoveTo, MoveToNextLine, RestorePosition, SavePosition, Show,
 };
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+};
 use crossterm::terminal::{self, Clear, ClearType, ScrollUp};
 use crossterm::{ExecutableCommand, QueueableCommand};
 use unicode_width::UnicodeWidthStr;
@@ -130,7 +132,9 @@ impl LineReader {
 
     fn handle_event(&mut self, event: &Event) -> Response {
         match event {
-            Event::Key(event) => self.handle_key_event(event),
+            Event::Key(event) if event.kind == KeyEventKind::Press => {
+                self.handle_key_event(event)
+            }
             _ => Response::Continue,
         }
     }
