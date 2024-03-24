@@ -45,7 +45,7 @@ pub struct LineReader {
 // Private structs and enums
 ////////
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct GapBuffer {
     before_gap: String,
     after_gap: String,
@@ -254,6 +254,22 @@ impl GapBuffer {
         self.before_gap.clear();
         self.after_gap.clear();
     }
+
+    /// Move gap (insetion point) to end of buffer
+    fn gap_to_end(&mut self) {
+        if !self.after_gap.is_empty() {
+            self.before_gap.push_str(&self.after_gap[..]);
+            self.after_gap.clear();
+        }
+    }
+
+    /// Move gap (insertion point) to beginning of buffer
+    fn gap_to_beginning(&mut self) {
+        if !self.before_gap.is_empty() {
+            self.after_gap.insert_str(0, &self.before_gap[..]);
+            self.before_gap.clear();
+        }
+    }
 }
 
 // impls for RenderContext
@@ -446,6 +462,30 @@ mod tests {
         };
         buffer.clear();
         assert_eq!(buffer.len(), 0);
+    }
+
+    #[test]
+    fn move_gap_to_end() {
+        let mut buffer = GapBuffer {
+            before_gap: "Before|".to_owned(),
+            after_gap: "|After".to_owned(),
+        };
+
+        buffer.gap_to_end();
+        assert_eq!(buffer.before_gap, "Before||After");
+        assert!(buffer.after_gap.is_empty());
+    }
+
+    #[test]
+    fn move_gap_to_beginning() {
+        let mut buffer = GapBuffer {
+            before_gap: "Before|".to_owned(),
+            after_gap: "|After".to_owned(),
+        };
+
+        buffer.gap_to_beginning();
+        assert_eq!(buffer.after_gap, "Before||After");
+        assert!(buffer.before_gap.is_empty());
     }
 
     // tests for LineReader
