@@ -8,6 +8,8 @@ use std::cmp::{self, Ordering};
 use std::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use std::path::{Path, PathBuf};
 
+use regex::Regex;
+
 use crate::command::Address;
 use crate::edit_buffer::undo_stack::{ChangeSet, Diff, UndoStack};
 
@@ -175,6 +177,34 @@ impl EditBuffer {
         self.clean_fingerprint
     }
 
+    pub fn find_line(&self, pattern: &Regex) -> Option<usize> {
+        if self.current_line == self.len() {
+            (1..=self.len()).find(|&i| pattern.is_match(&self[i]))
+        } else {
+            (self.current_line + 1..=self.len())
+                .find(|&i| pattern.is_match(&self[i]))
+                .or_else(|| {
+                    (1..=self.current_line)
+                        .find(|&i| pattern.is_match(&self[i]))
+                })
+        }
+    }
+
+    pub fn find_line_rev(&self, pattern: &Regex) -> Option<usize> {
+        if self.current_line == 1 {
+            (1..=self.len()).rev().find(|&i| pattern.is_match(&self[i]))
+        } else {
+            (1..self.current_line)
+                .rev()
+                .find(|&i| pattern.is_match(&self[i]))
+                .or_else(|| {
+                    (self.current_line..=self.len())
+                        .rev()
+                        .find(|&i| pattern.is_match(&self[i]))
+                })
+        }
+    }
+
     pub fn do_append(&mut self, address: Option<Address>, lines: Vec<String>) {
         let location = address.map_or(self.current_line, |addr| addr.1);
         let mut change = ChangeSet::new();
@@ -191,9 +221,8 @@ impl EditBuffer {
     }
 
     pub fn append(&mut self, location: usize, mut lines: Vec<String>) -> bool {
-        let default_eol = self
-            .default_eol
-            .get_or_insert_with(|| compute_default_eol(&lines));
+        let default_eol =
+            self.default_eol.get_or_insert_with(|| compute_default_eol(&lines));
 
         // Add missing EOL if necessary
         let eol_added = match lines.last_mut() {
@@ -239,9 +268,10 @@ impl EditBuffer {
     }
 
     pub fn do_delete(&mut self, address: Option<Address>) {
-        let (b, e) = address.map_or((self.current_line, self.current_line), |addr| {
-            (addr.0, addr.1)
-        });
+        let (b, e) = address
+            .map_or((self.current_line, self.current_line), |addr| {
+                (addr.0, addr.1)
+            });
 
         let removed: Vec<String> = self.text.splice(b - 1..e, None).collect();
 
@@ -258,9 +288,7 @@ impl EditBuffer {
             address.map_or(self.current_line, |addr| addr.1)
         } else {
             // insertion point is just before addressed line
-            address
-                .map_or(self.current_line, |addr| addr.1)
-                .saturating_sub(1)
+            address.map_or(self.current_line, |addr| addr.1).saturating_sub(1)
         };
         let mut change = ChangeSet::new();
         change.current_line_before = self.current_line;
@@ -285,8 +313,12 @@ impl EditBuffer {
             {
                 for diff in undo.diffs() {
                     match diff {
-                        Diff::Add(p, l) => drop(self.text.splice(*p..*p + l.len(), None)),
-                        Diff::Remove(p, l) => drop(self.text.splice(*p..*p, l.iter().cloned())),
+                        Diff::Add(p, l) => {
+                            drop(self.text.splice(*p..*p + l.len(), None));
+                        }
+                        Diff::Remove(p, l) => {
+                            drop(self.text.splice(*p..*p, l.iter().cloned()));
+                        }
                     }
                 }
             }
@@ -319,16 +351,10 @@ impl EditBuffer {
     }
 }
 
-fn compute_native_eol() -> &'static str {
-    if std::env::consts::FAMILY == "windows" {
-        "\r\n"
-    } else {
-        "\n"
-    }
-}
-
-fn compute_default_eol(lines: impl IntoIterator<Item = impl AsRef<str>>) -> &'static str {
-    let native_eol = compute_native_eol();
+fn compute_default_eol(
+    lines: impl IntoIterator<Item = impl AsRef<str>>,
+) -> &'static str {
+    let native_eol = line_reader::native_eol();
     let mut crlf = 0;
     let mut lf = 0;
 
@@ -456,7 +482,7 @@ mod tests {
     #[test]
     fn default_eol_when_equal_lf_crlf() {
         let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n"];
-        assert_eq!(compute_native_eol(), compute_default_eol(&lines));
+        assert_eq!(compute_default_eol(&lines), line_reader::native_eol());
     }
 
     /////
@@ -494,7 +520,10 @@ mod tests {
     fn range_index() {
         let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!(vec!["2\n", "3\n", "4\n"], buffer[2..5]);
-        assert_eq!(vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"], buffer[1..7]);
+        assert_eq!(
+            vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"],
+            buffer[1..7]
+        );
     }
 
     #[test]
@@ -622,7 +651,8 @@ mod tests {
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
-        let expected2 = EditBuffer::from(vec!["1\n", "2", "4", "5", "6", "7", "8"]);
+        let expected2 =
+            EditBuffer::from(vec!["1\n", "2", "4", "5", "6", "7", "8"]);
         buffer.do_change(None, expected2[3..].to_vec());
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
@@ -726,7 +756,8 @@ mod tests {
 
     #[test]
     fn do_delete_span() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let expected = EditBuffer::from(vec!["1\r\n", "2", "6"]);
         buffer.do_delete(Some(Address(3, 5)));
         assert_eq!(3, buffer.len());
@@ -744,7 +775,8 @@ mod tests {
 
     #[test]
     fn do_delete_span_at_start() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let expected = EditBuffer::from(vec!["4\r\n", "5", "6"]);
         buffer.do_delete(Some(Address(1, 3)));
         assert_eq!(3, buffer.len());
@@ -753,7 +785,8 @@ mod tests {
 
     #[test]
     fn do_delete_span_at_end() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let expected = EditBuffer::from(vec!["1\r\n", "2", "3", "4"]);
         buffer.do_delete(Some(Address(5, 6)));
         assert_eq!(4, buffer.len());
@@ -829,9 +862,11 @@ mod tests {
     #[test]
     fn do_undo_redo_insert() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected_final = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected_modified =
-            EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
+        let expected_final =
+            EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let expected_modified = EditBuffer::from(vec![
+            "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
+        ]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
         buffer.do_insert(Some(Address(3, 3)), lines);
         assert_eq!(buffer[..], expected_modified[..]);
@@ -849,7 +884,9 @@ mod tests {
         assert_eq!(buffer.current_line(), 6);
 
         buffer.do_append(Some(Address(2, 2)), lines);
-        let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
+        let expected_1 = EditBuffer::from(vec![
+            "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
+        ]);
         assert_eq!(buffer[..], expected_1[..]);
         assert_eq!(buffer.current_line(), 5);
 
@@ -872,7 +909,9 @@ mod tests {
         assert_eq!(6, buffer.current_line());
 
         buffer.do_append(Some(Address(2, 2)), lines);
-        let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
+        let expected_1 = EditBuffer::from(vec![
+            "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
+        ]);
         assert_eq!(&expected_1[..], &buffer[..]);
         assert_eq!(5, buffer.current_line());
 
@@ -885,8 +924,9 @@ mod tests {
 
         let lines = vec!["spam!\n".to_owned()];
         buffer.do_append(Some(Address(5, 5)), lines);
-        let expected_3 =
-            EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "spam!", "3", "4", "5", "6"]);
+        let expected_3 = EditBuffer::from(vec![
+            "1\n", "2", "a", "b", "c", "spam!", "3", "4", "5", "6",
+        ]);
         assert_eq!(buffer[..], expected_3[..]);
 
         buffer.do_undo();
@@ -938,7 +978,9 @@ mod tests {
 
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
         buffer.do_append(Some(Address(2, 2)), lines);
-        let expected_1 = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
+        let expected_1 = EditBuffer::from(vec![
+            "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
+        ]);
         assert_eq!(&expected_1[..], &buffer[..]);
         assert_eq!(buffer.current_line(), 5);
 
@@ -1000,7 +1042,9 @@ mod tests {
     fn do_insert_span_address() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
-        let expected = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3", "4", "5", "6"]);
+        let expected = EditBuffer::from(vec![
+            "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
+        ]);
         buffer.do_insert(Some(Address(2, 3)), lines);
         assert_eq!(5, buffer.current_line);
         assert_eq!(9, buffer.len());

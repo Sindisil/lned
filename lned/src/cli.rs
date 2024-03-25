@@ -1,5 +1,4 @@
 use core::fmt::{self, Display, Formatter};
-use core::iter::IntoIterator;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
@@ -36,7 +35,8 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
             Error::WroteMessage => None,
-            Error::NextArg { ref source } | Error::UnexpectedArg { ref source } => Some(source),
+            Error::NextArg { ref source }
+            | Error::UnexpectedArg { ref source } => Some(source),
         }
     }
 }
@@ -45,8 +45,12 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Error::WroteMessage => write!(f, "message output, no error"),
-            Error::NextArg { .. } => write!(f, "error parsing next command line argument"),
-            Error::UnexpectedArg { .. } => write!(f, "unexpected command line argument"),
+            Error::NextArg { .. } => {
+                write!(f, "error parsing next command line argument")
+            }
+            Error::UnexpectedArg { .. } => {
+                write!(f, "unexpected command line argument")
+            }
         }
     }
 }
@@ -64,24 +68,26 @@ pub fn parse_args(
     let mut cmd_args = CmdArgs { file: None };
 
     let mut parser = lexopt::Parser::from_iter(args);
-    while let Some(arg) = parser.next().map_err(|source| Error::NextArg { source })? {
+    while let Some(arg) =
+        parser.next().map_err(|source| Error::NextArg { source })?
+    {
         match arg {
             Short('h') | Long("help") => {
-                writeln!(&mut output, "{APP_NAME} - {APP_DESCRIPTION}").unwrap();
+                writeln!(&mut output, "{APP_NAME} - {APP_DESCRIPTION}")
+                    .unwrap();
                 writeln!(&mut output, "Version {APP_VERSION}").unwrap();
                 write!(&mut output, "{APP_HELP}").unwrap();
                 return Err(Error::WroteMessage);
             }
             Short('V') | Long("version") => {
-                writeln!(&mut output, "{APP_NAME} version {APP_VERSION}").unwrap();
+                writeln!(&mut output, "{APP_NAME} version {APP_VERSION}")
+                    .unwrap();
                 return Err(Error::WroteMessage);
             }
-            Value(val) if cmd_args.file.is_none() => cmd_args.file = Some(PathBuf::from(val)),
-            _ => {
-                return Err(Error::UnexpectedArg {
-                    source: arg.unexpected(),
-                })
+            Value(val) if cmd_args.file.is_none() => {
+                cmd_args.file = Some(PathBuf::from(val));
             }
+            _ => return Err(Error::UnexpectedArg { source: arg.unexpected() }),
         }
     }
     Ok(cmd_args)
@@ -95,7 +101,9 @@ mod tests {
 
     #[test]
     fn help_options_output_help_message() {
-        let expected = format!("{APP_NAME} - {APP_DESCRIPTION}\nVersion {APP_VERSION}\n{APP_HELP}");
+        let expected = format!(
+            "{APP_NAME} - {APP_DESCRIPTION}\nVersion {APP_VERSION}\n{APP_HELP}"
+        );
         let mut output = Vec::new();
         let args = &["test", "-h"];
         let res = parse_args(&mut output, args);

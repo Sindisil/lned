@@ -11,11 +11,7 @@ impl StrUtils for str {
     fn is_ascii_digit(&self) -> bool {
         !self.is_empty()
             && self.is_ascii()
-            && self
-                .chars()
-                .next()
-                .expect("shouldn't be empty")
-                .is_ascii_digit()
+            && self.chars().next().expect("shouldn't be empty").is_ascii_digit()
     }
 }
 

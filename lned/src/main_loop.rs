@@ -11,6 +11,8 @@ use crate::command::{self, Address, Cmd};
 use crate::edit_buffer::EditBuffer;
 use crate::num_utils::NumUtils;
 
+use line_reader::LineRead;
+
 #[derive(Debug)]
 pub enum Error {
     ParseCmd(command::Error),
@@ -53,12 +55,20 @@ impl fmt::Display for Error {
         match self {
             Error::ParseCmd(e) => write!(f, "{e}"),
             Error::InvalidAddress => write!(f, "invalid address"),
-            Error::NestedGlobalCmd => write!(f, "invalid nested global command"),
-            Error::UnsupportedGlobalCmd => write!(f, "unsupported global command"),
+            Error::NestedGlobalCmd => {
+                write!(f, "invalid nested global command")
+            }
+            Error::UnsupportedGlobalCmd => {
+                write!(f, "unsupported global command")
+            }
             Error::ReadGlobalCmd => write!(f, "error reading global command"),
             Error::NoFilename => write!(f, "no filename"),
-            Error::EditFileOpen { .. } => write!(f, "error opening file to edit"),
-            Error::WriteFileOpen { .. } => write!(f, "error opening file for writing"),
+            Error::EditFileOpen { .. } => {
+                write!(f, "error opening file to edit")
+            }
+            Error::WriteFileOpen { .. } => {
+                write!(f, "error opening file for writing")
+            }
             Error::WriteLines { .. } => write!(f, "error writing lines"),
             Error::ReadLines { .. } => write!(f, "error reading input lines"),
             Error::QuitUnwrittenChanges => {
@@ -73,7 +83,9 @@ impl fmt::Display for Error {
                     "unwritten changes - repeat edit command to discard changes"
                 )
             }
-            Error::EditFileNotFound(filename) => write!(f, "{filename} not found"),
+            Error::EditFileNotFound(filename) => {
+                write!(f, "{filename} not found")
+            }
         }
     }
 }
@@ -82,7 +94,7 @@ impl fmt::Display for Error {
 ///
 /// Handles prompting, command input, command dispatch, and error display.
 pub fn run(
-    mut input: impl BufRead,
+    mut input: impl LineRead,
     mut stdout: impl Write,
     args: &cli::CmdArgs,
 ) -> Result<(), Error> {
@@ -100,21 +112,27 @@ pub fn run(
     // Accept and process commands until fatal error or exit
     let mut done = false;
     while !done {
-        // write prompt
-        write_prompt(&mut stdout);
-
         Cmd::read(&mut input, &mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
             .and_then(|cmd| {
                 let res = match &cmd {
                     // dispatch editor commands
-                    Cmd::Append(address) => append_cmd(&mut buffer, &mut input, *address),
-                    Cmd::Delete(address) => delete_cmd(&mut buffer, *address),
-                    Cmd::Change(address) => change_cmd(&mut buffer, &mut input, *address),
-                    Cmd::Edit(filename) => {
-                        edit_cmd(&mut buffer, &mut stdout, filename.as_deref(), &previous_cmd)
+                    Cmd::Append(address) => {
+                        append_cmd(&mut buffer, &mut input, *address)
                     }
-                    Cmd::Enumerate(address) => enumerate_cmd(&mut buffer, &mut stdout, *address),
+                    Cmd::Delete(address) => delete_cmd(&mut buffer, *address),
+                    Cmd::Change(address) => {
+                        change_cmd(&mut buffer, &mut input, *address)
+                    }
+                    Cmd::Edit(filename) => edit_cmd(
+                        &mut buffer,
+                        &mut stdout,
+                        filename.as_deref(),
+                        &previous_cmd,
+                    ),
+                    Cmd::Enumerate(address) => {
+                        enumerate_cmd(&mut buffer, &mut stdout, *address)
+                    }
                     Cmd::File(filename) => {
                         file_cmd(&mut buffer, &mut stdout, filename.as_deref());
                         Ok(())
@@ -127,13 +145,24 @@ pub fn run(
                         commands,
                         &mut previous_pattern,
                     ),
-                    Cmd::Insert(address) => insert_cmd(&mut buffer, &mut input, *address),
-                    Cmd::Null(address) => null_cmd(&mut buffer, &mut stdout, *address),
-                    Cmd::Print(address) => print_cmd(&mut buffer, &mut stdout, *address),
-                    Cmd::Quit => quit_cmd(&buffer, &previous_cmd).map(|()| done = true),
-                    Cmd::Write(address, filename) => {
-                        write_cmd(&mut buffer, &mut stdout, *address, filename.as_deref())
+                    Cmd::Insert(address) => {
+                        insert_cmd(&mut buffer, &mut input, *address)
                     }
+                    Cmd::Null(address) => {
+                        null_cmd(&mut buffer, &mut stdout, *address)
+                    }
+                    Cmd::Print(address) => {
+                        print_cmd(&mut buffer, &mut stdout, *address)
+                    }
+                    Cmd::Quit => {
+                        quit_cmd(&buffer, &previous_cmd).map(|()| done = true)
+                    }
+                    Cmd::Write(address, filename) => write_cmd(
+                        &mut buffer,
+                        &mut stdout,
+                        *address,
+                        filename.as_deref(),
+                    ),
                     Cmd::Undo => {
                         buffer.do_undo();
                         Ok(())
@@ -157,14 +186,15 @@ pub fn run(
 
 fn append_cmd(
     buffer: &mut EditBuffer,
-    input: &mut impl BufRead,
+    input: &mut impl LineRead,
     address: Option<Address>,
 ) -> Result<(), Error> {
     if address.is_some_and(|a| a.1 > buffer.len()) {
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines).map_err(|source| Error::ReadLines { source })?;
+    Cmd::read_lines(input, &mut lines)
+        .map_err(|source| Error::ReadLines { source })?;
     //    let location = address.map_or(buffer.current_line(), |addr| addr.1);
     buffer.do_append(address, lines);
     Ok(())
@@ -172,7 +202,7 @@ fn append_cmd(
 
 fn change_cmd(
     buffer: &mut EditBuffer,
-    input: &mut impl BufRead,
+    input: &mut impl LineRead,
     address: Option<Address>,
 ) -> Result<(), Error> {
     if address.is_some_and(|a| a.1 > buffer.len()) {
@@ -180,12 +210,16 @@ fn change_cmd(
     }
 
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines).map_err(|source| Error::ReadLines { source })?;
+    Cmd::read_lines(input, &mut lines)
+        .map_err(|source| Error::ReadLines { source })?;
     buffer.do_change(address, lines);
     Ok(())
 }
 
-fn delete_cmd(buffer: &mut EditBuffer, address: Option<Address>) -> Result<(), Error> {
+fn delete_cmd(
+    buffer: &mut EditBuffer,
+    address: Option<Address>,
+) -> Result<(), Error> {
     match address {
         Some(Address(0, _)) => Err(Error::InvalidAddress),
         None if buffer.current_line() == 0 => Err(Error::InvalidAddress),
@@ -274,7 +308,11 @@ fn enumerate_cmd(
     Ok(())
 }
 
-fn file_cmd(buffer: &mut EditBuffer, stdout: &mut impl Write, filename: Option<&Path>) {
+fn file_cmd(
+    buffer: &mut EditBuffer,
+    stdout: &mut impl Write,
+    filename: Option<&Path>,
+) {
     if let Some(filename) = filename {
         buffer.set_filename(Some(filename.to_owned()));
     }
@@ -298,10 +336,7 @@ fn global_cmd(
     let search_range = address.map_or_else(|| 1..=buffer.len(), |a| a.0..=a.1);
     let mut matched_lines = (search_range)
         .filter(|&n| {
-            buffer[n]
-                .lines()
-                .next()
-                .map_or(false, |l| pattern.is_match(l))
+            buffer[n].lines().next().map_or(false, |l| pattern.is_match(l))
         })
         .collect::<VecDeque<usize>>();
 
@@ -311,12 +346,14 @@ fn global_cmd(
         let mut input = commands.as_bytes();
 
         // parse and execute command list for line
-        let cmd =
-            Cmd::read(&mut input, buffer, previous_pattern).map_err(|_| Error::ReadGlobalCmd)?;
+        let cmd = Cmd::read(&mut input, buffer, previous_pattern)
+            .map_err(|_| Error::ReadGlobalCmd)?;
         match cmd {
             Cmd::Enumerate(address) => enumerate_cmd(buffer, stdout, address)?,
             Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
-            Cmd::Null(address) | Cmd::Print(address) => print_cmd(buffer, stdout, address)?,
+            Cmd::Null(address) | Cmd::Print(address) => {
+                print_cmd(buffer, stdout, address)?;
+            }
             _ => return Err(Error::UnsupportedGlobalCmd),
         }
     }
@@ -326,14 +363,15 @@ fn global_cmd(
 
 fn insert_cmd(
     buffer: &mut EditBuffer,
-    input: &mut impl BufRead,
+    input: &mut impl LineRead,
     address: Option<Address>,
 ) -> Result<(), Error> {
     if address.is_some_and(|a| a.1 > buffer.len()) {
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines).map_err(|source| Error::ReadLines { source })?;
+    Cmd::read_lines(input, &mut lines)
+        .map_err(|source| Error::ReadLines { source })?;
     buffer.do_insert(address, lines);
     Ok(())
 }
@@ -395,7 +433,10 @@ fn print_cmd(
 ///
 /// Displays warning and doesn't actually exit if unwritten
 /// buffer changes are detected.
-fn quit_cmd(buffer: &EditBuffer, previous_cmd: &Option<Cmd>) -> Result<(), Error> {
+fn quit_cmd(
+    buffer: &EditBuffer,
+    previous_cmd: &Option<Cmd>,
+) -> Result<(), Error> {
     match previous_cmd {
         Some(Cmd::Quit) => Ok(()),
         _ if !buffer.is_dirty() => Ok(()),
@@ -403,7 +444,10 @@ fn quit_cmd(buffer: &EditBuffer, previous_cmd: &Option<Cmd>) -> Result<(), Error
     }
 }
 
-fn read_lines(source: &mut impl BufRead, lines: &mut Vec<String>) -> Result<(usize, usize), Error> {
+fn read_lines(
+    source: &mut impl BufRead,
+    lines: &mut Vec<String>,
+) -> Result<(usize, usize), Error> {
     let mut line = String::new();
     let mut bytes_read = 0;
     let mut lines_read = 0;
@@ -443,12 +487,10 @@ fn write_cmd(
         .open(buffer.filename().as_ref().unwrap())
         .map_err(|source| Error::WriteFileOpen { source })?;
 
-    let (bytes_written, lines_written) = write_lines(&mut destination, buffer, address)?;
-    writeln!(
-        stdout,
-        "{bytes_written} bytes written ({lines_written} lines)"
-    )
-    .unwrap();
+    let (bytes_written, lines_written) =
+        write_lines(&mut destination, buffer, address)?;
+    writeln!(stdout, "{bytes_written} bytes written ({lines_written} lines)")
+        .unwrap();
     stdout.flush().unwrap();
     Ok(())
 }
@@ -458,7 +500,8 @@ fn write_lines(
     buffer: &mut EditBuffer,
     address: Option<Address>,
 ) -> Result<(usize, usize), Error> {
-    let line_span = address.map_or_else(|| 1usize..=buffer.len(), |addr| addr.0..=addr.1);
+    let line_span =
+        address.map_or_else(|| 1usize..=buffer.len(), |addr| addr.0..=addr.1);
     let full_buffer_write = line_span == (1usize..=buffer.len());
 
     let mut total_bytes_written = 0;
@@ -483,11 +526,6 @@ fn write_lines(
         buffer.reset_clean_fingerprint();
     }
     Ok((total_bytes_written, lines_written))
-}
-
-fn write_prompt(stdout: &mut impl Write) {
-    write!(stdout, ":").unwrap();
-    stdout.flush().unwrap();
 }
 
 #[cfg(test)]
@@ -518,15 +556,6 @@ mod tests {
     }
 
     /////
-    // write_prompt() tests
-
-    #[test]
-    fn write_prompt_clean_buffer() {
-        let mut output = Vec::new();
-        write_prompt(&mut output);
-        assert_eq!(b":", &output[..]);
-    }
-
     #[test]
     fn null_cmd_no_addr() {
         let mut output = Vec::new();
@@ -548,7 +577,8 @@ mod tests {
     #[test]
     fn null_cmd_span() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         null_cmd(&mut buffer, &mut output, Some(Address(2, 4))).unwrap();
         assert_eq!(&output[..], b"2\r\n3\r\n4\r\n");
@@ -557,7 +587,8 @@ mod tests {
     #[test]
     fn null_cmd_sets_current_line() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         null_cmd(&mut buffer, &mut output, Some(Address(2, 4))).unwrap();
         assert_eq!(4, buffer.current_line());
@@ -567,10 +598,11 @@ mod tests {
     fn null_cmd_empty_buffer_gives_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::new();
-        let res = null_cmd(&mut buffer, &mut output, None).expect_err("invalid address");
+        let res = null_cmd(&mut buffer, &mut output, None)
+            .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
-        let res =
-            null_cmd(&mut buffer, &mut output, Some(Address(0, 0))).expect_err("invalid address");
+        let res = null_cmd(&mut buffer, &mut output, Some(Address(0, 0)))
+            .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
     }
 
@@ -578,7 +610,8 @@ mod tests {
     fn enumerate_empty_buffer_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::new();
-        let res = enumerate_cmd(&mut buffer, &mut output, None).expect_err("invalid address");
+        let res = enumerate_cmd(&mut buffer, &mut output, None)
+            .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
         let res = enumerate_cmd(&mut buffer, &mut output, Some(Address(1, 1)))
             .expect_err("invalid address");
@@ -588,8 +621,9 @@ mod tests {
     #[test]
     fn enumerate_sm_buffer() {
         let mut output = Vec::new();
-        let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        let mut buffer = EditBuffer::from(vec![
+            "1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+        ]);
         buffer.set_current_line(2);
         enumerate_cmd(&mut buffer, &mut output, None).unwrap();
         assert_eq!(&output[..], b" 2  2\r\n", "output line 2");
@@ -598,8 +632,9 @@ mod tests {
     #[test]
     fn enumerate_sets_current_line() {
         let mut output = Vec::new();
-        let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        let mut buffer = EditBuffer::from(vec![
+            "1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+        ]);
         buffer.set_current_line(2);
 
         enumerate_cmd(&mut buffer, &mut output, Some(Address(6, 9))).unwrap();
@@ -608,8 +643,9 @@ mod tests {
     #[test]
     fn enumerate_lg_buffer() {
         let mut output = Vec::new();
-        let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+        let mut buffer = EditBuffer::from(vec![
+            "1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+        ]);
         let mut input: Vec<u8> = Vec::new();
         for i in 11..=1024 {
             input.extend_from_slice(format!("{i}\r\n").as_bytes());
@@ -627,7 +663,8 @@ mod tests {
         assert_eq!(&expected[..], &output[0..expected.len()]);
         output.clear();
 
-        enumerate_cmd(&mut buffer, &mut output, Some(Address(999, 999))).unwrap();
+        enumerate_cmd(&mut buffer, &mut output, Some(Address(999, 999)))
+            .unwrap();
         let expected = b" 999  999\r\n";
         assert_eq!(&expected[..], &output[0..expected.len()]);
     }
@@ -734,7 +771,8 @@ mod tests {
 
     #[test]
     fn global_cmd_blank_command_print() {
-        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three", "tweedle dee"]);
+        let mut buffer =
+            EditBuffer::from(vec!["one\r\n", "two", "three", "tweedle dee"]);
         buffer.set_current_line(3);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -794,7 +832,9 @@ mod tests {
 
     #[test]
     fn global_cmd_enumerate_with_addresses() {
-        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three", "four", "five", "six"]);
+        let mut buffer = EditBuffer::from(vec![
+            "one\n", "two", "three", "four", "five", "six",
+        ]);
         buffer.set_current_line(6);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -856,7 +896,8 @@ mod tests {
     #[test]
     fn print_cmd_span() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         print_cmd(&mut buffer, &mut output, Some(Address(2, 4))).unwrap();
         assert_eq!(&output[..], b"2\r\n3\r\n4\r\n");
@@ -865,18 +906,11 @@ mod tests {
     #[test]
     fn print_cmd_sets_current_line() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         print_cmd(&mut buffer, &mut output, Some(Address(2, 4))).unwrap();
         assert_eq!(4, buffer.current_line());
-    }
-
-    #[test]
-    fn quit_cmd_unchanged() {
-        let input = &b"q\n"[..];
-        let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert_eq!(&output[..], &b":"[..]);
     }
 
     #[test]
@@ -884,7 +918,7 @@ mod tests {
         let input = b"a\n1\n2\n3\n.\nq\nq\n";
         let mut output = Vec::new();
 
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("unwritten changes - repeat quit"));
     }
@@ -893,10 +927,11 @@ mod tests {
     fn print_cmd_empty_buffer_gives_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::new();
-        let res = print_cmd(&mut buffer, &mut output, None).expect_err("invalid address");
+        let res = print_cmd(&mut buffer, &mut output, None)
+            .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
-        let res =
-            print_cmd(&mut buffer, &mut output, Some(Address(0, 0))).expect_err("invalid address");
+        let res = print_cmd(&mut buffer, &mut output, Some(Address(0, 0)))
+            .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
     }
 
@@ -906,19 +941,10 @@ mod tests {
             b"a\n1\n2\n3\n.\ne a_file_that_is_not_there.ext\ne a_file_that_is_not_there.ext\nq\nq\n";
         let mut output = Vec::new();
 
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert!(str::from_utf8(&output[..])
-            .unwrap()
-            .contains("unwritten changes - repeat edit command to discard changes"));
-    }
-
-    #[test]
-    fn new_prompt_on_line_after_error_message() {
-        let input = b"1p\nq\n";
-        let mut output = Vec::new();
-
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert_eq!(&output[..], &b":invalid address\n:"[..],);
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        assert!(str::from_utf8(&output[..]).unwrap().contains(
+            "unwritten changes - repeat edit command to discard changes"
+        ));
     }
 
     #[test]
@@ -932,19 +958,17 @@ mod tests {
         };
         let input = b"q\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &args).unwrap();
+        run(&input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("312"));
     }
 
     #[test]
     fn file_on_cmd_line_not_found() {
-        let args = cli::CmdArgs {
-            file: Some(PathBuf::from("not_a_file")),
-        };
+        let args = cli::CmdArgs { file: Some(PathBuf::from("not_a_file")) };
         let input = b"q\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &args).unwrap();
+        run(&input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("not found"));
     }
@@ -953,7 +977,7 @@ mod tests {
     fn append_cmd_dispatch() {
         let input = b"a\none\ntwo\nthree\n.\n2p\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("two\n"));
         assert!(output.contains("unwritten changes"));
@@ -964,7 +988,7 @@ mod tests {
     fn delete_cmd_dispatch() {
         let input = b"a\none\ntwo\nthree\n.\n1,2d\np\nd\np\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("three"));
         assert!(output.contains("invalid address"));
@@ -974,7 +998,7 @@ mod tests {
     fn change_cmd_dispatch() {
         let input = b"a\n1\n2\n3\n4\n.\n2,3c\na\nb\n.\n1,$p\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("1\na\nb\n4\n"));
     }
@@ -983,7 +1007,7 @@ mod tests {
     fn edit_cmd_dispatch() {
         let input = b"e test/assets/text_with_final_eol.txt\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("312"));
     }
@@ -992,7 +1016,7 @@ mod tests {
     fn enumerate_cmd_dispatch() {
         let input = b"a\none\ntwo\nthree\n.\n2,3n\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("2  two\n3  three\n"));
     }
@@ -1005,7 +1029,7 @@ mod tests {
             file: None,
             //            file: Some(PathBuf::from("test/assets/text_with_final_eol.txt")),
         };
-        run(&mut &input[..], &mut output, &args).unwrap();
+        run(&input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         //        assert!(output.contains("test/assets/text_with_final_eol.txt"));
         assert!(output.contains("no current filename"));
@@ -1016,7 +1040,7 @@ mod tests {
     fn insert_cmd_dispatch() {
         let input = b"i\none\ntwo\nthree\n.\n2p\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("two\n"));
         assert!(output.contains("unwritten changes"));
@@ -1027,7 +1051,7 @@ mod tests {
     fn global_cmd_dispatch() {
         let input = b"a\none\ntwo\nthree\nfour\nfive\n.\ng/e$/n\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("1  one\n3  three\n5  five\n"));
     }
@@ -1036,7 +1060,7 @@ mod tests {
     fn null_cmd_dispatch() {
         let input = b"a\r\none\r\ntwo\r\nthree\r\n.\r\n1\r\n\r\nq\r\nq\r\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("two"));
     }
@@ -1045,7 +1069,7 @@ mod tests {
     fn print_cmd_dispatch() {
         let input = b"a\none\ntwo\nthree\n.\n1,2p\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("one\ntwo\n"));
     }
@@ -1054,15 +1078,14 @@ mod tests {
     fn quit_cmd_dispatch() {
         let input = b"q\r\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert!(str::from_utf8(&output[..]).unwrap() == ":");
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
     }
 
     #[test]
     fn write_cmd_dispatch() {
         let input = b"a\none\n.\nw\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("no filename"));
     }
@@ -1071,7 +1094,7 @@ mod tests {
     fn undo_cmd_dispatch() {
         let input = b"a\n1\n2\n3\n.\n2,3d\np\nu\np\nu\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("1\n"));
         assert!(output.contains("3\n"));
@@ -1081,7 +1104,7 @@ mod tests {
     fn redo_cmd_dispatch() {
         let input = b"a\n1\n2\n3\n.\n2,3d\nu\nU\n3p\nq\nq\n";
         let mut output = Vec::new();
-        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("invalid address"));
         assert!(output.contains("unwritten changes"));
@@ -1092,7 +1115,8 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut dummy_file = BadWriter {};
         let res =
-            write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 2))).expect_err("io error");
+            write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 2)))
+                .expect_err("io error");
         assert!(matches!(res, Error::WriteLines { .. }));
     }
 
@@ -1101,17 +1125,20 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut dummy_file = Vec::new();
         let (bytes, lines) =
-            write_lines(&mut dummy_file, &mut buffer, Some(Address(2, 2))).unwrap();
+            write_lines(&mut dummy_file, &mut buffer, Some(Address(2, 2)))
+                .unwrap();
         assert_eq!(bytes, 2);
         assert_eq!(lines, 1);
     }
 
     #[test]
     fn write_many_lines() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let mut dummy_file = Vec::new();
         let (bytes, lines) =
-            write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 6))).unwrap();
+            write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 6)))
+                .unwrap();
         assert_eq!(bytes, 18);
         assert_eq!(lines, 6);
     }
@@ -1120,7 +1147,8 @@ mod tests {
     fn write_empty_buffer() {
         let mut buffer = EditBuffer::new();
         let mut dummy_file = Vec::new();
-        let (bytes, lines) = write_lines(&mut dummy_file, &mut buffer, None).unwrap();
+        let (bytes, lines) =
+            write_lines(&mut dummy_file, &mut buffer, None).unwrap();
         assert_eq!(bytes, 0);
         assert_eq!(lines, 0);
     }
@@ -1133,7 +1161,8 @@ mod tests {
         append_cmd(&mut buffer, &mut input, Some(Address(0, 0))).unwrap();
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
-        let (bytes, lines) = write_lines(&mut dummy_file, &mut buffer, None).unwrap();
+        let (bytes, lines) =
+            write_lines(&mut dummy_file, &mut buffer, None).unwrap();
         assert_eq!(bytes, 20);
         assert_eq!(lines, 4);
         assert!(!buffer.is_dirty());
@@ -1148,7 +1177,8 @@ mod tests {
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let address = Some(Address(1, buffer.len()));
-        let (bytes, lines) = write_lines(&mut dummy_file, &mut buffer, address).unwrap();
+        let (bytes, lines) =
+            write_lines(&mut dummy_file, &mut buffer, address).unwrap();
         assert_eq!(bytes, 20);
         assert_eq!(lines, 4);
         assert!(!buffer.is_dirty());
@@ -1163,7 +1193,8 @@ mod tests {
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let (bytes, lines) =
-            write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 2))).unwrap();
+            write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 2)))
+                .unwrap();
         assert_eq!(bytes, 16);
         assert_eq!(lines, 2);
         assert!(buffer.is_dirty());
@@ -1174,8 +1205,8 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let mut input = "one\n.\n".as_bytes();
         let expected = "one\n.\n".as_bytes();
-        let res =
-            append_cmd(&mut buffer, &mut input, Some(Address(2, 2))).expect_err("invalid addr");
+        let res = append_cmd(&mut buffer, &mut input, Some(Address(2, 2)))
+            .expect_err("invalid addr");
         assert_eq!(0, buffer.len());
         assert_eq!(input, expected);
         assert!(matches!(res, Error::InvalidAddress));
@@ -1186,8 +1217,8 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let mut input = "one\n.\n".as_bytes();
         let expected = "one\n.\n".as_bytes();
-        let res =
-            insert_cmd(&mut buffer, &mut input, Some(Address(2, 2))).expect_err("invalid addr");
+        let res = insert_cmd(&mut buffer, &mut input, Some(Address(2, 2)))
+            .expect_err("invalid addr");
         assert_eq!(0, buffer.len());
         assert_eq!(input, expected);
         assert!(matches!(res, Error::InvalidAddress));
@@ -1203,21 +1234,24 @@ mod tests {
     #[test]
     fn delete_cmd_line_zero() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let res = delete_cmd(&mut buffer, Some(Address(0, 0))).expect_err("invalid address");
+        let res = delete_cmd(&mut buffer, Some(Address(0, 0)))
+            .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
     fn delete_cmd_span_starting_at_zero() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5"]);
-        let res = delete_cmd(&mut buffer, Some(Address(0, 3))).expect_err("invalid address");
+        let res = delete_cmd(&mut buffer, Some(Address(0, 3)))
+            .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
     fn edit_cmd_no_filename_error() {
         let mut buffer = EditBuffer::new();
-        let res = edit_cmd(&mut buffer, &mut Vec::new(), None, &None).expect_err("no filename");
+        let res = edit_cmd(&mut buffer, &mut Vec::new(), None, &None)
+            .expect_err("no filename");
         assert!(matches!(res, Error::NoFilename));
     }
 
@@ -1227,8 +1261,8 @@ mod tests {
         assert_eq!(buffer.len(), 3);
         let mut output = Vec::new();
         let not_a_file = Some(Path::new("non-existant_file.txt"));
-        let res =
-            edit_cmd(&mut buffer, &mut output, not_a_file, &None).expect_err("EditFileNotFound");
+        let res = edit_cmd(&mut buffer, &mut output, not_a_file, &None)
+            .expect_err("EditFileNotFound");
         assert!(matches!(res, Error::EditFileNotFound(_)));
         assert_eq!(buffer.filename(), not_a_file);
         assert!(buffer.is_empty());
@@ -1239,7 +1273,8 @@ mod tests {
         let source = b"one\r\ntwo\r\nthree\r\nfour\r\n";
         let source_bytes = source.len();
         let mut lines = Vec::new();
-        let (line_count, byte_count) = read_lines(&mut &source[..], &mut lines).expect("no error");
+        let (line_count, byte_count) =
+            read_lines(&mut &source[..], &mut lines).expect("no error");
         assert_eq!(byte_count, source_bytes);
         assert_eq!(line_count, lines.len());
     }
@@ -1247,7 +1282,8 @@ mod tests {
     #[test]
     fn read_lines_io_error() {
         let mut source = BufReader::new(BadReader {});
-        let res = read_lines(&mut source, &mut Vec::new()).expect_err("io error");
+        let res =
+            read_lines(&mut source, &mut Vec::new()).expect_err("io error");
         assert!(matches!(res, Error::ReadLines { .. }));
     }
 
@@ -1256,33 +1292,40 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let mut output = Vec::new();
         let filename1 = Some(Path::new(r"test/assets/text_with_final_eol.txt"));
-        let filename2 = Some(Path::new(r"test/assets/text_with_no_final_eol.txt"));
+        let filename2 =
+            Some(Path::new(r"test/assets/text_with_no_final_eol.txt"));
 
         edit_cmd(&mut buffer, &mut output, filename1, &None).unwrap();
         assert_eq!(buffer.len(), 10);
         let out_text = str::from_utf8(&output[..]).unwrap();
-        assert!(out_text.contains("10 lines") && out_text.contains("312 bytes"));
+        assert!(
+            out_text.contains("10 lines") && out_text.contains("312 bytes")
+        );
 
         output.clear();
         edit_cmd(&mut buffer, &mut output, filename2, &None).unwrap();
         assert_eq!(buffer.len(), 10);
         let out_text = str::from_utf8(&output[..]).unwrap();
-        assert!(out_text.contains("10 lines") && out_text.contains("318 bytes"));
+        assert!(
+            out_text.contains("10 lines") && out_text.contains("318 bytes")
+        );
     }
 
     #[test]
     fn change_cmd_addr_starting_after_buffer_end_gives_error() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let res = change_cmd(&mut buffer, &mut &b".\n"[..], Some(Address(5, 6)))
-            .expect_err("illegal address");
+        let res =
+            change_cmd(&mut buffer, &mut &b".\n"[..], Some(Address(5, 6)))
+                .expect_err("illegal address");
         assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
     fn change_cmd_addr_ending_past_buffer_end_gives_error() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let res = change_cmd(&mut buffer, &mut &b".\n"[..], Some(Address(2, 4)))
-            .expect_err("illegal address");
+        let res =
+            change_cmd(&mut buffer, &mut &b".\n"[..], Some(Address(2, 4)))
+                .expect_err("illegal address");
         assert!(matches!(res, Error::InvalidAddress));
     }
 }

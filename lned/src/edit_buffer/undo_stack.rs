@@ -35,7 +35,7 @@ pub enum Diff {
 static INST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn next_id() -> u64 {
-    INST_COUNTER.fetch_add(1, Ordering::SeqCst)
+    INST_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 impl ChangeSet {
@@ -81,10 +81,7 @@ impl ChangeSet {
 
 impl UndoStack {
     pub fn new() -> Self {
-        UndoStack {
-            undo: Vec::new(),
-            redo: Vec::new(),
-        }
+        UndoStack { undo: Vec::new(), redo: Vec::new() }
     }
 
     /// Push the supplied Undoable onto the undo stack.
