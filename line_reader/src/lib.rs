@@ -198,7 +198,18 @@ impl LineReader {
                 Response::Continue
             }
             KeyCode::Delete => {
-                todo!("remove base char at cursor, along with any zero width code points to its right up until next base char");
+                if let Some((next_idx, _)) = self
+                    .buffer
+                    .after_gap
+                    .char_indices()
+                    .skip(1)
+                    .find(|(_, c)| c.width().is_some_and(|w| w > 0))
+                {
+                    self.buffer.after_gap.drain(..next_idx);
+                } else if !self.buffer.after_gap.is_empty() {
+                    self.buffer.after_gap.clear();
+                }
+                Response::Continue
             }
             KeyCode::Char(c) => {
                 self.buffer.before_gap.push(c);
@@ -735,5 +746,37 @@ mod tests {
         assert!(matches!(res, Response::Continue));
         assert_eq!(reader.buffer.before_gap, "lmnop");
         assert!(reader.buffer.after_gap.is_empty());
+    }
+
+    #[test]
+    fn delete_removes_char_with_combining_marks() {
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: "d".to_owned(),
+                after_gap: "ëf".to_owned(),
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.buffer.after_gap, "f");
+        assert_eq!(reader.buffer.before_gap, "d");
+    }
+
+    #[test]
+    fn delete_removes_last_char() {
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: "d".to_owned(),
+                after_gap: "ë".to_owned(),
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert!(reader.buffer.after_gap.is_empty());
+        assert_eq!(reader.buffer.before_gap, "d");
     }
 }
