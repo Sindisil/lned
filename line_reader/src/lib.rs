@@ -182,10 +182,12 @@ impl LineReader {
                 Response::Continue
             }
             KeyCode::Home => {
-                todo!("move cursor to beginning of input");
+                self.buffer.gap_to_beginning();
+                Response::Continue
             }
             KeyCode::End => {
-                todo!("move cursor to end of input");
+                self.buffer.gap_to_end();
+                Response::Continue
             }
             KeyCode::Backspace => {
                 if let Some((prev_idx, _)) =
@@ -676,7 +678,6 @@ mod tests {
             buffer: GapBuffer {
                 before_gap: "lm".to_owned(),
                 after_gap: "ñ".to_owned(),
-                ..Default::default()
             },
         };
         let event =
@@ -701,5 +702,38 @@ mod tests {
         assert!(matches!(res, Response::Continue));
         assert!(reader.buffer.after_gap.is_empty());
         assert_eq!(reader.buffer.before_gap, "lmñ");
+    }
+
+    #[test]
+    fn home_moves_to_beginning() {
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: "lmn".to_owned(),
+                after_gap: "op".to_owned(),
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert!(reader.buffer.before_gap.is_empty());
+        assert_eq!(reader.buffer.after_gap, "lmnop");
+    }
+
+    #[test]
+    fn end_moves_to_end() {
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: "lmn".to_owned(),
+                after_gap: "op".to_owned(),
+            },
+        };
+        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.buffer.before_gap, "lmnop");
+        assert!(reader.buffer.after_gap.is_empty());
     }
 }
