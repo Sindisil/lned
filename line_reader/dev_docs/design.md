@@ -8,61 +8,6 @@ action.
 
 The gap is moved by navigation actions (Left, Right, Home, etc.).
 
-## Repaint
-
-Original plan was to repaint separately from actual buffer changes,
-similarly to how a game might render (process input, update world,
-render world).
-
-Might still be viable, but possibly less efficient? Would need to keep a
-model of the current display in order to maintain consistency in rendering
-(i.e., not have the cursor position move around unnecessarily).
-
-Alternative model would be to do appropriate display update based upon
-event handling. So a key event handler would use knowledge of what
-changes it is making (cursor movement, buffer insertion or deletion, etc.)
-to help efficiently update the screen.
-
-Pros & cons:
-
-Full repaint:
-  + separation of buffer manipulation and rendering (good for
-    testing, keeps related code togther)
-  + might reduce duplicate code, since several event types would
-    probably result in similar screen update code. This could
-    be somewhat mitigated by pulling out common code into
-    functions that could be used by several event handling
-    routines.
-  - would need to update more of screen (up to all of it) than
-    using decentralized screen updates.
-  - would probably need to store a more detailed model of the
-    current screen state to facilitate rendering. This would
-    duplicate information stored by the terminal emulator. OTOH,
-    this might avoid depending upon terminal behavior that
-    could differ between platforms.
-
-Partial repaint:
-  + Only need to consider related updates in any one piece of
-    rendering code, which might keep complexity down, at least
-    locally.
-  + Might allow less actual screen updates, resulting in better
-    performance. OTOH, even a large terminal window isn't very
-    big relative to current processing power (132 x 72 window
-    is only 9504 cells/characters)
-  - Might result in duplicate code because of similar work that
-    would need to be done in several cases. Could reduce by
-    pulling shared code out into functions if that makes
-    sense, but that would add function call overhead, as well
-    as further increase complexity.
-
-Worth sketching out a design for each before deciding, since
-just running ahead (first with full repaint, then trying to
-move to a distributed model to deal better with buffers larger
-than the screen size) has been ... messy.
-
-
-### Desired behavior
-
 Cursor position shouldn't change unexpectedly, nor should the
 screen contents scroll unnecessarily. Cursor will remain
 within the viewport at all times.
@@ -72,7 +17,20 @@ top and bottom if more text exists in the buffer beyond that visible
 in the terminal window. If the terminal size is less than 3 lines,
 the viewport is the full terminal window.
 
-### Full repaint
+Intended usage is for lned to instantiate a LineReader, then make
+calls to read_line() or read_line_or_cancel() as needed to get
+user input lines. The GapBuffer would thus only need to be
+allocated once, rather than when each line is read.
+
+LineReader would need to ensure that a few things (e.g., raw mode,
+hidden cursor) are safely reset after each read_line() call
+regardless of errors.
+
+Since those things are all rendering related, having a Renderer
+struct that is Drop and resets those items when dropped would be
+the obvious solution.
+
+## Repaint
 
 Values tracked (i.e., the model):
 
@@ -82,41 +40,104 @@ constantly between them is a PITA, though, so my
 thinking is to convert to/from u16 at the interface
 with crossterm, and use usize internally.
 
-  * prompt: String or &'a str
-  * prompt line: Option<usize> (needed?)
-  * before_gap_lines: usize
-  * before_gap_remainder: usize
-  * terminal size: (usize, usize)
-  * first_char: usize
+enum DisplayStart {
+	Prompt(u16),  // Prompt is on indicated line
+	CharIndex(usize),  // First displayed char is at indicated index
+}
+
+struct Renderer {
+	display_start: DisplayStart,
+	terminal_cols: u16,
+	terminal_lines: u16,
+	stdout: &'a mut Stdout,
+	prompt: &'a str,
+}
 
 The repaint algorithm would be:
 
     Hide cursor
-    Identify last character of after_gap that will fit
-    If whole buffer fits screen
-        If more lines are needed than available
-            scroll up enough lines
-            adjust prompt_line
-        Position cursor at (0, prompt_line)
-        Clear from cursor to EOS
-        Write prompt
-        Write before_gap
-        Save cursor pos
-        Write after_gap
-        Restore cursor position
-    else
-        Adjust RenderContext::first_char & prompt_line
-        Position cursor at (0, 0)
-        Clear from cursor to end of window
-        If prompt_line is not None
-            Write prompt
-            Write before_gap
-        else            
-            Write before_gap[first_char_..]
-        Save cursor position
-        Write as much of after_gap as will fit on screen
-        Restore cursor position
+	compute_display_start;
+	(l, i, p) = match display_start {
+		Prompt(l) => (l, 0, self.prompt),
+		CharIndex(i) => (0, i, ""),
+	}
+	move cursor to (0, l)
+	clear from cursor down
+	print p
+	print before_gap[i..]
+	save cursor pos
+	calculate display_end
+	print after_gap[..display_end + 1]
+	restore cursor pos
     Show cursor
+
+To update display_start:
+
+compute (lines_before_cursor, cols_before_cursor)
+lines_needed = if after_gap.width() + cols_before_cursor >= terminal_cols
+    	lines_before_cursor + 1
+   	else
+   		lines_before_cursor
+match display_start
+	Prompt(l) => {
+   		if lines_needed > terminal_lines {
+   			// we need more lines than will fit on screen
+   			// compute new index and set to CharIndex
+   			lines_to_skip = 
+  		} else if lines_needed + l > terminal_lines {
+  			display_start = Prompt(terminal_lines - lines_needed)
+  		}
+  	CharIndex(i) => {
+  		if lines_needed <= terminal_lines {
+  			display_start = Prompt(0);
+  		} else {
+  		    let mut lines_to_skip = lines_needed - terminal_lines;
+  		    let mut cols = 0;
+  		    for (i, c) in buffer.before_gap.chars().enumerate() {
+  		    	let w = c.width().unwrap_or(0);
+  		    	if cols + w > self.terminal_cols {
+  		    		lines_to_skip -= 1;
+  		    		if lines_to_skip == 0 {
+  		    			display_start = CharIndex(i);
+  		    			break;
+  		    		}
+  		    	}
+  		    }
+  		}
+  	}
+}
+
+To compute screen space before cursor:
+
+let mut lines = 1;
+let (mut cols, first_char) = match display_start {
+	DisplayStart::Prompt(l) => (prompt.width(), 0),
+	DisplayStart::CharIndex(i) => (0, i),
+}
+for c in before_gap[i..] {
+	let w = c.width.unwrap_or(0);
+	if cols + w > terminal_cols {
+		lines += 1;
+		cols = w
+	}
+}
+(lines, cols)
+
+To compute display end:
+
+let (mut line, mut col) = cursor::position();
+for (i, c) in after_gap[..].chars() {
+	let w = c.width().unwrap_or(0);
+	if col + w > terminal_cols {
+		line += 1;
+		if line >= terminal_lines {
+			return i
+		}
+		col = w
+	}
+}
+after_gap.len()
+
 
 An event would cause first_char_idx to change if:
 
@@ -219,162 +240,6 @@ Right =>
     buffer.after_gap.drain(..nxt);
     render_ctx.before_gap_remainder += w;
 
-### Distributed repaint
-
-Essentially, try to do the least work possible to update. When an
-event is handled, only repaint what is necessary. In the best case
-this would mean just moving the cursor w/o repainting any text. In
-the worst case, it would be the same as full repaint: repaint
-whole screen from first_char on.
-
-Because of the worst case, at least prompt_line and first_char
-would need to be tracked the same as with full repaint.
-
-The problem is, in the worst case (i.e., when the buffer is too
-large to fit the terminal window), we need to do something
-similar to the full repaint. Unfortunately, in order to
-tell we need to do the full repaint, we'd need to track or
-calculate the same information as with full repaint, so
-at best we save the time of writing a partial screen of text
-on each keystroke. Not as large a win as might it might seem,
-but perhaps worth it, since I/O is way more expensive than
-math.
-
-Values tracked (i.e., the model):
-
-Same as for full repaint.
-
-Event handling:
-
-Char(c) =>
-    // update buffer
-    buffer.before_gap.push(c);
-    
-    // render view
-    render_ctx.before_gap_remainder += c.width().unwrap_or(0);
-    if before_gap_remainder > terminal_width
-        before_gap_lines += 1
-        before_gap_remainder -= terminal_width
-    compute lines needed for display
-    if fits on screen
-        if need more lines
-            scroll down enough lines
-            move cursor up and prompt_line same number
-        clear to EOS
-        write c
-        save cursor location
-        write after_gap to EOS
-        restore cursor
-    else
-        // todo!
-        
-Backspace =>
-    // update buffer
-    c = buffer.before_gap.pop();
-    // update view
-    w = c.width().unwrap_or(0);
-    if w > 0
-        render_ctx.before_gap_remainder -= w;
-        move cursor back one, handling wrap
-        compute lines needed for display
-        if cursor on first line && prompt_line is None
-            scroll up one line
-            move cursor one line
-            compute offset of previous line in buffer
-            if 0
-                prompt_line = 0
-                write prompt + chars to fill new line
-            else
-                write chars to fill new line
-Delete =>
-    // update buffer
-    i = buffer.after_gap.char_indices();
-    c = i.next();
-    buffer.after_gap.truncate(/* first cluster */)
-    // update view
-    clear from cursor to EOS
-    write after_gap to EOS
-Home =>
-    // update buffer
-    buffer.after_gap.insert_str(0, buffer.before_gap[..]));
-    buffer.before_gap.clear();
-    // update view
-    render_ctx.compute_before_gap_lines(&buffer);
-    compute lines to display
-    if larger than screen
-        prompt_line = 0
-        clear to EOS
-        write after_gap to EOS
-    move cursor to (prompt_width, prompt_line)
-End =>
-    // update buffer
-    buffer.before_gap.push_str(buffer.after_gap[..]);
-    buffer.after_gap.clear();
-    // update view
-    render_ctx.compute_before_gap_lines(&buffer);
-    compute lines to display
-    if larger than screen
-        compute first char to display
-        move cursor to (0, 0)
-        clear to EOS
-        write from first char to EOS
-    else
-        compute cursor location
-        if off_screen
-            scroll until cursor on last line
-            adust prompt_line
-        move cursor to new location
-Left =>
-    // update buffer
-    find last_base_char_idx
-    w = buffer.before_gap[last_base_char_idx..].width();
-    buffer.after_gap.insert_str(0, buffer.before_gap[last_base_char_idx..]);
-    buffer.before_gap.truncate(last_base_char_idx);
-    // update view
-    render_ctx.before_gap_remainder -= w;
-    compute lines to display
-    compute new cursor location
-    if cursor on first line && prompt_line is None
-        scroll up one line
-        move cursor down one line
-        compute offset of previous line in buffer
-        if 0
-            prompt_line = 0
-            write prompt + chars to fill new line
-        else
-            write chars to fill new line
-    move cursor to new position
-Right =>
-    // update buffer
-    i = buffer.after_gap.char_indices();
-    w = i.next().width().unwrap_or(0);
-    nxt = /* first char of next cluster, or after_gap.len() */
-    buffer.before_gap.push_str(buffer.after_gap[..nxt]);
-    buffer.after_gap.drain(..nxt);
-    // update view
-    render_ctx.before_gap_remainder += w;
-    compute lines to display
-    compute new cursor location
-    if off_screen
-        scroll down 1 line
-        write after_gap to fill new line
-        adust cursor line and prompt_line
-        move cursor to new location
-Resize =>
-    // update view
-    Calcuate before_gap_lines and before_gap_remainder by
-        iterating over prompt and before_gap. (This could be
-        optimized to only be done when terminal_width changes,
-        if it seems worthwhile.)
-    calculate lines to display
-    if larger than screen
-        compute first char to display so cursor is on last line
-        move cursor to (0, 0)
-    else
-        move cursor to (0, prompt_line)
-    clear to EOS
-    write from first char to EOS or EOB, whichever comes first
-            
 
 ## Edit states
 
