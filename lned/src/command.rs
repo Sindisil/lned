@@ -114,7 +114,7 @@ impl Cmd {
     // Returns number of bytes read or Error::Readlines if an error is
     // encountered.
     pub fn read_lines(
-        input: &mut impl LineRead,
+        input: &mut impl LineRead<'_>,
         buf: &mut Vec<String>,
     ) -> Result<usize, io::Error> {
         buf.clear();
@@ -130,7 +130,7 @@ impl Cmd {
 
     /// Read input, parsing into a Cmd
     pub fn read(
-        input: &mut impl LineRead,
+        input: &mut impl LineRead<'_>,
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {

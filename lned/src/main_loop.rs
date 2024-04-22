@@ -94,7 +94,7 @@ impl fmt::Display for Error {
 ///
 /// Handles prompting, command input, command dispatch, and error display.
 pub fn run(
-    mut input: impl LineRead,
+    mut input: impl LineRead<'_>,
     mut stdout: impl Write,
     args: &cli::CmdArgs,
 ) -> Result<(), Error> {
