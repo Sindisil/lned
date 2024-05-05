@@ -1,9 +1,7 @@
 use std::fmt;
-use std::io::{self, BufRead, StdoutLock, Write};
+use std::io::{self, BufRead, Write};
 
-use crossterm::cursor::{
-    self, Hide, MoveTo, MoveToNextLine, RestorePosition, SavePosition, Show,
-};
+use crossterm::cursor::{self, Hide, MoveTo, MoveToNextLine, Show};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
@@ -14,15 +12,14 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 // Public structs, enums, and traits
 ///////////
 
-pub trait LineRead<'a> {
+pub trait LineRead {
     /// # Errors
     ///
     /// Will return `io::Error` if an error is encountered reading a line
     fn read_line(
         &mut self,
-        stdout: &'a mut StdoutLock<'a>,
+        prompt: &str,
         buffer: &mut String,
-        prompt: &'a str,
     ) -> io::Result<usize>;
 
     /// # Errors
@@ -31,12 +28,10 @@ pub trait LineRead<'a> {
 
     fn read_line_or_cancel(
         &mut self,
-        stdout: &'a mut StdoutLock<'a>,
+        prompt: &str,
         buffer: &mut String,
-        prompt: &'a str,
     ) -> io::Result<Option<usize>> {
-        self.read_line(stdout, buffer, prompt)
-            .map_or(Ok(None), |bytes| Ok(Some(bytes)))
+        self.read_line(prompt, buffer).map_or(Ok(None), |bytes| Ok(Some(bytes)))
     }
 }
 
@@ -56,17 +51,42 @@ struct GapBuffer {
 
 #[derive(Debug, Copy, Clone)]
 enum DisplayStart {
+    /// Prompt's terminal line
     Prompt(u16),
+
+    /// Offset into buffer of beginning of terminal line 0
+    /// (index into `before_gap`, lines skipped)
     CharIndex(usize),
 }
 
+/// Values needed to render the buffer to the terminal window.
+///
+/// todo: Some of these may not be necessary (e.g., if they need to be
+/// recomputed every time the buffer is rendered) or may only be useful
+/// in the future (e.g., if we recompute them now, but perhaps update
+/// in response to events in the future as an optimization).
 #[derive(Debug)]
 struct Renderer<'a> {
+    /// Reference to current prompt string
     prompt: &'a str,
-    stdout: &'a mut StdoutLock<'a>,
-    display_start: DisplayStart,
+
+    /// Prompt width in terminal columns
+    prompt_width: u16,
+
+    /// Current terminal width
     terminal_columns: u16,
+
+    /// current terminal height
     terminal_lines: u16,
+
+    /// Descriptor of beginning of text in terminal window
+    display_start: DisplayStart,
+
+    /// Terminal column of cursor position (0 based)
+    cursor_column: u16,
+
+    /// Terminal line of cursor position (0 based)
+    cursor_line: u16,
 }
 
 #[derive(Debug)]
@@ -100,22 +120,29 @@ impl<'a> LineReader {
     #[cfg(not(tarpaulin_include))]
     fn accept_line(
         &mut self,
-        stdout: &'a mut StdoutLock<'a>,
-        output_buffer: &mut String,
         prompt: &'a str,
         cancelable: bool,
+        output_buffer: &mut String,
     ) -> io::Result<Option<usize>> {
+        let prompt_width =
+            u16::try_from(prompt.width()).expect("prompt width < 64k");
         // clear gap buffer
         self.buffer.clear();
 
         let (term_cols, term_lines) = terminal::size()?;
-        let (_, prompt_line) = cursor::position()?;
-        let mut renderer =
-            Renderer::new(prompt, stdout, term_cols, term_lines, prompt_line);
+        let (cursor_column, cursor_line) = cursor::position()?;
+        let mut renderer = Renderer::new(
+            prompt,
+            prompt_width,
+            term_cols,
+            term_lines,
+            cursor_column,
+            cursor_line,
+        );
+        terminal::enable_raw_mode()?;
 
         loop {
             renderer.repaint(&self.buffer)?;
-
             // get next event
             let event = event::read()?;
 
@@ -131,7 +158,7 @@ impl<'a> LineReader {
                 }
                 Response::Cancel => {
                     if cancelable {
-                        renderer.stdout.execute(MoveToNextLine(1))?;
+                        io::stdout().execute(MoveToNextLine(1))?;
                         return Ok(None);
                     }
                 }
@@ -236,24 +263,22 @@ impl<'a> LineReader {
     }
 }
 
-impl<'a> LineRead<'a> for LineReader {
+impl LineRead for LineReader {
     #[cfg(not(tarpaulin_include))]
     fn read_line(
         &mut self,
-        stdout: &'a mut StdoutLock<'a>,
+        prompt: &str,
         buffer: &mut String,
-        prompt: &'a str,
     ) -> io::Result<usize> {
-        Ok(self.accept_line(stdout, buffer, prompt, false)?.unwrap_or(0))
+        Ok(self.accept_line(prompt, false, buffer)?.unwrap_or(0))
     }
 
     fn read_line_or_cancel(
         &mut self,
-        stdout: &'a mut StdoutLock<'a>,
+        prompt: &str,
         buffer: &mut String,
-        prompt: &'a str,
     ) -> io::Result<Option<usize>> {
-        self.accept_line(stdout, buffer, prompt, true)
+        self.accept_line(prompt, true, buffer)
     }
 }
 
@@ -303,23 +328,27 @@ impl GapBuffer {
 impl<'a> Renderer<'a> {
     fn new(
         prompt: &'a str,
-        stdout: &'a mut StdoutLock<'a>,
+        prompt_width: u16,
         terminal_columns: u16,
         terminal_lines: u16,
-        prompt_line: u16,
+        cursor_column: u16,
+        cursor_line: u16,
     ) -> Renderer<'a> {
         Renderer {
             prompt,
-            stdout,
+            prompt_width,
             terminal_columns,
             terminal_lines,
-            display_start: DisplayStart::Prompt(prompt_line),
+            display_start: DisplayStart::Prompt(cursor_line),
+            cursor_column,
+            cursor_line,
         }
     }
 
     #[cfg(not(tarpaulin_include))]
     fn move_to_end(&mut self, buffer: &mut GapBuffer) -> io::Result<()> {
         let (mut cur_col, mut cur_line) = cursor::position()?;
+        let mut stdout = io::stdout().lock();
         let after_gap_width = buffer.after_gap.width();
         let term_height = self.terminal_lines as usize;
         let last_line = (after_gap_width / self.terminal_columns as usize)
@@ -334,116 +363,154 @@ impl<'a> Renderer<'a> {
                 let scroll_needed = u16::try_from(scroll_needed).expect(
                     "scroll_needed < term_height, so should fit in u16",
                 );
-                self.stdout.queue(ScrollUp(scroll_needed))?;
+                stdout.queue(ScrollUp(scroll_needed))?;
                 cur_line -= scroll_needed;
             }
-            self.stdout
+            stdout
                 .queue(MoveTo(cur_col, cur_line))?
                 .queue(Clear(ClearType::FromCursorDown))?;
             let offset = after_gap_width.saturating_sub(
                 ((self.terminal_lines - 1) * self.terminal_columns) as usize,
             );
-            write!(self.stdout, "{}", &buffer.after_gap[offset..])?;
+            write!(stdout, "{}", &buffer.after_gap[offset..])?;
         }
-        self.stdout.queue(MoveToNextLine(1))?;
-        self.stdout.flush()
+        stdout.queue(MoveToNextLine(1))?;
+        stdout.flush()
     }
 
     #[cfg(not(tarpaulin_include))]
+    /// repaint current buffer
     fn repaint(&mut self, buffer: &GapBuffer) -> io::Result<()> {
-        self.stdout.queue(Hide)?;
+        // update terminal size
+        (self.terminal_columns, self.terminal_lines) = terminal::size()?;
 
-        self.update_display_start(buffer);
-        let (first_line, first_char, prompt) = match self.display_start {
-            DisplayStart::Prompt(l) => (l, 0, self.prompt),
+        // Compute new cursor location
+        (self.cursor_column, self.cursor_line) = match self.display_start {
+            DisplayStart::Prompt(l) => {
+                let mut col = self.prompt_width;
+                let mut line = l;
+                for c in buffer.before_gap.chars() {
+                    let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+                    col += w;
+                    if col >= self.terminal_columns {
+                        line += 1;
+
+                        col = w - 1;
+                    }
+                }
+                (col, line)
+            }
+            DisplayStart::CharIndex(i) => {
+                let mut col = 0;
+                let mut line = 0;
+                for c in buffer.before_gap[i..].chars() {
+                    let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+                    col += w;
+                    if col >= self.terminal_columns {
+                        line += 1;
+
+                        col = w - 1;
+                    }
+                }
+                (col, line)
+            }
+        };
+
+        // Compute viewport bounds
+        let last_vp_line = self.terminal_lines
+            - 1
+            - u16::from(
+                u16::try_from(buffer.after_gap.width()).unwrap()
+                    + self.cursor_column
+                    > self.terminal_columns,
+            );
+
+        // Compute new display_start if cursor outside viewport
+        let prev_first_line =
+            if let DisplayStart::Prompt(l) = self.display_start { l } else { 0 };
+        let (first_line, char_idx, prompt) = match self.display_start {
+            DisplayStart::Prompt(l) => {
+                if self.cursor_line > last_vp_line {
+                    let d_cur = self.cursor_line - last_vp_line;
+                    if d_cur <= l {
+                        let d_start = l - d_cur;
+                        self.display_start = DisplayStart::Prompt(d_start);
+                        self.cursor_line -= d_cur;
+                        (d_start, 0, self.prompt)
+                    } else {
+                        let i = self.skip_lines(buffer, (d_cur - l).into());
+                        self.display_start = DisplayStart::CharIndex(i);
+                        self.cursor_line = last_vp_line;
+                        (0, i, "")
+                    }
+                } else {
+                    (l, 0, self.prompt)
+                }
+            }
             DisplayStart::CharIndex(i) => (0, i, ""),
         };
-        self.stdout
+
+        // Prepare to send commands & output to terminal
+        let mut stdout = io::stdout().lock();
+
+        // Hide the cursor
+        // Move cursor to new display_start
+        // Clear to end of terminal
+        stdout.queue(Hide)?;
+        if prev_first_line > first_line {
+            stdout.queue(ScrollUp(prev_first_line - first_line))?;
+        }
+        stdout
             .queue(MoveTo(0, first_line))?
             .queue(Clear(ClearType::FromCursorDown))?
             .write_all(prompt.as_bytes())?;
-        self.stdout.write_all(&buffer.before_gap[first_char..].as_bytes())?;
+        // Output from display_start to cursor
+        stdout.write_all(buffer.before_gap[char_idx..].as_bytes())?;
 
-        let (cur_col, cur_line) = cursor::position()?;
-        let last_char = self.display_end(buffer, cur_col, cur_line);
-        self.stdout.write_all(&buffer.after_gap[..last_char].as_bytes())?;
-        self.stdout.queue(MoveTo(cur_col, cur_line))?.queue(Show)?.flush()
-    }
-
-    fn update_display_start(&mut self, buffer: &GapBuffer) {
-        let lines_needed = self.lines_needed(buffer);
-
-        match self.display_start {
-            DisplayStart::Prompt(l) => {
-                if lines_needed > self.terminal_lines.into() {
-                    todo!("compute new index & set display_start");
-                } else {
-                    let lines_needed = u16::try_from(lines_needed).unwrap();
-                    let lines_left = self.terminal_lines - l;
-                    if lines_needed > lines_left {
-                        self.display_start = DisplayStart::Prompt(
-                            self.terminal_lines - lines_needed,
-                        );
-                    }
-                }
-            }
-            DisplayStart::CharIndex(_) => {
-                if lines_needed < self.terminal_lines.into() {
-                    self.display_start = DisplayStart::Prompt(0);
-                } else {
-                    let new_index =
-                        self.skip_lines(buffer, lines_needed).unwrap();
-                    self.display_start = DisplayStart::CharIndex(new_index);
-                }
-            }
+        // Output from cursor to last char that fits terminal, if necessary
+        if !buffer.after_gap.is_empty() {
+            stdout.write_all(
+                buffer.after_gap[..self.display_end(buffer)].as_bytes(),
+            )?;
         }
+
+        // Move cursor to new cursor location
+        stdout.queue(MoveTo(self.cursor_column, self.cursor_line))?;
+
+        // Show the cursor
+        stdout.queue(Show)?.flush()
     }
 
-    fn lines_needed(&self, buffer: &GapBuffer) -> usize {
-        let mut lines = 1;
-        let mut cols = self.prompt.width();
-        for c in buffer.before_gap.chars() {
-            let w = c.width().unwrap_or(0);
-            cols += w;
-            if cols > self.terminal_columns.into() {
-                lines += 1;
-                cols = w;
-            }
-        }
-        lines
-    }
-
-    fn skip_lines(&self, buffer: &GapBuffer, mut n: usize) -> Option<usize> {
-        let mut cols = 0;
+    fn skip_lines(&self, buffer: &GapBuffer, mut n: usize) -> usize {
+        let mut cols = self.prompt_width;
         for (i, c) in buffer.before_gap.chars().enumerate() {
             let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
             cols += w;
             if cols > self.terminal_columns {
                 if n == 1 {
-                    return Some(i);
+                    return i;
                 }
                 n -= 1;
                 cols = w;
             }
         }
-        None
+        0
     }
 
-    fn display_end(
-        &self,
-        buffer: &GapBuffer,
-        mut col: u16,
-        mut line: u16,
-    ) -> usize {
+    fn display_end(&self, buffer: &GapBuffer) -> usize {
+        let mut cols = self.cursor_column;
+        let mut lines_left = self.terminal_lines - 1 - self.cursor_line;
         for (i, c) in buffer.after_gap.chars().enumerate() {
             let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
-            col += w;
-            if col > self.terminal_columns {
-                line += 1;
-                if line == self.terminal_lines {
+            cols += w;
+            if cols + u16::from(buffer.after_gap.is_empty())
+                > self.terminal_columns
+            {
+                if lines_left == 0 {
                     return i;
                 }
-                col = w;
+                lines_left -= 1;
+                cols = w;
             }
         }
         buffer.after_gap.len()
@@ -454,22 +521,21 @@ impl Drop for Renderer<'_> {
     #[cfg(not(tarpaulin_include))]
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
-        let _ = self.stdout.execute(Show);
+        let _ = io::stdout().execute(Show);
     }
 }
 
 // impls of LineRead
 ////////
 
-impl<'a, T> LineRead<'a> for T
+impl<T> LineRead for T
 where
     T: BufRead,
 {
     fn read_line(
         &mut self,
-        _stdout: &mut StdoutLock<'_>,
-        buffer: &mut String,
         _prompt: &str,
+        buffer: &mut String,
     ) -> io::Result<usize> {
         BufRead::read_line(self, buffer)
     }

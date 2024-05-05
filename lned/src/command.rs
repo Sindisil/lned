@@ -114,13 +114,13 @@ impl Cmd {
     // Returns number of bytes read or Error::Readlines if an error is
     // encountered.
     pub fn read_lines(
-        input: &mut impl LineRead<'_>,
+        input: &mut impl LineRead,
         buf: &mut Vec<String>,
     ) -> Result<usize, io::Error> {
         buf.clear();
         loop {
             let mut line = String::new();
-            let n = input.read_line(&mut line, "")?;
+            let n = input.read_line("", &mut line)?;
             if n == 0 || line == ".\n" || line == ".\r\n" {
                 return Ok(buf.len());
             }
@@ -130,13 +130,13 @@ impl Cmd {
 
     /// Read input, parsing into a Cmd
     pub fn read(
-        input: &mut impl LineRead<'_>,
+        input: &mut impl LineRead,
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
         let mut line = String::with_capacity(120);
         input
-            .read_line(&mut line, ":")
+            .read_line(":", &mut line)
             .map_err(|source| Error::ReadCommand { source })?;
         let mut graphemes = line.as_mut_str().graphemes(true).peekable();
         let address = eval_address(&mut graphemes, buffer, previous_pattern)?;

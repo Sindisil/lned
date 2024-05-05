@@ -14,8 +14,7 @@ use std::iter;
 use line_reader::LineReader;
 
 fn main() {
-    let args = match cli::parse_args(&mut io::stdout().lock(), wild::args_os())
-    {
+    let args = match cli::parse_args(&mut io::stdout(), wild::args_os()) {
         Ok(args) => args,
         Err(cli::Error::WroteMessage) => std::process::exit(0),
         Err(err) => {
@@ -24,9 +23,7 @@ fn main() {
         }
     };
 
-    if let Err(err) =
-        main_loop::run(LineReader::new(), io::stdout().lock(), &args)
-    {
+    if let Err(err) = main_loop::run(LineReader::new(), io::stdout(), &args) {
         eprintln!("Error: {err}");
         if let Some(cause) = err.source() {
             println!("\nCaused by:");

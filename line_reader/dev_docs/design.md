@@ -34,44 +34,136 @@ the obvious solution.
 
 Values tracked (i.e., the model):
 
-Note that crossterm uses u16 for many of these values
-(or for the values used to compute them). Converting
-constantly between them is a PITA, though, so my
-thinking is to convert to/from u16 at the interface
-with crossterm, and use usize internally.
+Crossterm uses u16 for most attributes, so associated
+values will be stored in that format to reduce the
+need for conversion unless it makes other aspects
+(i.e., calculating new cursor position) too clumsy.
+
+Some of the fields shown here for Renderer might not be necessary,
+since they can be derived from other fields (eg., cursor_line,
+cursor_col), but I'm listing them for now for completeness. Those
+found to be redundant will be removed.
 
 enum DisplayStart {
-	Prompt(u16),  // Prompt is on indicated line
-	CharIndex(usize),  // First displayed char is at indicated index
+	/// Terminal line of prompt
+	Prompt(u16),
+
+	/// Index in buffer.before_gap of char at terminal 0,0
+	CharIndex(usize),
 }
 
 struct Renderer {
-	display_start: DisplayStart,
-	terminal_cols: u16,
-	terminal_lines: u16,
-	stdout: &'a mut Stdout,
+	// reference to current prompt
 	prompt: &'a str,
+
+	/// width of prompt, in columns
+	prompt_width: u16,
+
+	// current terminal window width
+	terminal_cols: u16,
+
+	// current terminal window height
+	terminal_lines: u16,
+
+	// Description of beginning of text in terminal
+	display_start: DisplayStart,
+
+	// Terminal lines current buffer would occupy before the cursor line
+	lines_before_cursor: usize,
+
+	// Terminal columns text before the cursor occupies
+	// on the cursor line
+	cols_before_cursor: u16,
+
+	// Terminal lines current buffer would occupy after the
+	// cursor line.
+	lines_after_cursor: usize,
+
+	// Terminal line of cursor position (0 based)
+	cursor_line: u16,
+
+	// Terminal column of cursor position (0 based)
+	cursor_col: u16,
+
+	/// Index of last char in buffer.after_gap that fits in terminal
+	last_char_idx: usize,
+	
 }
+	
+### Notes on rendering
 
-The repaint algorithm would be:
+#### Repaint entire viewport (i.e., w/o specific event)
 
-    Hide cursor
-	compute_display_start;
-	(l, i, p) = match display_start {
-		Prompt(l) => (l, 0, self.prompt),
-		CharIndex(i) => (0, i, ""),
-	}
-	move cursor to (0, l)
-	clear from cursor down
-	print p
-	print before_gap[i..]
-	save cursor pos
-	calculate display_end
-	print after_gap[..display_end + 1]
-	restore cursor pos
-    Show cursor
+Update terminal size
+Compute new cursor location given current terminal size, buffer,
+	and display_start value.
+If cursor would be above or below the viewport, compute a new display_start
+	to place it on first or last line of viewport, respectively. ScrollUp
+    if previous display_start was Prompt(l) and l > 0.
+Hide the cursor
+Move cursor to display_start
+Clear from to end of terminal	
+Print from display_start to cursor (prompt and before_gap, or
+	before_gap[first_char_idx..], depending upon display_start)
+If are characters after the cursor, compute the last character that will
+	fit in the terminal (last_char_idx), then print those characters
+	(after_gap[..last_char_idx-1])
+Move cursor to new cursor location
+Show the cursor
+
+This should always result in a correct display and avoid jumping the
+cursor around in unexpected ways, but will often result in clearing
+and printing unnecessary characters to the terminal.
+
+As an optimization, we could have repaint take the last event as
+an argument. This would  allow more optimal repainting in many cases.
+
+For example, if repaint() knows that it was a KeyEvent::Char(ch) that
+triggered the repaint call, we know:
+
+	a. display_start and current cursor position will change by at
+		most one line, and that display_start will never transition
+		from ::CharIndex() to ::Prompt() as a result (though it could
+		transition the other direction)
+	b. we only need to clear at most from the current cursor position
+		down, and then only if after_gap isn't empty.
+	c. we only need to print the new character, plus as much of
+		after_gap as will fit (if it isn't empty)
+
+Whether or not such optimization is worthwhile is an open question.
+It probably makes sense to implement the general algorithm first,
+and implement the optimizations only if performance is an issue in
+practice, since we'll need the general algorithm anyway, both for
+the initial prompt display, as well as for resize events (since
+the aren't a result of a buffer content or cursor location change
+that would provide the information necessary to do smarter updates).
 
 To update display_start:
+
+last_vp_line = min(
+		terminal_lines - 1,
+		terminal_lines - 1
+				- (buffer.after_gap.width()
+						+ cur_col > terminal_cols) as u16)
+match display_start {
+	::Prompt(l) => {
+		if cur_line > last_vp_line {
+			d_cur = cur_line - last_vp_line
+			if d_cur <= l {
+				d_start = l - d_cur
+				ScrollUp(d_start)
+				display_start = ::Prompt(d_start)
+			} else {
+				ScrollUp(l)
+				display_start =
+						::CharIndex(self.skip_lines(buffer, d_cur - l))
+			}
+		}
+	}
+	::CharIndex(i) => {
+			
+	}
+}
 
 compute (lines_before_cursor, cols_before_cursor)
 lines_needed = if after_gap.width() + cols_before_cursor >= terminal_cols
