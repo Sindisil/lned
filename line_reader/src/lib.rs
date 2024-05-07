@@ -1,4 +1,3 @@
-use std::fmt;
 use std::io::{self, BufRead, Write};
 
 use crossterm::cursor::{self, Hide, MoveTo, MoveToNextLine, Show};
@@ -37,17 +36,14 @@ pub trait LineRead {
 
 #[derive(Debug, Default)]
 pub struct LineReader {
-    buffer: GapBuffer,
+    prompt_len: usize,
+    prompt_width: usize,
+    before_gap: String,
+    after_gap: String,
 }
 
 // Private structs and enums
 ////////
-
-#[derive(Debug, Default, Clone)]
-struct GapBuffer {
-    before_gap: String,
-    after_gap: String,
-}
 
 #[derive(Debug, Copy, Clone)]
 enum DisplayStart {
@@ -66,13 +62,7 @@ enum DisplayStart {
 /// in the future (e.g., if we recompute them now, but perhaps update
 /// in response to events in the future as an optimization).
 #[derive(Debug)]
-struct Renderer<'a> {
-    /// Reference to current prompt string
-    prompt: &'a str,
-
-    /// Prompt width in terminal columns
-    prompt_width: u16,
-
+struct RenderContext {
     /// Current terminal width
     terminal_columns: u16,
 
@@ -91,7 +81,7 @@ struct Renderer<'a> {
 
 #[derive(Debug)]
 enum Response {
-    Accept(usize),
+    Accept,
     Cancel,
     Continue,
 }
@@ -111,29 +101,27 @@ pub fn native_eol() -> &'static str {
 // impls for LineReader
 ////////
 
-impl<'a> LineReader {
+impl LineReader {
     #[must_use]
     pub fn new() -> LineReader {
-        LineReader { buffer: GapBuffer::new() }
+        LineReader {
+            prompt_len: 0,
+            prompt_width: 0,
+            before_gap: String::new(),
+            after_gap: String::new(),
+        }
     }
 
     #[cfg(not(tarpaulin_include))]
     fn accept_line(
         &mut self,
-        prompt: &'a str,
+        prompt: &str,
         cancelable: bool,
         output_buffer: &mut String,
     ) -> io::Result<Option<usize>> {
-        let prompt_width =
-            u16::try_from(prompt.width()).expect("prompt width < 64k");
-        // clear gap buffer
-        self.buffer.clear();
-
         let (term_cols, term_lines) = terminal::size()?;
         let (cursor_column, cursor_line) = cursor::position()?;
-        let mut renderer = Renderer::new(
-            prompt,
-            prompt_width,
+        let mut render_ctx = RenderContext::new(
             term_cols,
             term_lines,
             cursor_column,
@@ -141,8 +129,14 @@ impl<'a> LineReader {
         );
         terminal::enable_raw_mode()?;
 
+        // initialize gap buffer
+        self.before_gap += prompt;
+
+        self.prompt_width = prompt.width();
+        self.prompt_len = prompt.len();
+
         loop {
-            renderer.repaint(&self.buffer)?;
+            self.repaint(&mut render_ctx)?;
             // get next event
             let event = event::read()?;
 
@@ -150,15 +144,21 @@ impl<'a> LineReader {
             let response = self.handle_event(&event);
 
             match response {
-                Response::Accept(bytes_read) => {
-                    renderer.move_to_end(&mut self.buffer)?;
-                    output_buffer.extend(self.buffer.before_gap.drain(..));
-                    output_buffer.extend(self.buffer.after_gap.drain(..));
+                Response::Accept => {
+                    let bytes_read = self.before_gap.len() - prompt.len()
+                        + self.after_gap.len();
+                    self.move_to_end(&mut render_ctx)?;
+                    *output_buffer += &self.before_gap[prompt.len()..];
+                    *output_buffer += &self.after_gap;
+                    self.before_gap.clear();
+                    self.after_gap.clear();
                     return Ok(Some(bytes_read));
                 }
                 Response::Cancel => {
                     if cancelable {
                         io::stdout().execute(MoveToNextLine(1))?;
+                        self.before_gap.clear();
+                        self.after_gap.clear();
                         return Ok(None);
                     }
                 }
@@ -182,74 +182,69 @@ impl<'a> LineReader {
                 Response::Cancel
             }
             KeyCode::Enter => {
-                self.buffer.after_gap.push_str(native_eol());
-                let bytes_read = self.buffer.len();
-                Response::Accept(bytes_read)
+                self.after_gap.push_str(native_eol());
+                Response::Accept
             }
             KeyCode::Left => {
-                if let Some((prev_idx, _)) = self
-                    .buffer
-                    .before_gap
+                if let Some((prev_idx, _)) = self.before_gap[self.prompt_len..]
                     .char_indices()
                     .rfind(|(_, c)| c.width().is_some_and(|w| w > 0))
                 {
-                    self.buffer
-                        .after_gap
-                        .insert_str(0, &self.buffer.before_gap[prev_idx..]);
-                    self.buffer.before_gap.truncate(prev_idx);
+                    self.after_gap.insert_str(0, &self.before_gap[prev_idx..]);
+                    self.before_gap.truncate(prev_idx);
                 }
                 Response::Continue
             }
             KeyCode::Right => {
                 if let Some((next_idx, _)) = self
-                    .buffer
                     .after_gap
                     .char_indices()
                     .skip(1)
                     .find(|(_, c)| c.width().is_some_and(|w| w > 0))
                 {
-                    self.buffer
-                        .before_gap
-                        .push_str(&self.buffer.after_gap[..next_idx]);
-                    self.buffer.after_gap.drain(..next_idx);
-                } else if !self.buffer.after_gap.is_empty() {
-                    self.buffer.before_gap.push_str(&self.buffer.after_gap);
-                    self.buffer.after_gap.clear();
+                    self.before_gap.push_str(&self.after_gap[..next_idx]);
+                    self.after_gap.drain(..next_idx);
+                } else if !self.after_gap.is_empty() {
+                    self.before_gap.push_str(&self.after_gap);
+                    self.after_gap.clear();
                 }
                 Response::Continue
             }
             KeyCode::Home => {
-                self.buffer.gap_to_beginning();
+                self.after_gap.insert_str(
+                    0,
+                    self.before_gap.drain(self.prompt_len..).as_ref(),
+                );
                 Response::Continue
             }
             KeyCode::End => {
-                self.buffer.gap_to_end();
+                self.gap_to_end();
                 Response::Continue
             }
             KeyCode::Backspace => {
-                if let Some((prev_idx, _)) =
-                    self.buffer.before_gap.char_indices().next_back()
+                if let Some((prev_idx, _)) = self.before_gap[self.prompt_len..]
+                    .char_indices()
+                    .next_back()
                 {
-                    self.buffer.before_gap.truncate(prev_idx);
+                    self.before_gap.truncate(prev_idx);
                 }
                 Response::Continue
             }
             KeyCode::Delete => {
                 if let Some((next_idx, _)) = self
-                    .buffer
                     .after_gap
                     .char_indices()
                     .skip(1)
                     .find(|(_, c)| c.width().is_some_and(|w| w > 0))
                 {
-                    self.buffer.after_gap.drain(..next_idx);
-                } else if !self.buffer.after_gap.is_empty() {
-                    self.buffer.after_gap.clear();
+                    self.after_gap.drain(..next_idx);
+                } else if !self.after_gap.is_empty() {
+                    self.after_gap.clear();
                 }
                 Response::Continue
             }
             KeyCode::Char(c) => {
-                self.buffer.before_gap.push(c);
+                self.before_gap.push(c);
                 Response::Continue
             }
             KeyCode::Up => {
@@ -260,6 +255,204 @@ impl<'a> LineReader {
             }
             _ => Response::Continue,
         }
+    }
+
+    /// Move gap (insetion point) to end of buffer
+    fn gap_to_end(&mut self) {
+        if !self.after_gap.is_empty() {
+            self.before_gap.push_str(&self.after_gap[..]);
+            self.after_gap.clear();
+        }
+    }
+
+    /// Move gap (insertion point) to beginning of buffer
+    #[cfg(not(tarpaulin_include))]
+    fn move_to_end(
+        &mut self,
+        render_ctx: &mut RenderContext,
+    ) -> io::Result<()> {
+        let (mut cur_col, mut cur_line) = cursor::position()?;
+        let after_gap_width = self.after_gap.width();
+
+        let mut stdout = io::stdout().lock();
+        let term_height = render_ctx.terminal_lines as usize;
+        let last_line = after_gap_width
+            / usize::from(render_ctx.terminal_columns)
+            + usize::from(cur_line);
+        let new_cursor_line = last_line + 1;
+        if new_cursor_line >= term_height {
+            let scroll_needed = new_cursor_line - term_height + 1;
+            if scroll_needed >= term_height {
+                cur_line = 0;
+                cur_col = 0;
+            } else {
+                let scroll_needed = u16::try_from(scroll_needed).expect(
+                    "scroll_needed < term_height, so should fit in u16",
+                );
+                stdout.queue(ScrollUp(scroll_needed))?;
+                cur_line -= scroll_needed;
+            }
+            stdout
+                .queue(MoveTo(cur_col, cur_line))?
+                .queue(Clear(ClearType::FromCursorDown))?;
+            let offset = after_gap_width.saturating_sub(
+                ((render_ctx.terminal_lines - 1) * render_ctx.terminal_columns)
+                    as usize,
+            );
+            write!(stdout, "{}", &self.after_gap[offset..])?;
+        }
+        stdout.queue(MoveToNextLine(1))?;
+        stdout.flush()
+    }
+
+    #[cfg(not(tarpaulin_include))]
+    /// repaint current buffer
+    fn repaint(&mut self, render_ctx: &mut RenderContext) -> io::Result<()> {
+        // update terminal size
+        (render_ctx.terminal_columns, render_ctx.terminal_lines) =
+            terminal::size()?;
+
+        // Compute new cursor location
+        (render_ctx.cursor_column, render_ctx.cursor_line) =
+            match render_ctx.display_start {
+                DisplayStart::Prompt(l) => {
+                    let mut col = 0;
+                    let mut line = l;
+                    for c in self.before_gap.chars() {
+                        let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+                        col += w;
+                        if col >= render_ctx.terminal_columns {
+                            line += 1;
+
+                            col = w - 1;
+                        }
+                    }
+                    (col, line)
+                }
+                DisplayStart::CharIndex(i) => {
+                    let mut col = 0;
+                    let mut line = 0;
+                    for c in self.before_gap[i..].chars() {
+                        let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+                        col += w;
+                        if col >= render_ctx.terminal_columns {
+                            line += 1;
+
+                            col = w - 1;
+                        }
+                    }
+                    (col, line)
+                }
+            };
+
+        // Compute viewport bounds
+        let last_vp_line = render_ctx.terminal_lines
+            - 1
+            - u16::from(
+                u16::try_from(self.after_gap.width()).unwrap()
+                    + render_ctx.cursor_column
+                    > render_ctx.terminal_columns,
+            );
+
+        // Compute new display_start if cursor outside viewport
+        let prev_first_line =
+            if let DisplayStart::Prompt(l) = render_ctx.display_start {
+                l
+            } else {
+                0
+            };
+        let (first_line, char_idx) = match render_ctx.display_start {
+            DisplayStart::Prompt(l) => {
+                if render_ctx.cursor_line > last_vp_line {
+                    let d_cur = render_ctx.cursor_line - last_vp_line;
+                    if d_cur <= l {
+                        let d_start = l - d_cur;
+                        render_ctx.display_start =
+                            DisplayStart::Prompt(d_start);
+                        render_ctx.cursor_line -= d_cur;
+                        (d_start, 0)
+                    } else {
+                        let i = self
+                            .skip_display_lines(render_ctx, (d_cur - l).into());
+                        render_ctx.display_start = DisplayStart::CharIndex(i);
+                        render_ctx.cursor_line = last_vp_line;
+                        (0, i)
+                    }
+                } else {
+                    (l, 0)
+                }
+            }
+            DisplayStart::CharIndex(i) => (0, i),
+        };
+
+        // Prepare to send commands & output to terminal
+        let mut stdout = io::stdout().lock();
+
+        // Hide the cursor
+        // Move cursor to new display_start
+        // Clear to end of terminal
+        stdout.queue(Hide)?;
+        if prev_first_line > first_line {
+            stdout.queue(ScrollUp(prev_first_line - first_line))?;
+        }
+        stdout
+            .queue(MoveTo(0, first_line))?
+            .queue(Clear(ClearType::FromCursorDown))?
+            .write_all(self.before_gap[char_idx..].as_bytes())?;
+
+        // Output from cursor to last char that fits terminal, if necessary
+        if !self.after_gap.is_empty() {
+            stdout.write_all(
+                self.after_gap[..self.display_end(render_ctx)].as_bytes(),
+            )?;
+        }
+
+        // Move cursor to new cursor location
+        stdout
+            .queue(MoveTo(render_ctx.cursor_column, render_ctx.cursor_line))?;
+
+        // Show the cursor
+        stdout.queue(Show)?.flush()
+    }
+
+    fn skip_display_lines(
+        &self,
+        render_ctx: &mut RenderContext,
+        mut n: usize,
+    ) -> usize {
+        let mut cols = 0;
+        for (i, c) in self.before_gap.chars().enumerate() {
+            let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+            cols += w;
+            if cols > render_ctx.terminal_columns {
+                if n == 1 {
+                    return i;
+                }
+                n -= 1;
+                cols = w;
+            }
+        }
+        0
+    }
+
+    fn display_end(&self, render_ctx: &RenderContext) -> usize {
+        let mut cols = render_ctx.cursor_column;
+        let mut lines_left =
+            render_ctx.terminal_lines - 1 - render_ctx.cursor_line;
+        for (i, c) in self.after_gap.chars().enumerate() {
+            let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+            cols += w;
+            if cols + u16::from(self.after_gap.is_empty())
+                > render_ctx.terminal_columns
+            {
+                if lines_left == 0 {
+                    return i;
+                }
+                lines_left -= 1;
+                cols = w;
+            }
+        }
+        self.after_gap.len()
     }
 }
 
@@ -282,61 +475,17 @@ impl LineRead for LineReader {
     }
 }
 
-// impls for GapBuffer
+// impls for RenderContext
 ////////
 
-impl fmt::Display for GapBuffer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.before_gap, self.after_gap)
-    }
-}
-
-impl GapBuffer {
-    fn new() -> GapBuffer {
-        GapBuffer { before_gap: String::new(), after_gap: String::new() }
-    }
-
-    fn len(&self) -> usize {
-        self.before_gap.len() + self.after_gap.len()
-    }
-
-    fn clear(&mut self) {
-        self.before_gap.clear();
-        self.after_gap.clear();
-    }
-
-    /// Move gap (insetion point) to end of buffer
-    fn gap_to_end(&mut self) {
-        if !self.after_gap.is_empty() {
-            self.before_gap.push_str(&self.after_gap[..]);
-            self.after_gap.clear();
-        }
-    }
-
-    /// Move gap (insertion point) to beginning of buffer
-    fn gap_to_beginning(&mut self) {
-        if !self.before_gap.is_empty() {
-            self.after_gap.insert_str(0, &self.before_gap[..]);
-            self.before_gap.clear();
-        }
-    }
-}
-
-// impls for Renderer
-////////
-
-impl<'a> Renderer<'a> {
+impl RenderContext {
     fn new(
-        prompt: &'a str,
-        prompt_width: u16,
         terminal_columns: u16,
         terminal_lines: u16,
         cursor_column: u16,
         cursor_line: u16,
-    ) -> Renderer<'a> {
-        Renderer {
-            prompt,
-            prompt_width,
+    ) -> RenderContext {
+        RenderContext {
             terminal_columns,
             terminal_lines,
             display_start: DisplayStart::Prompt(cursor_line),
@@ -344,180 +493,9 @@ impl<'a> Renderer<'a> {
             cursor_line,
         }
     }
-
-    #[cfg(not(tarpaulin_include))]
-    fn move_to_end(&mut self, buffer: &mut GapBuffer) -> io::Result<()> {
-        let (mut cur_col, mut cur_line) = cursor::position()?;
-        let mut stdout = io::stdout().lock();
-        let after_gap_width = buffer.after_gap.width();
-        let term_height = self.terminal_lines as usize;
-        let last_line = (after_gap_width / self.terminal_columns as usize)
-            + cur_line as usize;
-        let new_cursor_line = last_line + 1;
-        if new_cursor_line >= term_height {
-            let scroll_needed = new_cursor_line - term_height + 1;
-            if scroll_needed >= term_height {
-                cur_line = 0;
-                cur_col = 0;
-            } else {
-                let scroll_needed = u16::try_from(scroll_needed).expect(
-                    "scroll_needed < term_height, so should fit in u16",
-                );
-                stdout.queue(ScrollUp(scroll_needed))?;
-                cur_line -= scroll_needed;
-            }
-            stdout
-                .queue(MoveTo(cur_col, cur_line))?
-                .queue(Clear(ClearType::FromCursorDown))?;
-            let offset = after_gap_width.saturating_sub(
-                ((self.terminal_lines - 1) * self.terminal_columns) as usize,
-            );
-            write!(stdout, "{}", &buffer.after_gap[offset..])?;
-        }
-        stdout.queue(MoveToNextLine(1))?;
-        stdout.flush()
-    }
-
-    #[cfg(not(tarpaulin_include))]
-    /// repaint current buffer
-    fn repaint(&mut self, buffer: &GapBuffer) -> io::Result<()> {
-        // update terminal size
-        (self.terminal_columns, self.terminal_lines) = terminal::size()?;
-
-        // Compute new cursor location
-        (self.cursor_column, self.cursor_line) = match self.display_start {
-            DisplayStart::Prompt(l) => {
-                let mut col = self.prompt_width;
-                let mut line = l;
-                for c in buffer.before_gap.chars() {
-                    let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
-                    col += w;
-                    if col >= self.terminal_columns {
-                        line += 1;
-
-                        col = w - 1;
-                    }
-                }
-                (col, line)
-            }
-            DisplayStart::CharIndex(i) => {
-                let mut col = 0;
-                let mut line = 0;
-                for c in buffer.before_gap[i..].chars() {
-                    let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
-                    col += w;
-                    if col >= self.terminal_columns {
-                        line += 1;
-
-                        col = w - 1;
-                    }
-                }
-                (col, line)
-            }
-        };
-
-        // Compute viewport bounds
-        let last_vp_line = self.terminal_lines
-            - 1
-            - u16::from(
-                u16::try_from(buffer.after_gap.width()).unwrap()
-                    + self.cursor_column
-                    > self.terminal_columns,
-            );
-
-        // Compute new display_start if cursor outside viewport
-        let prev_first_line =
-            if let DisplayStart::Prompt(l) = self.display_start { l } else { 0 };
-        let (first_line, char_idx, prompt) = match self.display_start {
-            DisplayStart::Prompt(l) => {
-                if self.cursor_line > last_vp_line {
-                    let d_cur = self.cursor_line - last_vp_line;
-                    if d_cur <= l {
-                        let d_start = l - d_cur;
-                        self.display_start = DisplayStart::Prompt(d_start);
-                        self.cursor_line -= d_cur;
-                        (d_start, 0, self.prompt)
-                    } else {
-                        let i = self.skip_lines(buffer, (d_cur - l).into());
-                        self.display_start = DisplayStart::CharIndex(i);
-                        self.cursor_line = last_vp_line;
-                        (0, i, "")
-                    }
-                } else {
-                    (l, 0, self.prompt)
-                }
-            }
-            DisplayStart::CharIndex(i) => (0, i, ""),
-        };
-
-        // Prepare to send commands & output to terminal
-        let mut stdout = io::stdout().lock();
-
-        // Hide the cursor
-        // Move cursor to new display_start
-        // Clear to end of terminal
-        stdout.queue(Hide)?;
-        if prev_first_line > first_line {
-            stdout.queue(ScrollUp(prev_first_line - first_line))?;
-        }
-        stdout
-            .queue(MoveTo(0, first_line))?
-            .queue(Clear(ClearType::FromCursorDown))?
-            .write_all(prompt.as_bytes())?;
-        // Output from display_start to cursor
-        stdout.write_all(buffer.before_gap[char_idx..].as_bytes())?;
-
-        // Output from cursor to last char that fits terminal, if necessary
-        if !buffer.after_gap.is_empty() {
-            stdout.write_all(
-                buffer.after_gap[..self.display_end(buffer)].as_bytes(),
-            )?;
-        }
-
-        // Move cursor to new cursor location
-        stdout.queue(MoveTo(self.cursor_column, self.cursor_line))?;
-
-        // Show the cursor
-        stdout.queue(Show)?.flush()
-    }
-
-    fn skip_lines(&self, buffer: &GapBuffer, mut n: usize) -> usize {
-        let mut cols = self.prompt_width;
-        for (i, c) in buffer.before_gap.chars().enumerate() {
-            let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
-            cols += w;
-            if cols > self.terminal_columns {
-                if n == 1 {
-                    return i;
-                }
-                n -= 1;
-                cols = w;
-            }
-        }
-        0
-    }
-
-    fn display_end(&self, buffer: &GapBuffer) -> usize {
-        let mut cols = self.cursor_column;
-        let mut lines_left = self.terminal_lines - 1 - self.cursor_line;
-        for (i, c) in buffer.after_gap.chars().enumerate() {
-            let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
-            cols += w;
-            if cols + u16::from(buffer.after_gap.is_empty())
-                > self.terminal_columns
-            {
-                if lines_left == 0 {
-                    return i;
-                }
-                lines_left -= 1;
-                cols = w;
-            }
-        }
-        buffer.after_gap.len()
-    }
 }
 
-impl Drop for Renderer<'_> {
+impl Drop for RenderContext {
     #[cfg(not(tarpaulin_include))]
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
@@ -546,75 +524,32 @@ where
 mod tests {
     use super::*;
 
-    // tests for GapBuffer
-    ////////
-
-    #[test]
-    fn gap_buffer_new_creates_empty_buffer() {
-        let buf = GapBuffer::new();
-        assert_eq!(buf.to_string(), "");
-    }
-
-    #[test]
-    fn gap_buffer_converts_to_string() {
-        let text = "Text before; text after".to_owned();
-        let cursor = 12usize;
-        let buffer = GapBuffer {
-            before_gap: text[..cursor].to_owned(),
-            after_gap: text[cursor..].to_owned(),
-        };
-        assert_eq!(buffer.to_string(), text);
-    }
-
-    #[test]
-    fn gap_buffer_clears() {
-        let text = "Text before; text after".to_owned();
-        let cursor = 12usize;
-        let mut buffer = GapBuffer {
-            before_gap: text[..cursor].to_owned(),
-            after_gap: text[cursor..].to_owned(),
-        };
-        buffer.clear();
-        assert_eq!(buffer.len(), 0);
-    }
-
-    #[test]
-    fn move_gap_to_end() {
-        let mut buffer = GapBuffer {
-            before_gap: "Before|".to_owned(),
-            after_gap: "|After".to_owned(),
-        };
-
-        buffer.gap_to_end();
-        assert_eq!(buffer.before_gap, "Before||After");
-        assert!(buffer.after_gap.is_empty());
-    }
-
-    #[test]
-    fn move_gap_to_beginning() {
-        let mut buffer = GapBuffer {
-            before_gap: "Before|".to_owned(),
-            after_gap: "|After".to_owned(),
-        };
-
-        buffer.gap_to_beginning();
-        assert_eq!(buffer.after_gap, "Before||After");
-        assert!(buffer.before_gap.is_empty());
-    }
-
     // tests for LineReader
     ////////
 
     #[test]
+    fn move_gap_to_end() {
+        let mut reader = LineReader {
+            before_gap: "Before|".to_owned(),
+            after_gap: "|After".to_owned(),
+            ..Default::default()
+        };
+
+        reader.gap_to_end();
+        assert_eq!(reader.before_gap, "Before||After");
+        assert!(reader.after_gap.is_empty());
+    }
+
+    #[test]
     fn create_new_reader() {
         let reader = LineReader::new();
-        assert_eq!(reader.buffer.len(), 0);
+        assert_eq!(reader.before_gap.len(), 0);
     }
 
     #[test]
     fn create_default_reader() {
         let reader = LineReader { ..Default::default() };
-        assert_eq!(reader.buffer.len(), 0);
+        assert_eq!(reader.before_gap.len(), 0);
     }
 
     #[test]
@@ -648,62 +583,49 @@ mod tests {
     #[test]
     fn handle_event_enter_returns_accept() {
         let buffer_text = "This is some text.";
-        let expected = format!("{buffer_text}{}", native_eol());
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: buffer_text[..8].to_owned(),
-                after_gap: buffer_text[8..].to_owned(),
-            },
+            before_gap: buffer_text[..8].to_owned(),
+            after_gap: buffer_text[8..].to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(
-            matches!(res, Response::Accept(bytes) if bytes == expected.len())
-        );
+        assert!(matches!(res, Response::Accept));
     }
 
     #[test]
     fn handle_event_char_adds_char_to_buffer() {
         let buffer_text = "This is some text";
-        let expected = format!("{buffer_text}.{}", native_eol());
+        let expected = format!("{buffer_text}.");
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: buffer_text.to_owned(),
-                ..Default::default()
-            },
+            before_gap: buffer_text.to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        let res = reader.handle_event(&Event::Key(KeyEvent::new(
+        reader.handle_event(&Event::Key(KeyEvent::new(
             KeyCode::Enter,
             KeyModifiers::NONE,
         )));
-        if let Response::Accept(bytes) = res {
-            assert_eq!(bytes, expected.len());
-        } else {
-            panic!("response was not Accept");
-        }
-        assert_eq!(reader.buffer.to_string(), expected);
+        assert_eq!(reader.before_gap.to_string(), expected);
     }
 
     #[test]
     fn handle_event_backspace_removes_last_code_point() {
         let buffer_text = "This is some text.";
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: buffer_text.to_owned(),
-                ..Default::default()
-            },
+            before_gap: buffer_text.to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
         assert_eq!(
-            reader.buffer.to_string(),
+            reader.before_gap.to_string(),
             buffer_text[..buffer_text.len() - 1]
         );
     }
@@ -713,171 +635,154 @@ mod tests {
         let buffer_text = "2⁵";
         let expected = "2";
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: buffer_text.to_owned(),
-                ..Default::default()
-            },
+            before_gap: buffer_text.to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(reader.buffer.to_string(), expected);
+        assert_eq!(reader.before_gap, expected);
     }
 
     #[test]
     fn left_arrow_moves_to_previous_base_char() {
         let buffer_text = "dëf";
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: buffer_text.to_owned(),
-                ..Default::default()
-            },
+            before_gap: buffer_text.to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(reader.buffer.before_gap, "dë");
-        assert_eq!(reader.buffer.after_gap, "f");
+        assert_eq!(reader.before_gap, "dë");
+        assert_eq!(reader.after_gap, "f");
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(reader.buffer.before_gap, "d");
-        assert_eq!(reader.buffer.after_gap, "ëf");
+        assert_eq!(reader.before_gap, "d");
+        assert_eq!(reader.after_gap, "ëf");
     }
 
     #[test]
     fn left_arrow_at_beginning_does_nothing() {
         let buffer_text = "dëf";
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                after_gap: buffer_text.to_owned(),
-                ..Default::default()
-            },
+            after_gap: buffer_text.to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(reader.buffer.after_gap, buffer_text);
-        assert!(reader.buffer.before_gap.is_empty());
+        assert_eq!(reader.after_gap, buffer_text);
+        assert!(reader.before_gap.is_empty());
     }
 
     #[test]
     fn right_arrow_moves_to_next_base_char() {
         let buffer_text = "dëf";
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                after_gap: buffer_text.to_owned(),
-                ..Default::default()
-            },
+            after_gap: buffer_text.to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(reader.buffer.before_gap, "d");
-        assert_eq!(reader.buffer.after_gap, "ëf");
+        assert_eq!(reader.before_gap, "d");
+        assert_eq!(reader.after_gap, "ëf");
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(reader.buffer.before_gap, "dë");
-        assert_eq!(reader.buffer.after_gap, "f");
+        assert_eq!(reader.before_gap, "dë");
+        assert_eq!(reader.after_gap, "f");
     }
 
     #[test]
     fn right_arrow_moves_past_final_char() {
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: "lm".to_owned(),
-                after_gap: "ñ".to_owned(),
-            },
+            before_gap: "lm".to_owned(),
+            after_gap: "ñ".to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert!(reader.buffer.after_gap.is_empty());
-        assert_eq!(reader.buffer.before_gap, "lmñ");
+        assert!(reader.after_gap.is_empty());
+        assert_eq!(reader.before_gap, "lmñ");
     }
 
     #[test]
     fn right_arrow_at_end_does_nothing() {
-        let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: "lmñ".to_owned(),
-                ..Default::default()
-            },
-        };
+        let mut reader =
+            LineReader { before_gap: "lmñ".to_owned(), ..Default::default() };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert!(reader.buffer.after_gap.is_empty());
-        assert_eq!(reader.buffer.before_gap, "lmñ");
+        assert!(reader.after_gap.is_empty());
+        assert_eq!(reader.before_gap, "lmñ");
     }
 
     #[test]
     fn home_moves_to_beginning() {
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: "lmn".to_owned(),
-                after_gap: "op".to_owned(),
-            },
+            before_gap: "lmn".to_owned(),
+            after_gap: "op".to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
 
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert!(reader.buffer.before_gap.is_empty());
-        assert_eq!(reader.buffer.after_gap, "lmnop");
+        assert!(reader.before_gap.is_empty());
+        assert_eq!(reader.after_gap, "lmnop");
     }
 
     #[test]
     fn end_moves_to_end() {
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: "lmn".to_owned(),
-                after_gap: "op".to_owned(),
-            },
+            before_gap: "lmn".to_owned(),
+            after_gap: "op".to_owned(),
+            ..Default::default()
         };
         let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
 
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(reader.buffer.before_gap, "lmnop");
-        assert!(reader.buffer.after_gap.is_empty());
+        assert_eq!(reader.before_gap, "lmnop");
+        assert!(reader.after_gap.is_empty());
     }
 
     #[test]
     fn delete_removes_char_with_combining_marks() {
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: "d".to_owned(),
-                after_gap: "ëf".to_owned(),
-            },
+            before_gap: "d".to_owned(),
+            after_gap: "ëf".to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(reader.buffer.after_gap, "f");
-        assert_eq!(reader.buffer.before_gap, "d");
+        assert_eq!(reader.after_gap, "f");
+        assert_eq!(reader.before_gap, "d");
     }
 
     #[test]
     fn delete_removes_last_char() {
         let mut reader = LineReader {
-            buffer: GapBuffer {
-                before_gap: "d".to_owned(),
-                after_gap: "ë".to_owned(),
-            },
+            before_gap: "d".to_owned(),
+            after_gap: "ë".to_owned(),
+            ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert!(reader.buffer.after_gap.is_empty());
-        assert_eq!(reader.buffer.before_gap, "d");
+        assert!(reader.after_gap.is_empty());
+        assert_eq!(reader.before_gap, "d");
     }
 }
