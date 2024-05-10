@@ -80,6 +80,21 @@ struct RenderContext {
 }
 
 #[derive(Debug)]
+struct NewRenderContext {
+    /// Current terminal width
+    terminal_columns: u16,
+
+    /// Current terminal height
+    terminal_columns: u16,
+
+    /// First terminal line used
+    first_display_line: u16,
+
+    /// Index of first displayed char in buffer
+    first_char_idx: usize,
+}
+
+#[derive(Debug)]
 enum Response {
     Accept,
     Cancel,
@@ -307,6 +322,87 @@ impl LineReader {
 
     #[cfg(not(tarpaulin_include))]
     /// repaint current buffer
+    fn new_repaint(
+        &mut self,
+        render_ctx: &mut NewRenderContext,
+    ) -> io::Result<()> {
+        // update display size
+        (render_ctx.terminal_columns, render_ctx.terminal_lines) =
+            terminal::size()?;
+
+        // compute buffer extents
+        let mut lines_before = 0;
+        let mut remainder_before = 0;
+        let mut first_input_idx: Option<usize> = None;
+        let mut lines_before_display: Option<u16> = None;
+        let mut lines_after = 0;
+        let mut remainder_after = 0;
+        let mut first_line_idx_after: Option<usize> = None;
+
+        for (i, c) in self.before_gap.char_indices() {
+            if i == self.prompt_len && first_input_idx.is_none() {
+                first_input_idx = Some(i);
+            }
+            let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+            remainder_before += w;
+            if remainder_before > render_ctx.terminal_columns {
+                lines_before += 1;
+                remainder_before = w;
+            }
+        }
+
+        for (i, c) in self.after_gap.char_indices() {
+            let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+            remainder_after += w;
+            if remainder_before + remainder_after > render_ctx.terminal_columns
+            {
+                first_line_idx_after.get_or_insert(i);
+                lines_after += 1;
+                remainder_after = w;
+            }
+        }
+
+        let last_vp_line = if render_ctx.terminal_lines > 2
+            && (first_line_idx_after.is_some()
+                || remainder_before + remainder_after
+                    == render_ctx.terminal_columns)
+        {
+            render_ctx.terminal_lines - 2
+        } else {
+            render_ctx.terminal_lines - 1
+        };
+
+        // update display model
+        let mut scroll_needed: Option<u16> = None;
+        match render_ctx.display_start {
+            DisplayStart::Prompt(l) => {
+                if lines_before > last_vp_line {
+                    if l > 0 {
+                        scroll_needed = Some(l);
+                    }
+                    render_ctx.display_start =
+                        DisplayStart::CharIndex(self.skip_display_lines(
+                            render_ctx,
+                            lines_before - last_vp_line,
+                        ));
+                } else {
+                    let new_l = last_vp_line - lines_before;
+                    if new_l < l {
+                        scroll_needed = new_l - l;
+                        render_ctx.display_start = DisplayStart::Prompt(new_l);
+                    }
+                }
+            }
+            DisplayStart::CharIndex(i) => {
+                todo!();
+            }
+        }
+        // render buffer to display
+        if i >= self.before_gap.len() {
+            // cursor would be above display
+        }
+    }
+
     fn repaint(&mut self, render_ctx: &mut RenderContext) -> io::Result<()> {
         // update terminal size
         (render_ctx.terminal_columns, render_ctx.terminal_lines) =
@@ -316,23 +412,26 @@ impl LineReader {
         (render_ctx.cursor_column, render_ctx.cursor_line) =
             match render_ctx.display_start {
                 DisplayStart::Prompt(l) => {
-                    let mut col = 0;
-                    let mut line = l;
-                    for c in self.before_gap.chars() {
-                        let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
-                        col += w;
-                        if col >= render_ctx.terminal_columns {
-                            line += 1;
-
-                            col = w - 1;
-                        }
-                    }
-                    (col, line)
+                    let (bg_lines, bg_rem) =
+                        render_ctx.display_space(&self.before_gap);
+                    (bg_rem - 1, bg_lines)
+                    //                    let mut col = 0;
+                    //                    let mut line = l;
+                    //                    for c in self.before_gap.chars() {
+                    //                        let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+                    //                        col += w;
+                    //                        if col >= render_ctx.terminal_columns {
+                    //                            line += 1;
+                    //
+                    //                            col = w - 1;
+                    //                        }
+                    //                    }
+                    //                    (col, line)
                 }
                 DisplayStart::CharIndex(i) => {
                     let mut col = 0;
                     let mut line = 0;
-                    for c in self.before_gap[i..].chars() {
+                    for c in self.before_gap.chars().skip(i) {
                         let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
                         col += w;
                         if col >= render_ctx.terminal_columns {
@@ -361,6 +460,12 @@ impl LineReader {
             } else {
                 0
             };
+        eprintln!(
+            "repaint: {:?} cursor ({}, {})",
+            render_ctx.display_start,
+            render_ctx.cursor_column,
+            render_ctx.cursor_line
+        );
         let (first_line, char_idx) = match render_ctx.display_start {
             DisplayStart::Prompt(l) => {
                 if render_ctx.cursor_line > last_vp_line {
@@ -372,8 +477,11 @@ impl LineReader {
                         render_ctx.cursor_line -= d_cur;
                         (d_start, 0)
                     } else {
-                        let i = self
-                            .skip_display_lines(render_ctx, (d_cur - l).into());
+                        let i = self.skip_display_lines(
+                            render_ctx,
+                            d_cur - l,
+                            None,
+                        );
                         render_ctx.display_start = DisplayStart::CharIndex(i);
                         render_ctx.cursor_line = last_vp_line;
                         (0, i)
@@ -382,7 +490,25 @@ impl LineReader {
                     (l, 0)
                 }
             }
-            DisplayStart::CharIndex(i) => (0, i),
+            DisplayStart::CharIndex(i) => {
+                if render_ctx.cursor_line > last_vp_line {
+                    // new cursor past end of vp, skip lines to adjust display_start
+                    let d_cur = render_ctx.cursor_line - last_vp_line;
+                    let new_i =
+                        self.skip_display_lines(render_ctx, d_cur, Some(i));
+                    render_ctx.display_start = DisplayStart::CharIndex(new_i);
+                    render_ctx.cursor_line = last_vp_line;
+                    (0, new_i)
+                } else if i > 0 && render_ctx.cursor_line == 0 {
+                    // new cursor before start of vp
+                    let new_i =
+                        self.skip_display_lines_rev(render_ctx, 1u16, Some(i));
+                    render_ctx.display_start = DisplayStart::CharIndex(new_i);
+                    (0, new_i)
+                } else {
+                    (0, i)
+                }
+            }
         };
 
         // Prepare to send commands & output to terminal
@@ -418,10 +544,39 @@ impl LineReader {
     fn skip_display_lines(
         &self,
         render_ctx: &mut RenderContext,
-        mut n: usize,
+        n: impl Into<usize>,
+        char_offset: Option<usize>,
     ) -> usize {
+        let mut n: usize = n.into();
         let mut cols = 0;
-        for (i, c) in self.before_gap.chars().enumerate() {
+        let char_offset = char_offset.unwrap_or(0);
+        for (i, c) in self.before_gap.char_indices().skip(char_offset) {
+            let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+            cols += w;
+            if cols > render_ctx.terminal_columns {
+                if n == 1 {
+                    return i;
+                }
+                n -= 1;
+                cols = w;
+            }
+        }
+        0
+    }
+
+    fn skip_display_lines_rev(
+        &self,
+        render_ctx: &mut RenderContext,
+        n: impl Into<usize>,
+        char_offset: Option<usize>,
+    ) -> usize {
+        let char_offset = char_offset.unwrap_or(0);
+        if char_offset == 0 {
+            return 0;
+        }
+        let mut n: usize = n.into();
+        let mut cols = 0;
+        for (i, c) in self.before_gap[..char_offset].char_indices().rev() {
             let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
             cols += w;
             if cols > render_ctx.terminal_columns {
@@ -437,6 +592,10 @@ impl LineReader {
 
     fn display_end(&self, render_ctx: &RenderContext) -> usize {
         let mut cols = render_ctx.cursor_column;
+        eprintln!(
+            "display_end: lines_left = {} - 1 - {}",
+            render_ctx.terminal_lines, render_ctx.cursor_line
+        );
         let mut lines_left =
             render_ctx.terminal_lines - 1 - render_ctx.cursor_line;
         for (i, c) in self.after_gap.chars().enumerate() {
@@ -478,6 +637,30 @@ impl LineRead for LineReader {
 // impls for RenderContext
 ////////
 
+impl NewRenderContext {
+    fn new(
+        terminal_columns: u16,
+        terminal_lines: u16,
+        first_display_line: u16,
+        first_char_index: usize,
+    ) -> NewRenderContext {
+        NewRenderContext {
+            terminal_columns,
+            terminal_lines,
+            first_display_line,
+            first_char_index,
+        }
+    }
+}
+
+impl Drop for NewRenderContext {
+    #[cfg(not(tarpaulin_include))]
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+        let _ = io::stdout().execute(Show);
+    }
+}
+
 impl RenderContext {
     fn new(
         terminal_columns: u16,
@@ -492,6 +675,20 @@ impl RenderContext {
             cursor_column,
             cursor_line,
         }
+    }
+
+    fn display_space(&self, s: &str) -> (u16, u16) {
+        let mut cols = 0;
+        let mut lines = 0;
+        for c in s.chars() {
+            let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
+            cols += w;
+            if cols >= self.terminal_columns {
+                lines += 1;
+                cols = w;
+            }
+        }
+        (lines, cols)
     }
 }
 
