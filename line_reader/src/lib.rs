@@ -35,7 +35,7 @@ pub trait LineRead {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LineReader {
     prompt_len: usize,
     prompt_width: usize,
@@ -142,12 +142,12 @@ impl LineReader {
         let terminal_lines = usize::from(self.terminal_lines);
         let cursor_line = usize::from(initial_cursor_line);
 
-// Initialize rendering related values
+        // Initialize rendering related values
         let last_buffer_line_idx =
             self.bg_line_idx.last().copied().unwrap_or(0);
         self.cursor_column =
             u16::try_from(self.bg_buf[last_buffer_line_idx..].width()).unwrap();
-        let mut new_cursor_line = cursor_line + self.bg_line_idx.len();
+        let mut new_cursor_line = cursor_line + self.bg_line_idx.len() - 1;
         if self.cursor_column == self.terminal_columns {
             new_cursor_line += 1;
             self.cursor_column = 0;
@@ -277,7 +277,7 @@ impl LineReader {
                 Response::Continue
             }
             KeyCode::Char(c) => {
-                self.bg_buf.push(c);
+                self.handle_char_insert(c);
                 Response::Continue
             }
             KeyCode::Up => {
@@ -287,6 +287,36 @@ impl LineReader {
                 todo!("move to next newer entry in history");
             }
             _ => Response::Continue,
+        }
+    }
+
+    fn handle_char_insert(&mut self, c: char) {
+        self.bg_buf.push(c);
+        let mut last_bg_line = self.bg_line_idx.len() - 1;
+        if self.bg_buf[self.bg_line_idx[last_bg_line]..].width()
+            > self.terminal_columns.into()
+        {
+            self.bg_line_idx.push(self.bg_buf.len() - 1);
+            last_bg_line += 1;
+            self.cursor_line += 1;
+        }
+        self.cursor_column = self.bg_buf[self.bg_line_idx[last_bg_line]..]
+            .width()
+            .try_into()
+            .unwrap();
+        if self.cursor_column == self.terminal_columns {
+            self.cursor_column = 0;
+            self.cursor_line += 1;
+        }
+        if self.cursor_line
+            > self.terminal_lines - 1 - u16::from(!self.ag_buf.is_empty())
+        {
+            // past viewport
+            if self.first_display_line != 0 {
+                self.scroll_needed = 1;
+                self.first_display_line -= 1;
+                self.cursor_line -= 1;
+            }
         }
     }
 
@@ -333,15 +363,16 @@ impl LineReader {
         stdout.flush()
     }
 
-    #[cfg(not(tarpaulin_include))]
     /// render current buffer to display
     fn repaint(&mut self) -> io::Result<()> {
+        eprintln!("\nrepaint\n{self:?}");
         let mut stdout = io::stdout().lock();
 
         stdout.queue(Hide)?;
 
         if self.scroll_needed > 0 {
             stdout.queue(ScrollUp(self.scroll_needed))?;
+            self.scroll_needed = 0;
         }
 
         stdout
@@ -377,6 +408,26 @@ impl LineRead for LineReader {
         buffer: &mut String,
     ) -> io::Result<Option<usize>> {
         self.accept_line(prompt, true, buffer)
+    }
+}
+
+impl Default for LineReader {
+    fn default() -> Self {
+        LineReader {
+            prompt_len: 0,
+            prompt_width: 0,
+            bg_buf: String::new(),
+            bg_line_idx: Vec::new(),
+            ag_buf: String::new(),
+            ag_display_end: 0,
+            terminal_columns: 80,
+            terminal_lines: 24,
+            cursor_column: 0,
+            cursor_line: 23,
+            first_display_line: 23,
+            first_buffer_line: 0,
+            scroll_needed: 0,
+        }
     }
 }
 
@@ -530,23 +581,6 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Accept));
-    }
-
-    #[test]
-    fn handle_event_char_adds_char_to_buffer() {
-        let buffer_text = "This is some text";
-        let expected = format!("{buffer_text}.");
-        let mut reader =
-            LineReader { bg_buf: buffer_text.to_owned(), ..Default::default() };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
-        reader.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Enter,
-            KeyModifiers::NONE,
-        )));
-        assert_eq!(reader.bg_buf.to_string(), expected);
     }
 
     #[test]
@@ -710,5 +744,62 @@ mod tests {
         assert!(matches!(res, Response::Continue));
         assert!(reader.ag_buf.is_empty());
         assert_eq!(reader.bg_buf, "d");
+    }
+
+    // Char insertion tests
+
+    #[test]
+    fn insert_char_0w_first_doesnt_insert() {
+        todo!();
+    }
+
+    #[test]
+    fn insert_char_0w_after_prompt_doesnt_insert() {
+        todo!();
+    }
+
+    #[test]
+    fn insert_char_0w_after_base_char() {
+        todo!();
+    }
+
+    #[test]
+    fn insert_char_1w() {
+        todo!();
+    }
+
+    #[test]
+    fn insert_char_2w() {
+        todo!();
+    }
+
+    #[test]
+    fn insert_char_1w_to_eol() {
+        todo!();
+    }
+
+    #[test]
+    fn insert_char_2w_to_eol() {
+        todo!();
+    }
+
+    #[test]
+    fn insert_char_2w_past_eol() {
+        todo!();
+    }
+
+    #[test]
+    fn insert_char_2w_to_bottom() {
+        todo!();
+    }
+
+    #[test]
+    fn insert_char_2w_past_bottom() {
+        todo!();
+    }
+
+    #[test]
+    fn last_display_index() {
+        todo!();
     }
 }

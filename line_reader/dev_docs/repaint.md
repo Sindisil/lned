@@ -69,8 +69,7 @@ actual I/O untested.
 
 ** TODO: differentiate between buffer gap and cursor position!!!
 
-    1.  In event handlers, make associated upates to display model.
-        
+    1.  In event handlers, make associated upates to display model.        
         a.  Resize
             i.      Update display columns & lines
             ii.     If dimensions have changed, update bg_buf display line
@@ -83,9 +82,11 @@ actual I/O untested.
             vi.     If ag_buf isn't empty, compute end bound of displayed
                     slice
         b.  Char(c)
-            i.      Append new character before gap.
+            i.      If character width > 0, or there is at least one
+                    preceding non-zero width character before the gap,
+                    append new character before the gap.
             ii.     If character width > 0, update bg_buf display line
-                    offsets starting from cursor line        
+                    offsets starting from cursor line
             iii.    If line offsets have changed, update cursor position
             iv.     If new cursor position is outside viewport, update
                     display start and cursor postion to place cursor on
@@ -164,3 +165,29 @@ actual I/O untested.
         g. Move cursor to cursor position
         f. Show cursor
         
+### Test cases
+I.  Char(c)
+    A.  Insertion sizes
+        1.  0w (e.g., combining mark u0308 '̈¨')
+        2.  1w (e.g., the letter 'a')
+        3.  2w (e.g., the guitar symbol u1f3b8 '🎸')
+    B.  Test cases
+        1.  Insertion of each size works as expected in base case
+            a.  char_typed_non_0w_inserts
+            b.  char_typed_0w_requires_base_char
+                0w as first character doesn't insert
+            c.  char_typed_beore_eol_moves_cursor_char_width
+        2.  char_typed_to_eol_before_bottom_wraps_cursor_to_0
+            Insertion of each size that fills line to last column wraps
+            cursor to column zero of next line.
+        3.  char_typed_past_eol_before_bottom_wraps_cursor_to_1
+            Insertion that won't fit line wraps character to start of next
+            line and moves cursor to first colum after character.
+        4.  Insertion that puts cursor below viewport causes display
+            start to adjust to keep cursor on last line of viewport,
+            scrolling up as necessary.
+            a.  char_typed_to_bottom_when_bg_fits_pans_display
+            b.  char_typed_to_bottom_when_bg_overflows_pans_buffer    
+        5.  char_typed_ag_display_only_to_display_end
+        
+
