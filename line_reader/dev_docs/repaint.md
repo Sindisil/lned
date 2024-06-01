@@ -166,12 +166,12 @@ actual I/O untested.
         f. Show cursor
         
 ### Test cases
-I.  Char(c)
-    A.  Insertion widths
+I. Char(c)
+    A. Insertion widths
         1.  0w (e.g., combining mark u0308 '̈¨')
         2.  1w (e.g., the letter 'a')
         3.  2w (e.g., the guitar symbol u1f3b8 '🎸')
-    B.  Test cases
+    B. Test cases
         1.  Insertion of each width works as expected in base case
             a.  char_typed_non_0w_inserts
             b.  char_typed_0w_requires_base_char
@@ -190,21 +190,99 @@ I.  Char(c)
             b.  char_typed_to_bottom_when_bg_overflows_pans_buffer    
         5.  char_typed_ag_display_only_to_display_end
 II. Backspace
-    A.  Removed widths
+    A. Removed widths
         1.  0w (e.g., combining mark u0308 '̈¨')
         2.  1w (e.g., the letter 'a')
         3.  2w (e.g., the guitar symbol u1f3b8 '🎸')
-    B.  Test cases
+    B. Test cases
         1.  Backspace over each width works as expected in base case
-            a.  backspace_removes_only_last_char_before_cursor
-            b.  backspace_ahead_of_first_char_moves_cursor_char_width
+            a.  backspace_removes_only_last_char_before_gap
+            b.  backspace_moves_cursor_back_removed_char_width
         2.  Backspacing over the char in column 0 leaves cursor in
             colum 0 if previous character fits to previous EOL, or
             wraps to end of previous line if last character of
             previous display line doesn't fill last column.
-            a.  backspace_over_first_char_below_top_wraps_cursor_if_room
+            a.  backspace_to_column_0_char_wraps_cursor_if_room
         3.  Backspacing that results in the cursor moving above the
             first line of the viewport causes display start to adjust
             to keep the cursor on the first line of the viewport.
-            a.  backspace_past_top_pans_buffer
-            b.  backspace_eliminating_ag_overflow_only_pans_if_past_top
+            a.  backspace_moving_cursor_past_top_pans_buffer
+III. Left
+    A. Traversed widths
+        1.  0w (e.g., combining mark u0308 '̈¨')
+        2.  1w (e.g., the letter 'a')
+        3.  2w (e.g., the guitar symbol u1f3b8 '🎸')
+    B. Test cases
+        1.  Left moves last base character before gap, along with any
+            following zero width combining characters, to after gap.
+            a.  left_moves_last_base_char_to_after_gap
+        2.  Left when no input characters before gap does nothing
+            a.  left_at_beginning_does_nothing
+        3.  Left moves cursor back by width of moved over base character
+            a.  left_moves_cursor_back_by_preceding_char_width
+        4.  Left from column 0 wraps cursor to column of last base
+            character on previous display line.
+            a.  left_at_column_0_wraps_cursor_to_preceding_char_column
+        5.  Left that wraps cursor to above top pans buffer down one line
+            a.  left_wrapping_cursor_above_top_pans_buffer_down
+IV. Right
+    A. Traversed widths
+        1.  0w (e.g., combining mark u0308 '̈¨')
+        2.  1w (e.g., the letter 'a')
+        3.  2w (e.g., the guitar symbol u1f3b8 '🎸')
+    B. Test cases
+        1.  Right moves first base character after gap, along with any
+            following zero width combining characters, to before gap.
+        2.  Right when no characters after gap does nothing
+        3.  Right moves cursor forward by width of moved over base
+            character
+        4.  Right from last char on display line wraps cursor to column
+            0 on next display line
+        5.  Right that wraps cursor to below bottom pans buffer up one
+            line, scrolling if first display line is greater than 0
+V. Delete
+    A. Deleted widths
+        1.  0w (e.g., combining mark u0308 '̈¨')
+        2.  1w (e.g., the letter 'a')
+        3.  2w (e.g., the guitar symbol u1f3b8 '🎸')
+    B. Test cases
+        1.  Delete removes first character after gap
+        2.  Delete when no characters after gap does nothing
+        3.  Delete adjusts number of characters displayed after gap
+VI. Home
+    A. Test cases
+        1.  Home moves all input characters before gap to after gap.
+        2.  Home when no input characters before gap does nothing.
+        3.  Home moves cursor to column of first displayed input character
+        4.  Home that moves cursor above top pans buffer down so first
+            displayed line is on line 0.
+VII. End
+    A. Test cases
+        1.  End moves all input characters after gap to before gap
+        2.  End when no characters after gap does nothintg
+        3.  End moves cursor to first column after last input character
+        4.  End that would be beyond last display column wraps to column 0
+            of next display line
+        5.  End that moves cursor below bottom pans buffer up so cursor
+            line is on last display line
+        6.  End that causes buffer to pan down scrolls lesser of lines
+            panned or lines above display top
+VIII. Resize
+    A. Resize changes
+        1. Smaller
+            a.  Lines only
+            b.  Columns, with or without lines
+        2. Larger
+            a.  Lines only
+            b.  Columns, with or without lines
+    A. Test cases
+        1.  Resize that changes only display lines doesn't reflow (i.e.,
+            doesn't change cursor column or bg_line_idx).
+        2.  Resize that changes columns or both lines and columns reflows
+            (i.e., recomputes bg_line_idx and possibly cursor_column)
+        3.  Resize smaller takes space first from before cursor util cursor
+            is at top line, then from after cursor until cursor is at
+            bottom, then keeping cursor on bottom line.
+        4.  Resize larger keeps first buffer line until end of buffer fits
+            display, then adjusts first buffer line until beginning of
+            buffer fits, and only then ajusts first display line.
