@@ -222,9 +222,9 @@ III. Left
             a.  left_moves_cursor_back_by_preceding_char_width
         4.  Left from column 0 wraps cursor to column of last base
             character on previous display line.
-            a.  left_at_column_0_wraps_cursor_to_preceding_char_column
+            a.  left_at_column_0_wraps_cursor_to_preceding_line
         5.  Left that wraps cursor to above top pans buffer down one line
-            a.  left_wrapping_cursor_above_top_pans_buffer_down
+            a.  left_wrapping_cursor_above_top_pans_buffer
 IV. Right
     A. Traversed widths
         1.  0w (e.g., combining mark u0308 '̈¨')
