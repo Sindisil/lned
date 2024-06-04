@@ -217,19 +217,7 @@ impl LineReader {
                 ControlFlow::Continue(())
             }
             KeyCode::Backspace => self.handle_backspace(),
-            KeyCode::Delete => {
-                if let Some((next_idx, _)) = self
-                    .ag_buf
-                    .char_indices()
-                    .skip(1)
-                    .find(|(_, c)| c.width().is_some_and(|w| w > 0))
-                {
-                    self.ag_buf.drain(..next_idx);
-                } else if !self.ag_buf.is_empty() {
-                    self.ag_buf.clear();
-                }
-                ControlFlow::Continue(())
-            }
+            KeyCode::Delete => self.handle_delete(),
             KeyCode::Char(c) => self.handle_char_typed(c),
             KeyCode::Up => {
                 todo!("move to next older entry in history");
@@ -338,7 +326,7 @@ impl LineReader {
                     self.first_buffer_line -= 1;
                 }
             }
-        self.ag_display_chars = self.display_remainder();
+            self.ag_display_chars = self.display_remainder();
         }
         ControlFlow::Continue(())
     }
@@ -370,9 +358,24 @@ impl LineReader {
                     self.first_buffer_line -= 1;
                 }
             }
-        self.ag_display_chars = self.display_remainder();
+            self.ag_display_chars = self.display_remainder();
         }
 
+        ControlFlow::Continue(())
+    }
+
+    fn handle_delete(&mut self) -> ControlFlow<()> {
+        if let Some((next_idx, _)) = self
+            .ag_buf
+            .char_indices()
+            .skip(1)
+            .find(|(_, c)| c.width().is_some_and(|w| w > 0))
+        {
+            self.ag_buf.drain(..next_idx);
+        } else if !self.ag_buf.is_empty() {
+            self.ag_buf.clear();
+        }
+        self.ag_display_chars = self.display_remainder();
         ControlFlow::Continue(())
     }
 
@@ -918,7 +921,7 @@ mod tests {
             display_columns: 20,
             display_lines: 5,
             bg_buf: lines.join(""),
-            bg_line_idx: vec![0, 20, 40, 60, 80, 100,],
+            bg_line_idx: vec![0, 20, 40, 60, 80, 100],
             prompt_len: 1,
             prompt_width: 1,
             cursor_column: 0,
@@ -1042,6 +1045,29 @@ mod tests {
         assert!(res.is_continue());
         assert!(reader.ag_buf.is_empty());
         assert_eq!(reader.bg_buf, "d");
+    }
+
+    #[test]
+    fn delete_adjusts_display_end() {
+        let mut reader = LineReader {
+            ag_buf: "123456789012345678901".to_owned(),
+            display_columns: 10,
+            display_lines: 5,
+            first_display_line: 3,
+            cursor_line: 3,
+            ag_display_chars: 20,
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.ag_display_chars, 20);
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.ag_display_chars, 19);
     }
 
     #[test]
