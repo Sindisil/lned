@@ -1,10 +1,9 @@
 use std::cmp::{self, Ordering};
 use std::io::{self, BufRead, Write};
+use std::ops::ControlFlow;
 
 use crossterm::cursor::{self, Hide, MoveTo, MoveToNextLine, Show};
-use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::terminal::{self, Clear, ClearType, ScrollUp};
 use crossterm::{ExecutableCommand, QueueableCommand};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -21,18 +20,6 @@ pub trait LineRead {
         prompt: &str,
         buffer: &mut String,
     ) -> io::Result<usize>;
-
-    /// # Errors
-    ///
-    /// Will return `io::Error` if an error is encountered reading a line
-
-    fn read_line_or_cancel(
-        &mut self,
-        prompt: &str,
-        buffer: &mut String,
-    ) -> io::Result<Option<usize>> {
-        self.read_line(prompt, buffer).map_or(Ok(None), |bytes| Ok(Some(bytes)))
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -86,13 +73,6 @@ pub struct LineReader {
 #[derive(Debug)]
 struct RenderContext;
 
-#[derive(Debug)]
-enum Response {
-    Accept,
-    Cancel,
-    Continue,
-}
-
 // public functions
 ////////
 
@@ -118,9 +98,8 @@ impl LineReader {
     fn accept_line(
         &mut self,
         prompt: &str,
-        cancelable: bool,
         output_buffer: &mut String,
-    ) -> io::Result<Option<usize>> {
+    ) -> io::Result<usize> {
         // Get the initial display dimensions
         (self.display_columns, self.display_lines) = terminal::size()?;
         let (_, initial_cursor_line) = cursor::position()?;
@@ -177,66 +156,40 @@ impl LineReader {
         let _render_ctx = RenderContext::new();
         terminal::enable_raw_mode()?;
 
-        loop {
-            self.repaint()?;
-            // get next event
+        self.repaint()?;
+        let mut should_continue = true;
+        while should_continue {
             let event = event::read()?;
-
-            // handle event
-            let response = self.handle_event(&event);
-
-            match response {
-                Response::Accept => {
-                    let bytes_read =
-                        self.bg_buf.len() - prompt.len() + self.ag_buf.len();
-                    self.move_to_end()?;
-                    *output_buffer += &self.bg_buf[prompt.len()..];
-                    *output_buffer += &self.ag_buf;
-                    self.bg_buf.clear();
-                    self.ag_buf.clear();
-                    return Ok(Some(bytes_read));
-                }
-                Response::Cancel => {
-                    if cancelable {
-                        io::stdout().execute(MoveToNextLine(1))?;
-                        self.bg_buf.clear();
-                        self.ag_buf.clear();
-                        return Ok(None);
-                    }
-                }
-                Response::Continue => (),
-            }
+            should_continue = self.handle_event(&event).is_continue();
+            self.repaint()?;
         }
+
+        let bytes_read =
+            self.bg_buf.len() - self.prompt_len + self.ag_buf.len();
+        self.move_to_end()?;
+        *output_buffer += &self.bg_buf[self.prompt_len..];
+        *output_buffer += &self.ag_buf;
+        self.bg_buf.clear();
+        self.ag_buf.clear();
+        Ok(bytes_read)
     }
 
-    fn handle_event(&mut self, event: &Event) -> Response {
+    fn handle_event(&mut self, event: &Event) -> ControlFlow<()> {
         match event {
             Event::Key(event) if event.kind == KeyEventKind::Press => {
                 self.handle_key_event(event)
             }
-            _ => Response::Continue,
+            _ => ControlFlow::Continue(()),
         }
     }
 
-    fn handle_key_event(&mut self, event: &KeyEvent) -> Response {
+    fn handle_key_event(&mut self, event: &KeyEvent) -> ControlFlow<()> {
         match event.code {
-            KeyCode::Char('d') if event.modifiers == KeyModifiers::CONTROL => {
-                Response::Cancel
-            }
             KeyCode::Enter => {
                 self.ag_buf.push_str(native_eol());
-                Response::Accept
+                ControlFlow::Break(())
             }
-            KeyCode::Left => {
-                if let Some((prev_idx, _)) = self.bg_buf[self.prompt_len..]
-                    .char_indices()
-                    .rfind(|(_, c)| c.width().is_some_and(|w| w > 0))
-                {
-                    self.ag_buf.insert_str(0, &self.bg_buf[prev_idx..]);
-                    self.bg_buf.truncate(prev_idx);
-                }
-                Response::Continue
-            }
+            KeyCode::Left => self.handle_left(),
             KeyCode::Right => {
                 if let Some((next_idx, _)) = self
                     .ag_buf
@@ -250,23 +203,20 @@ impl LineReader {
                     self.bg_buf.push_str(&self.ag_buf);
                     self.ag_buf.clear();
                 }
-                Response::Continue
+                ControlFlow::Continue(())
             }
             KeyCode::Home => {
                 self.ag_buf.insert_str(
                     0,
                     self.bg_buf.drain(self.prompt_len..).as_ref(),
                 );
-                Response::Continue
+                ControlFlow::Continue(())
             }
             KeyCode::End => {
                 self.gap_to_end();
-                Response::Continue
+                ControlFlow::Continue(())
             }
-            KeyCode::Backspace => {
-                self.handle_backspace();
-                Response::Continue
-            }
+            KeyCode::Backspace => self.handle_backspace(),
             KeyCode::Delete => {
                 if let Some((next_idx, _)) = self
                     .ag_buf
@@ -278,23 +228,20 @@ impl LineReader {
                 } else if !self.ag_buf.is_empty() {
                     self.ag_buf.clear();
                 }
-                Response::Continue
+                ControlFlow::Continue(())
             }
-            KeyCode::Char(c) => {
-                self.handle_char_typed(c);
-                Response::Continue
-            }
+            KeyCode::Char(c) => self.handle_char_typed(c),
             KeyCode::Up => {
                 todo!("move to next older entry in history");
             }
             KeyCode::Down => {
                 todo!("move to next newer entry in history");
             }
-            _ => Response::Continue,
+            _ => ControlFlow::Continue(()),
         }
     }
 
-    fn handle_char_typed(&mut self, c: char) {
+    fn handle_char_typed(&mut self, c: char) -> ControlFlow<()> {
         let c_width = c.width().unwrap_or(0);
 
         // handle zero width (combining) characters
@@ -303,7 +250,7 @@ impl LineReader {
             if self.bg_buf.len() > self.prompt_len {
                 self.bg_buf.push(c);
             }
-            return;
+            return ControlFlow::Continue(());
         }
 
         let new_char_idx = self.bg_buf.len();
@@ -344,33 +291,37 @@ impl LineReader {
         }
 
         self.ag_display_chars = self.display_remainder();
+        ControlFlow::Continue(())
     }
 
-    fn handle_backspace(&mut self) {
-        if let Some((i, c)) = self.bg_buf.char_indices().next_back() {
-            // if no input chars, we're done
-            if i < self.prompt_len {
-                return;
-            }
+    fn handle_backspace(&mut self) -> ControlFlow<()> {
+        if let Some((i, c)) = self
+            .bg_buf
+            .char_indices()
+            .next_back()
+            .filter(|(i, _)| *i >= self.prompt_len)
+        {
             self.bg_buf.truncate(i);
-            let c_width = u16::try_from(c.width().unwrap_or(0)).unwrap();
             let prev_cursor_line = self.cursor_line;
 
             if self.cursor_column == 0 {
                 // backspacing from column 0, wrap to position of
                 // removed char on preceding line.
-                self.cursor_column = self.display_columns - c_width;
+                let prev_beg = *self.bg_line_idx.iter().nth_back(1).unwrap();
+                self.cursor_column =
+                    u16::try_from(self.bg_buf[prev_beg..].width()).unwrap();
                 self.cursor_line -= 1;
             } else {
+                let c_width = u16::try_from(c.width().unwrap_or(0)).unwrap();
                 self.cursor_column -= c_width;
 
                 if self.cursor_column == 0 {
                     // backspacing to column 0 - check if room to wrap
                     // to end of preceding line
-                    if let Some(&prev_idx) = self.bg_line_idx.iter().nth_back(1)
+                    if let Some(&prev_beg) = self.bg_line_idx.iter().nth_back(1)
                     {
                         let prev_w =
-                            u16::try_from(self.bg_buf[prev_idx..].width())
+                            u16::try_from(self.bg_buf[prev_beg..].width())
                                 .unwrap();
                         if prev_w < self.display_columns {
                             self.cursor_column = prev_w;
@@ -387,7 +338,42 @@ impl LineReader {
                     self.first_buffer_line -= 1;
                 }
             }
+        self.ag_display_chars = self.display_remainder();
         }
+        ControlFlow::Continue(())
+    }
+
+    fn handle_left(&mut self) -> ControlFlow<()> {
+        if let Some((prev_idx, prev_char)) = self
+            .bg_buf
+            .char_indices()
+            .rfind(|(_, c)| c.width().is_some_and(|w| w > 0))
+            .filter(|(i, _)| *i >= self.prompt_len)
+        {
+            self.ag_buf.insert_str(0, &self.bg_buf[prev_idx..]);
+            self.bg_buf.truncate(prev_idx);
+            let prev_cursor_line = self.cursor_line;
+
+            if self.cursor_column == 0 {
+                let prev_beg = *self.bg_line_idx.iter().nth_back(1).unwrap();
+                self.cursor_column =
+                    u16::try_from(self.bg_buf[prev_beg..].width()).unwrap();
+                self.cursor_line -= 1;
+            } else {
+                self.cursor_column -=
+                    u16::try_from(prev_char.width().unwrap_or(0)).unwrap();
+            }
+            if prev_cursor_line != self.cursor_line {
+                self.bg_line_idx.truncate(self.bg_line_idx.len() - 1);
+                if self.cursor_line < self.viewport_top() {
+                    self.cursor_line += 1;
+                    self.first_buffer_line -= 1;
+                }
+            }
+        self.ag_display_chars = self.display_remainder();
+        }
+
+        ControlFlow::Continue(())
     }
 
     /// Compute last line of viewport
@@ -506,15 +492,7 @@ impl LineRead for LineReader {
         prompt: &str,
         buffer: &mut String,
     ) -> io::Result<usize> {
-        Ok(self.accept_line(prompt, false, buffer)?.unwrap_or(0))
-    }
-
-    fn read_line_or_cancel(
-        &mut self,
-        prompt: &str,
-        buffer: &mut String,
-    ) -> io::Result<Option<usize>> {
-        self.accept_line(prompt, true, buffer)
+        self.accept_line(prompt, buffer)
     }
 }
 
@@ -576,6 +554,8 @@ where
 mod tests {
     use super::*;
 
+    use crossterm::event::KeyModifiers;
+
     // tests for LineReader
     ////////
 
@@ -609,7 +589,7 @@ mod tests {
         let mut reader = LineReader::new();
         let event = Event::FocusLost;
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
     }
 
     #[test]
@@ -618,22 +598,11 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
     }
 
     #[test]
-    fn handle_event_ctrl_d_returns_canceled() {
-        let mut reader = LineReader::new();
-        let event = Event::Key(KeyEvent::new(
-            KeyCode::Char('d'),
-            KeyModifiers::CONTROL,
-        ));
-        let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Cancel));
-    }
-
-    #[test]
-    fn handle_event_enter_returns_accept() {
+    fn enter_breaks_input_loop() {
         let buffer_text = "This is some text.";
         let mut reader = LineReader {
             bg_buf: buffer_text[..8].to_owned(),
@@ -643,7 +612,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Accept));
+        assert!(matches!(res, ControlFlow::Break(())));
     }
 
     #[test]
@@ -659,27 +628,27 @@ mod tests {
 
         // 2w
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":ë̱");
 
         // 1st 0w
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":ë");
 
         // 2nd 0w
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":e");
 
         // 1w
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":");
 
         // prompt
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":");
     }
 
@@ -696,27 +665,27 @@ mod tests {
 
         // 2w
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.cursor_column, 2);
 
         // 1st 0w
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.cursor_column, 2);
 
         // 2nd 0w
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.cursor_column, 2);
 
         // 1w
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.cursor_column, 1);
 
         // prompt
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.cursor_column, 1);
 
         // on second line when first line doesn't fill full width
@@ -733,7 +702,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":123456789012345678🎸");
         assert_eq!(reader.cursor_column, 2);
         assert_eq!(reader.cursor_line, 9);
@@ -754,7 +723,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":123456789012345678");
         assert_eq!(reader.cursor_column, 19);
         assert_eq!(reader.cursor_line, 8);
@@ -778,7 +747,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":123456789012345678");
         assert_eq!(reader.cursor_column, 19);
         assert_eq!(reader.cursor_line, 8);
@@ -799,7 +768,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":1234567890123456789");
         assert_eq!(reader.cursor_column, 0);
         assert_eq!(reader.cursor_line, 9);
@@ -811,63 +780,163 @@ mod tests {
     fn backspace_moving_cursor_past_top_pans_buffer() {
         let lines = [
             ":1234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
+            "a1234567890123456789",
+            "b1234567890123456789",
+            "c1234567890123456789",
+            "d1234567890123456789",
         ];
 
-        let mut reader = LineReader::new();
-        reader.display_columns = 20;
-        reader.display_lines = 5;
-        reader.bg_buf.push_str(&lines.join(""));
-        reader.bg_line_idx = vec![0, 20, 40, 60, 80];
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 0;
-        reader.cursor_line = 1;
-        reader.first_display_line = 0;
-        reader.first_buffer_line = 4;
+        let mut reader = LineReader {
+            display_columns: 20,
+            display_lines: 5,
+            bg_buf: lines.join(""),
+            bg_line_idx: vec![0, 20, 40, 60, 80, 100],
+            prompt_len: 1,
+            prompt_width: 1,
+            cursor_column: 0,
+            cursor_line: 1,
+            first_display_line: 0,
+            first_buffer_line: 4,
+            ..Default::default()
+        };
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.cursor_column, 19);
         assert_eq!(reader.cursor_line, 1);
         assert_eq!(reader.first_display_line, 0);
         assert_eq!(reader.first_buffer_line, 3);
-        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60,]);
+        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80,]);
     }
 
     #[test]
-    fn left_arrow_moves_to_previous_base_char() {
+    fn left_moves_to_previous_base_char() {
         let buffer_text = "dëf";
-        let mut reader =
-            LineReader { bg_buf: buffer_text.to_owned(), ..Default::default() };
+        let mut reader = LineReader {
+            bg_buf: buffer_text.to_owned(),
+            cursor_column: 3,
+            ..Default::default()
+        };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.bg_buf, "dë");
         assert_eq!(reader.ag_buf, "f");
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.bg_buf, "d");
         assert_eq!(reader.ag_buf, "ëf");
     }
 
     #[test]
-    fn left_arrow_at_beginning_does_nothing() {
+    fn left_at_beginning_does_nothing() {
         let buffer_text = "dëf";
         let mut reader =
             LineReader { ag_buf: buffer_text.to_owned(), ..Default::default() };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.ag_buf, buffer_text);
         assert!(reader.bg_buf.is_empty());
+    }
+
+    #[test]
+    fn left_moves_cursor_back_by_preceding_char_width() {
+        let mut reader = LineReader {
+            bg_buf: ":dë🎸f".to_owned(),
+            prompt_width: 1,
+            prompt_len: 1,
+            cursor_column: 6,
+            ..Default::default()
+        };
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+
+        // 1w
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_column, 5);
+
+        // 2w
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_column, 3);
+
+        // 1w with combining character
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_column, 2);
+
+        // 1 to prompt
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_column, 1);
+
+        // at prompt
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_column, 1);
+    }
+
+    #[test]
+    fn left_at_column_0_wraps_cursor_to_preceding_line() {
+        let mut reader = LineReader {
+            bg_buf: ":01234567🎸".to_owned(),
+            bg_line_idx: vec![0, 10],
+            prompt_width: 1,
+            prompt_len: 1,
+            display_columns: 10,
+            display_lines: 5,
+            first_display_line: 3,
+            cursor_line: 4,
+            cursor_column: 0,
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!((reader.cursor_column, reader.cursor_line), (9, 3));
+    }
+
+    #[test]
+    fn left_wrapping_cursor_above_top_pans_buffer() {
+        let lines = [
+            ":1234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+        ];
+
+        let mut reader = LineReader {
+            display_columns: 20,
+            display_lines: 5,
+            bg_buf: lines.join(""),
+            bg_line_idx: vec![0, 20, 40, 60, 80, 100,],
+            prompt_len: 1,
+            prompt_width: 1,
+            cursor_column: 0,
+            cursor_line: 1,
+            first_display_line: 0,
+            first_buffer_line: 4,
+            ..Default::default()
+        };
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_column, 19);
+        assert_eq!(reader.cursor_line, 1);
+        assert_eq!(reader.first_display_line, 0);
+        assert_eq!(reader.first_buffer_line, 3);
+        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80,]);
     }
 
     #[test]
@@ -878,11 +947,11 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.bg_buf, "d");
         assert_eq!(reader.ag_buf, "ëf");
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.bg_buf, "dë");
         assert_eq!(reader.ag_buf, "f");
     }
@@ -897,7 +966,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert!(reader.ag_buf.is_empty());
         assert_eq!(reader.bg_buf, "lmñ");
     }
@@ -909,7 +978,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert!(reader.ag_buf.is_empty());
         assert_eq!(reader.bg_buf, "lmñ");
     }
@@ -925,7 +994,7 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
 
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert!(reader.bg_buf.is_empty());
         assert_eq!(reader.ag_buf, "lmnop");
     }
@@ -940,7 +1009,7 @@ mod tests {
         let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
 
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.bg_buf, "lmnop");
         assert!(reader.ag_buf.is_empty());
     }
@@ -955,7 +1024,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.ag_buf, "f");
         assert_eq!(reader.bg_buf, "d");
     }
@@ -970,7 +1039,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert!(reader.ag_buf.is_empty());
         assert_eq!(reader.bg_buf, "d");
     }
@@ -1041,7 +1110,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":🎸");
     }
 
@@ -1057,7 +1126,7 @@ mod tests {
             KeyModifiers::NONE,
         ));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":");
 
         let mut reader = LineReader::new();
@@ -1070,7 +1139,7 @@ mod tests {
             KeyModifiers::NONE,
         ));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(&reader.bg_buf, ":e\u{0308}");
     }
 
@@ -1086,19 +1155,19 @@ mod tests {
             KeyModifiers::NONE,
         ));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!((reader.cursor_column, reader.cursor_line), (2, 23));
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.cursor_column, 3);
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.cursor_column, 5);
     }
 
@@ -1114,7 +1183,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!((reader.cursor_column, reader.cursor_line), (0, 1));
         assert_eq!(reader.bg_line_idx, vec![0, 9]);
     }
@@ -1131,7 +1200,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!((reader.cursor_column, reader.cursor_line), (2, 1));
         assert_eq!(reader.bg_line_idx, vec![0, 9]);
     }
@@ -1151,7 +1220,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.bg_line_idx, vec![0, 19]);
         assert_eq!((reader.cursor_column, reader.cursor_line), (2, 4));
         assert_eq!(reader.first_display_line, 3);
@@ -1171,7 +1240,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!((reader.cursor_column, reader.cursor_line), (2, 3));
         assert_eq!(reader.first_display_line, 2);
         assert_eq!(reader.scroll_needed, 1);
@@ -1203,7 +1272,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 119]);
         assert_eq!((reader.cursor_column, reader.cursor_line), (0, 4));
         assert_eq!(reader.first_display_line, 0);
@@ -1226,7 +1295,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 119]);
         assert_eq!((reader.cursor_column, reader.cursor_line), (0, 3));
         assert_eq!(reader.first_display_line, 0);
@@ -1260,7 +1329,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
-        assert!(matches!(res, Response::Continue));
+        assert!(res.is_continue());
         assert_eq!(reader.ag_display_chars, 38);
     }
 }
