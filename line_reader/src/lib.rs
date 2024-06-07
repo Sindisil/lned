@@ -43,7 +43,7 @@ pub struct LineReader {
     ag_buf: String,
 
     /// current display width, in columns
-    display_columns: u16,
+    display_width: u16,
 
     /// current display height, in lines
     display_lines: u16,
@@ -104,7 +104,7 @@ impl LineReader {
         output_buffer: &mut String,
     ) -> io::Result<usize> {
         // Get the initial display dimensions
-        (self.display_columns, self.display_lines) = terminal::size()?;
+        (self.display_width, self.display_lines) = terminal::size()?;
         let (_, initial_cursor_line) = cursor::position()?;
 
         // initialize gap buffer
@@ -119,7 +119,7 @@ impl LineReader {
             for (i, c) in self.bg_buf.char_indices() {
                 let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
                 col += w;
-                if col > self.display_columns {
+                if col > self.display_width {
                     self.bg_line_idx.push(i);
                     col = w;
                 }
@@ -142,7 +142,7 @@ impl LineReader {
         self.cursor_column =
             u16::try_from(self.bg_buf[last_buffer_line_idx..].width()).unwrap();
         let mut new_cursor_line = cursor_line + self.bg_line_idx.len() - 1;
-        if self.cursor_column == self.display_columns {
+        if self.cursor_column == self.display_width {
             new_cursor_line += 1;
             self.cursor_column = 0;
         }
@@ -249,9 +249,9 @@ impl LineReader {
         }
 
         let c_width = u16::try_from(c_width).unwrap();
-        let last_line_space = self.display_columns - self.cursor_column;
+        let last_line_space = self.display_width - self.cursor_column;
         let prev_line_space =
-            self.penultimate_width.map(|w| self.display_columns - w);
+            self.penultimate_width.map(|w| self.display_width - w);
 
         self.bg_buf.push(c);
 
@@ -278,7 +278,7 @@ impl LineReader {
                 }
                 // typed character exactly fills cursor line
                 Ordering::Equal => {
-                    self.penultimate_width = Some(self.display_columns);
+                    self.penultimate_width = Some(self.display_width);
                     self.cursor_column = 0;
                     self.cursor_line += 1;
                     self.bg_line_idx.push(self.bg_buf.len());
@@ -344,7 +344,7 @@ impl LineReader {
                     // to end of preceding line
                     eprintln!("{:?}", self.penultimate_width);
                     if let Some(prev_w) = self.penultimate_width {
-                        if prev_w < self.display_columns {
+                        if prev_w < self.display_width {
                             self.cursor_column = prev_w;
                             self.cursor_line -= 1;
                         }
@@ -417,7 +417,7 @@ impl LineReader {
         {
             self.ag_buf.drain(..next_idx);
             if let Some(penultimate_width) = self.penultimate_width {
-                if self.display_columns - penultimate_width <= next_width {
+                if self.display_width - penultimate_width <= next_width {
                     self.cursor_column = penultimate_width;
                     self.cursor_line -= 1;
                     self.bg_line_idx.pop();
@@ -435,7 +435,7 @@ impl LineReader {
     /// Compute last line of viewport
     fn viewport_bottom(&self) -> u16 {
         if self.ag_buf.width()
-            <= (self.display_columns.saturating_sub(self.cursor_column)).into()
+            <= (self.display_width.saturating_sub(self.cursor_column)).into()
         {
             self.display_lines - 1
         } else {
@@ -450,7 +450,7 @@ impl LineReader {
 
     /// Compute portion of `ag_buf` that fits in display
     fn ag_display_bound(&self) -> usize {
-        let d_width = usize::from(self.display_columns);
+        let d_width = usize::from(self.display_width);
         let mut col = usize::from(self.cursor_column);
         let mut line = self.cursor_line;
         let mut indices = self.ag_buf.char_indices();
@@ -484,7 +484,7 @@ impl LineReader {
 
         let mut stdout = io::stdout().lock();
         let term_height = usize::from(self.display_lines);
-        let last_line = ag_buf_width / usize::from(self.display_columns)
+        let last_line = ag_buf_width / usize::from(self.display_width)
             + usize::from(cur_line);
         let new_cursor_line = last_line + 1;
         if new_cursor_line >= term_height {
@@ -503,7 +503,7 @@ impl LineReader {
                 .queue(MoveTo(cur_col, cur_line))?
                 .queue(Clear(ClearType::FromCursorDown))?;
             let offset = ag_buf_width.saturating_sub(
-                ((self.display_lines - 1) * self.display_columns) as usize,
+                ((self.display_lines - 1) * self.display_width) as usize,
             );
             write!(stdout, "{}", &self.ag_buf[offset..])?;
         }
@@ -561,7 +561,7 @@ impl Default for LineReader {
             bg_line_idx: vec![0],
             penultimate_width: None,
             ag_buf: String::new(),
-            display_columns: 80,
+            display_width: 80,
             display_lines: 24,
             cursor_column: 0,
             cursor_line: 23,
@@ -748,7 +748,7 @@ mod tests {
         let mut reader = LineReader::new();
         reader.prompt_len = 1;
         reader.prompt_width = 1;
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 10;
         reader.bg_buf.push_str(":123456789012345678🎸🎸");
         reader.bg_line_idx = vec![0, 20];
@@ -769,7 +769,7 @@ mod tests {
         let mut reader = LineReader::new();
         reader.prompt_len = 1;
         reader.prompt_width = 1;
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 10;
         reader.bg_buf.push_str(":1234567890123456789");
         reader.bg_line_idx = vec![0, 20];
@@ -794,7 +794,7 @@ mod tests {
         let mut reader = LineReader::new();
         reader.prompt_len = 1;
         reader.prompt_width = 1;
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 10;
         reader.bg_buf.push_str(":123456789012345678🎸");
         reader.bg_line_idx = vec![0, 20];
@@ -816,7 +816,7 @@ mod tests {
         let mut reader = LineReader::new();
         reader.prompt_len = 1;
         reader.prompt_width = 1;
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 10;
         reader.bg_buf.push_str(":1234567890123456789🎸");
         reader.bg_line_idx = vec![0, 20];
@@ -845,7 +845,7 @@ mod tests {
         ];
 
         let mut reader = LineReader {
-            display_columns: 20,
+            display_width: 20,
             display_lines: 5,
             bg_buf: lines.join(""),
             bg_line_idx: vec![0, 20, 40, 60, 80, 100],
@@ -952,7 +952,7 @@ mod tests {
             penultimate_width: Some(10),
             prompt_width: 1,
             prompt_len: 1,
-            display_columns: 10,
+            display_width: 10,
             display_lines: 5,
             first_display_line: 3,
             cursor_line: 4,
@@ -977,7 +977,7 @@ mod tests {
         ];
 
         let mut reader = LineReader {
-            display_columns: 20,
+            display_width: 20,
             display_lines: 5,
             bg_buf: lines.join(""),
             bg_line_idx: vec![0, 20, 40, 60, 80, 100],
@@ -1110,7 +1110,7 @@ mod tests {
     #[test]
     fn delete_wraps_cursor_if_first_ag_char_fits_prev_line() {
         let mut reader = LineReader {
-            display_columns: 10,
+            display_width: 10,
             display_lines: 5,
             first_display_line: 0,
             bg_buf: ":12345678".to_owned(),
@@ -1136,7 +1136,7 @@ mod tests {
     #[test]
     fn viewport_bottom() {
         let mut reader = LineReader::new();
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 24;
         reader.prompt_len = 1;
         reader.prompt_width = 1;
@@ -1162,7 +1162,7 @@ mod tests {
     #[test]
     fn display_bound_finds_display_end() {
         let mut reader = LineReader::new();
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 24;
         reader.prompt_len = 1;
         reader.prompt_width = 1;
@@ -1263,7 +1263,7 @@ mod tests {
     #[test]
     fn char_typed_to_eol_before_bottom_wraps_cursor_to_column_0() {
         let mut reader = LineReader::new();
-        reader.display_columns = 10;
+        reader.display_width = 10;
         reader.prompt_len = 1;
         reader.prompt_width = 1;
         reader.bg_buf.push_str(":1234567");
@@ -1280,7 +1280,7 @@ mod tests {
     #[test]
     fn char_typed_cursor_follows_next_char_pushed_to_next_line() {
         let mut reader = LineReader {
-            display_columns: 10,
+            display_width: 10,
             display_lines: 5,
             bg_buf: ":1234567".to_owned(),
             prompt_len: 1,
@@ -1315,7 +1315,7 @@ mod tests {
     #[test]
     fn char_typed_past_eol_before_bottom_wraps_cursor_to_after_char() {
         let mut reader = LineReader::new();
-        reader.display_columns = 10;
+        reader.display_width = 10;
         reader.bg_buf.push_str(":12345678");
         reader.prompt_len = 1;
         reader.prompt_width = 1;
@@ -1333,7 +1333,7 @@ mod tests {
     fn char_typed_to_bottom_when_bg_fits_pans_display() {
         // ag_buf.is_empty(), so viewport == display
         let mut reader = LineReader::new();
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 5;
         reader.bg_buf.push_str(":123456789012345678");
         reader.prompt_len = 1;
@@ -1352,7 +1352,7 @@ mod tests {
 
         // ag_buf.width() past bottom of display, so viewport == display - 1
         let mut reader = LineReader::new();
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 5;
         reader.bg_buf.push_str(":123456789012345678");
         reader.prompt_len = 1;
@@ -1383,7 +1383,7 @@ mod tests {
         ];
 
         let mut reader = LineReader::new();
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 5;
         reader.bg_buf.push_str(&lines.join(""));
         reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
@@ -1405,7 +1405,7 @@ mod tests {
 
         // ag_buf.width() past bottom of display, so viewport == display - 1
         let mut reader = LineReader::new();
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 5;
         reader.bg_buf.push_str(&lines.join(""));
         reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
@@ -1439,7 +1439,7 @@ mod tests {
         ];
 
         let mut reader = LineReader::new();
-        reader.display_columns = 20;
+        reader.display_width = 20;
         reader.display_lines = 5;
         reader.bg_buf.push_str(&lines.join(""));
         reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
