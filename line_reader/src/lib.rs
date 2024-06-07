@@ -36,6 +36,9 @@ pub struct LineReader {
     /// indicies of characters that start display lines
     bg_line_idx: Vec<usize>,
 
+    /// width in columns of line before cursor line, if any
+    penultimate_width: Option<u16>,
+
     /// characters after the gap (at or after cursor)
     ag_buf: String,
 
@@ -109,22 +112,26 @@ impl LineReader {
         self.prompt_width = prompt.width();
         self.prompt_len = prompt.len();
 
-        // initialize display line indices
+        // initialize display line indices & widths
         self.bg_line_idx.splice(.., [0]);
         if self.prompt_len > 0 {
-            let mut line = 0;
             let mut col = 0;
             for (i, c) in self.bg_buf.char_indices() {
                 let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
                 col += w;
                 if col > self.display_columns {
-                    line += 1;
+                    self.bg_line_idx.push(i);
                     col = w;
-                    self.bg_line_idx[line] = i;
                 }
             }
         }
 
+        self.penultimate_width = self
+            .bg_line_idx
+            .iter()
+            .nth_back(1)
+            .map(|i| self.bg_buf[*i..].width())
+            .map(|w| u16::try_from(w).unwrap());
         // convert some values to usize for convenience
         let display_lines = usize::from(self.display_lines);
         let cursor_line = usize::from(initial_cursor_line);
@@ -242,14 +249,17 @@ impl LineReader {
         }
 
         let c_width = u16::try_from(c_width).unwrap();
-        let mut bg_line_iter = self.bg_line_idx.iter();
-        let last_line_idx = *bg_line_iter.next_back().unwrap();
-        let last_line_space = self.display_columns
-            - u16::try_from(self.bg_buf[last_line_idx..].width()).unwrap();
-        let prev_line_space = bg_line_iter.next_back().map(|i| {
-            self.display_columns
-                - u16::try_from(self.bg_buf[*i..last_line_idx].width()).unwrap()
-        });
+        //        let mut bg_line_iter = self.bg_line_idx.iter();
+        //        let last_line_idx = *bg_line_iter.next_back().unwrap();
+        let last_line_space = self.display_columns - self.cursor_column;
+        let prev_line_space =
+            self.penultimate_width.map(|w| self.display_columns - w);
+        //        let last_line_space = self.display_columns
+        //            - u16::try_from(self.bg_buf[last_line_idx..].width()).unwrap();
+        //        let prev_line_space = bg_line_iter.next_back().map(|i| {
+        //            self.display_columns
+        //                - u16::try_from(self.bg_buf[*i..last_line_idx].width()).unwrap()
+        //        });
 
         self.bg_buf.push(c);
 
@@ -260,20 +270,23 @@ impl LineReader {
                     // new char doesnt fit on previous line
                     self.cursor_column += c_width;
                 } else if let Some(i) = self.bg_line_idx.last_mut() {
-                    // New char fits prev line. Adjust last bg_line_idx.
+                    // new char fits previous line
                     *i += c.len_utf8();
+                    *self.penultimate_width.get_or_insert(0) += c_width;
                 }
             }
         } else {
             match last_line_space.cmp(&c_width) {
                 // typed character overflows cursor line
                 Ordering::Less => {
+                    self.penultimate_width = Some(self.cursor_column);
                     self.cursor_column = c_width;
                     self.cursor_line += 1;
                     self.bg_line_idx.push(self.bg_buf.len() - c.len_utf8());
                 }
                 // typed character exactly fills cursor line
                 Ordering::Equal => {
+                    self.penultimate_width = Some(self.display_columns);
                     self.cursor_column = 0;
                     self.cursor_line += 1;
                     self.bg_line_idx.push(self.bg_buf.len());
@@ -289,6 +302,7 @@ impl LineReader {
                         self.cursor_column += c_width;
                     } else {
                         // new char pushes first ag_char to next line. cursor follows.
+                        self.penultimate_width = Some(self.cursor_column);
                         self.cursor_column = 0;
                         self.cursor_line += 1;
                         self.bg_line_idx.push(self.bg_buf.len() - c.len_utf8());
@@ -323,26 +337,21 @@ impl LineReader {
         {
             self.bg_buf.truncate(i);
             let prev_cursor_line = self.cursor_line;
+            let c_width = u16::try_from(c.width().unwrap_or(0)).unwrap();
 
-            if self.cursor_column == 0 {
+            if self.cursor_column == 0 && c_width > 0 {
                 // backspacing from column 0, wrap to position of
                 // removed char on preceding line.
-                let prev_beg = *self.bg_line_idx.iter().nth_back(1).unwrap();
-                self.cursor_column =
-                    u16::try_from(self.bg_buf[prev_beg..].width()).unwrap();
+                self.cursor_column = self.penultimate_width.unwrap() - c_width;
                 self.cursor_line -= 1;
             } else {
-                let c_width = u16::try_from(c.width().unwrap_or(0)).unwrap();
                 self.cursor_column -= c_width;
 
                 if self.cursor_column == 0 {
                     // backspacing to column 0 - check if room to wrap
                     // to end of preceding line
-                    if let Some(&prev_beg) = self.bg_line_idx.iter().nth_back(1)
-                    {
-                        let prev_w =
-                            u16::try_from(self.bg_buf[prev_beg..].width())
-                                .unwrap();
+                    eprintln!("{:?}", self.penultimate_width);
+                    if let Some(prev_w) = self.penultimate_width {
                         if prev_w < self.display_columns {
                             self.cursor_column = prev_w;
                             self.cursor_line -= 1;
@@ -352,58 +361,72 @@ impl LineReader {
             }
 
             if prev_cursor_line != self.cursor_line {
-                self.bg_line_idx.truncate(self.bg_line_idx.len() - 1);
+                self.bg_line_idx.pop();
+                self.penultimate_width = self
+                    .bg_line_idx
+                    .last()
+                    .map(|i| self.bg_buf[*i..].width())
+                    .map(|w| u16::try_from(w).unwrap());
                 if self.cursor_line < self.viewport_top() {
                     self.cursor_line += 1;
                     self.first_buffer_line -= 1;
                 }
             }
-            //            self.ag_display_bound = self.display_bound();
         }
         ControlFlow::Continue(())
     }
 
     fn handle_left(&mut self) -> ControlFlow<()> {
-        if let Some((prev_idx, prev_char)) = self
+        if let Some((prev_idx, prev_width)) = self
             .bg_buf
             .char_indices()
-            .rfind(|(_, c)| c.width().is_some_and(|w| w > 0))
-            .filter(|(i, _)| *i >= self.prompt_len)
+            .map(|(i, c)| (i, c, c.width()))
+            .rfind(|(_, _, w)| w.is_some_and(|w| w > 0))
+            .filter(|(i, _, _)| *i >= self.prompt_len)
+            .map(|(i, _, w)| (i, u16::try_from(w.unwrap()).unwrap()))
         {
             self.ag_buf.insert_str(0, &self.bg_buf[prev_idx..]);
             self.bg_buf.truncate(prev_idx);
             let prev_cursor_line = self.cursor_line;
 
             if self.cursor_column == 0 {
-                let prev_beg = *self.bg_line_idx.iter().nth_back(1).unwrap();
+                eprintln!("{:?} {prev_width}", self.penultimate_width);
                 self.cursor_column =
-                    u16::try_from(self.bg_buf[prev_beg..].width()).unwrap();
+                    self.penultimate_width.unwrap() - prev_width;
                 self.cursor_line -= 1;
             } else {
-                self.cursor_column -=
-                    u16::try_from(prev_char.width().unwrap_or(0)).unwrap();
+                self.cursor_column -= prev_width;
             }
             if prev_cursor_line != self.cursor_line {
-                self.bg_line_idx.truncate(self.bg_line_idx.len() - 1);
+                self.bg_line_idx.pop();
+                self.penultimate_width = self
+                    .bg_line_idx
+                    .last()
+                    .map(|i| self.bg_buf[*i..].width())
+                    .map(|w| u16::try_from(w).unwrap());
                 if self.cursor_line < self.viewport_top() {
                     self.cursor_line += 1;
                     self.first_buffer_line -= 1;
                 }
             }
-            //            self.ag_display_bound = self.display_bound();
         }
 
         ControlFlow::Continue(())
     }
 
     fn handle_delete(&mut self) -> ControlFlow<()> {
-        if let Some((next_idx, _)) = self
+        if let Some((next_idx, next_width)) = self
             .ag_buf
             .char_indices()
             .skip(1)
-            .find(|(_, c)| c.width().is_some_and(|w| w > 0))
+            .map(|(i, c)| (i, c, c.width()))
+            .find(|(_, _, w)| w.is_some_and(|w| w > 0))
+            .map(|(i, _, w)| (i, u16::try_from(w.unwrap()).unwrap()))
         {
             self.ag_buf.drain(..next_idx);
+            {
+                todo!("check if new ag_char fits prev line");
+            }
         } else if !self.ag_buf.is_empty() {
             self.ag_buf.clear();
         }
@@ -538,6 +561,7 @@ impl Default for LineReader {
             prompt_width: 0,
             bg_buf: String::new(),
             bg_line_idx: vec![0],
+            penultimate_width: None,
             ag_buf: String::new(),
             display_columns: 80,
             display_lines: 24,
@@ -545,7 +569,6 @@ impl Default for LineReader {
             cursor_line: 23,
             first_display_line: 23,
             first_buffer_line: 0,
-            //            ag_display_bound: 0,
             scroll_needed: 0,
         }
     }
@@ -752,6 +775,7 @@ mod tests {
         reader.display_lines = 10;
         reader.bg_buf.push_str(":1234567890123456789");
         reader.bg_line_idx = vec![0, 20];
+        reader.penultimate_width = Some(20);
         reader.first_display_line = 8;
         reader.cursor_line = 9;
         reader.cursor_column = 0;
@@ -776,6 +800,7 @@ mod tests {
         reader.display_lines = 10;
         reader.bg_buf.push_str(":123456789012345678🎸");
         reader.bg_line_idx = vec![0, 20];
+        reader.penultimate_width = Some(19);
         reader.first_display_line = 8;
         reader.cursor_line = 9;
         reader.cursor_column = 2;
@@ -826,6 +851,7 @@ mod tests {
             display_lines: 5,
             bg_buf: lines.join(""),
             bg_line_idx: vec![0, 20, 40, 60, 80, 100],
+            penultimate_width: Some(20),
             prompt_len: 1,
             prompt_width: 1,
             cursor_column: 0,
@@ -925,6 +951,7 @@ mod tests {
         let mut reader = LineReader {
             bg_buf: ":01234567🎸".to_owned(),
             bg_line_idx: vec![0, 10],
+            penultimate_width: Some(10),
             prompt_width: 1,
             prompt_len: 1,
             display_columns: 10,
@@ -938,7 +965,7 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
-        assert_eq!((reader.cursor_column, reader.cursor_line), (9, 3));
+        assert_eq!((reader.cursor_column, reader.cursor_line), (8, 3));
     }
 
     #[test]
@@ -956,6 +983,7 @@ mod tests {
             display_lines: 5,
             bg_buf: lines.join(""),
             bg_line_idx: vec![0, 20, 40, 60, 80, 100],
+            penultimate_width: Some(20),
             prompt_len: 1,
             prompt_width: 1,
             cursor_column: 0,
@@ -1082,32 +1110,29 @@ mod tests {
     }
 
     #[test]
-    fn delete_wraps_cursor_if_first_ag_char_on_next_line() {
-        todo!();
-    }
+    fn delete_wraps_cursor_if_first_ag_char_fits_prev_line() {
+        let mut reader = LineReader {
+            display_columns: 10,
+            display_lines: 5,
+            first_display_line: 0,
+            bg_buf: ":12345678".to_owned(),
+            prompt_len: 1,
+            prompt_width: 1,
+            ag_buf: "🎸ab".to_owned(),
+            bg_line_idx: vec![0, 9],
+            cursor_line: 1,
+            cursor_column: 0,
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
 
-    //    #[test]
-    //    fn delete_adjusts_display_end() {
-    //        let mut reader = LineReader {
-    //            ag_buf: "123456789012345678901".to_owned(),
-    //            display_columns: 10,
-    //            display_lines: 5,
-    //            first_display_line: 3,
-    //            cursor_line: 3,
-    //            ag_display_bound: 20,
-    //            ..Default::default()
-    //        };
-    //        let event =
-    //            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-    //
-    //        let res = reader.handle_event(&event);
-    //        assert!(res.is_continue());
-    //        assert_eq!(reader.ag_display_bound, 20);
-    //
-    //        let res = reader.handle_event(&event);
-    //        assert!(res.is_continue());
-    //        assert_eq!(reader.ag_display_bound, 19);
-    //    }
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_line, 0, "cursor_line");
+        assert_eq!(reader.cursor_column, 9, "cursor_column");
+        assert_eq!(reader.bg_line_idx, [0]);
+    }
 
     #[test]
     fn viewport_bottom() {
