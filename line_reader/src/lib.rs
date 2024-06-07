@@ -249,17 +249,9 @@ impl LineReader {
         }
 
         let c_width = u16::try_from(c_width).unwrap();
-        //        let mut bg_line_iter = self.bg_line_idx.iter();
-        //        let last_line_idx = *bg_line_iter.next_back().unwrap();
         let last_line_space = self.display_columns - self.cursor_column;
         let prev_line_space =
             self.penultimate_width.map(|w| self.display_columns - w);
-        //        let last_line_space = self.display_columns
-        //            - u16::try_from(self.bg_buf[last_line_idx..].width()).unwrap();
-        //        let prev_line_space = bg_line_iter.next_back().map(|i| {
-        //            self.display_columns
-        //                - u16::try_from(self.bg_buf[*i..last_line_idx].width()).unwrap()
-        //        });
 
         self.bg_buf.push(c);
 
@@ -424,13 +416,19 @@ impl LineReader {
             .map(|(i, _, w)| (i, u16::try_from(w.unwrap()).unwrap()))
         {
             self.ag_buf.drain(..next_idx);
-            {
-                todo!("check if new ag_char fits prev line");
+            if let Some(penultimate_width) = self.penultimate_width {
+                if self.display_columns - penultimate_width <= next_width {
+                    self.cursor_column = penultimate_width;
+                    self.cursor_line -= 1;
+                    self.bg_line_idx.pop();
+                    self.penultimate_width = self.bg_line_idx.last().map(|i| {
+                        u16::try_from(self.bg_buf[*i..].width()).unwrap()
+                    });
+                }
             }
         } else if !self.ag_buf.is_empty() {
             self.ag_buf.clear();
         }
-        //        self.ag_display_bound = self.display_bound();
         ControlFlow::Continue(())
     }
 
@@ -1120,6 +1118,7 @@ mod tests {
             prompt_width: 1,
             ag_buf: "🎸ab".to_owned(),
             bg_line_idx: vec![0, 9],
+            penultimate_width: Some(9),
             cursor_line: 1,
             cursor_column: 0,
             ..Default::default()
