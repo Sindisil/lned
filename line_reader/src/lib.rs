@@ -58,7 +58,7 @@ pub struct LineReader {
     first_buffer_line: usize,
 
     /// Number of chars from `ag_buf` that will fit in display
-    ag_display_chars: usize,
+    //    ag_display_bound: usize,
 
     /// Lines to scroll up before rendering
     scroll_needed: u16,
@@ -241,27 +241,60 @@ impl LineReader {
             return ControlFlow::Continue(());
         }
 
-        let new_char_idx = self.bg_buf.len();
+        let c_width = u16::try_from(c_width).unwrap();
+        let mut bg_line_iter = self.bg_line_idx.iter();
+        let last_line_idx = *bg_line_iter.next_back().unwrap();
+        let last_line_space = self.display_columns
+            - u16::try_from(self.bg_buf[last_line_idx..].width()).unwrap();
+        let prev_line_space = bg_line_iter.next_back().map(|i| {
+            self.display_columns
+                - u16::try_from(self.bg_buf[*i..last_line_idx].width()).unwrap()
+        });
+
         self.bg_buf.push(c);
 
-        let c_width = u16::try_from(c_width).unwrap();
-        self.cursor_column += c_width;
-
-        match self.cursor_column.cmp(&self.display_columns) {
-            // typec character overflows cursor line
-            Ordering::Greater => {
-                self.cursor_column = c_width;
-                self.cursor_line += 1;
-                self.bg_line_idx.push(new_char_idx);
+        if self.cursor_column == 0 {
+            if let Some(prev_line_space) = prev_line_space {
+                // if there's a line before the cursor line
+                if prev_line_space < c_width {
+                    // new char doesnt fit on previous line
+                    self.cursor_column += c_width;
+                } else if let Some(i) = self.bg_line_idx.last_mut() {
+                    // New char fits prev line. Adjust last bg_line_idx.
+                    *i += c.len_utf8();
+                }
             }
-            // typed character exactly fills cursor line
-            Ordering::Equal => {
-                self.cursor_column = 0;
-                self.cursor_line += 1;
-                self.bg_line_idx.push(self.bg_buf.chars().count());
+        } else {
+            match last_line_space.cmp(&c_width) {
+                // typed character overflows cursor line
+                Ordering::Less => {
+                    self.cursor_column = c_width;
+                    self.cursor_line += 1;
+                    self.bg_line_idx.push(self.bg_buf.len() - c.len_utf8());
+                }
+                // typed character exactly fills cursor line
+                Ordering::Equal => {
+                    self.cursor_column = 0;
+                    self.cursor_line += 1;
+                    self.bg_line_idx.push(self.bg_buf.len());
+                }
+                // typed character fits on cursor line
+                Ordering::Greater => {
+                    let ag_char_width =
+                        self.ag_buf.chars().next().map_or(0, |c| {
+                            u16::try_from(c.width().unwrap_or(0)).unwrap()
+                        });
+                    if last_line_space >= c_width + ag_char_width {
+                        // new char doesn't push first ag_char to next line
+                        self.cursor_column += c_width;
+                    } else {
+                        // new char pushes first ag_char to next line. cursor follows.
+                        self.cursor_column = 0;
+                        self.cursor_line += 1;
+                        self.bg_line_idx.push(self.bg_buf.len() - c.len_utf8());
+                    }
+                }
             }
-            // typed character fits on cursor line
-            Ordering::Less => (),
         }
 
         // handle cursor moving below viewport bottom
@@ -278,7 +311,6 @@ impl LineReader {
             }
         }
 
-        self.ag_display_chars = self.display_remainder();
         ControlFlow::Continue(())
     }
 
@@ -326,7 +358,7 @@ impl LineReader {
                     self.first_buffer_line -= 1;
                 }
             }
-            self.ag_display_chars = self.display_remainder();
+            //            self.ag_display_bound = self.display_bound();
         }
         ControlFlow::Continue(())
     }
@@ -358,7 +390,7 @@ impl LineReader {
                     self.first_buffer_line -= 1;
                 }
             }
-            self.ag_display_chars = self.display_remainder();
+            //            self.ag_display_bound = self.display_bound();
         }
 
         ControlFlow::Continue(())
@@ -375,7 +407,7 @@ impl LineReader {
         } else if !self.ag_buf.is_empty() {
             self.ag_buf.clear();
         }
-        self.ag_display_chars = self.display_remainder();
+        //        self.ag_display_bound = self.display_bound();
         ControlFlow::Continue(())
     }
 
@@ -396,12 +428,12 @@ impl LineReader {
     }
 
     /// Compute portion of `ag_buf` that fits in display
-    fn display_remainder(&self) -> usize {
+    fn ag_display_bound(&self) -> usize {
         let d_width = usize::from(self.display_columns);
         let mut col = usize::from(self.cursor_column);
         let mut line = self.cursor_line;
-        let mut n = 0;
-        for c in self.ag_buf.chars() {
+        let mut indices = self.ag_buf.char_indices();
+        for (_, c) in indices.by_ref() {
             let c_width = c.width().unwrap_or(0);
             col += c_width;
             if col > d_width {
@@ -411,9 +443,8 @@ impl LineReader {
                 }
                 col = c_width;
             }
-            n += 1;
         }
-        n
+        indices.next().map_or_else(|| self.ag_buf.len(), |(i, _)| i)
     }
 
     /// Move gap (insetion point) to end of buffer
@@ -478,8 +509,9 @@ impl LineReader {
                     .as_bytes(),
             )?;
         if !self.ag_buf.is_empty() {
-            stdout
-                .write_all(self.ag_buf[0..self.ag_display_chars].as_bytes())?;
+            stdout.write_all(
+                self.ag_buf[0..self.ag_display_bound()].as_bytes(),
+            )?;
         }
         stdout
             .queue(MoveTo(self.cursor_column, self.cursor_line))?
@@ -513,7 +545,7 @@ impl Default for LineReader {
             cursor_line: 23,
             first_display_line: 23,
             first_buffer_line: 0,
-            ag_display_chars: 0,
+            //            ag_display_bound: 0,
             scroll_needed: 0,
         }
     }
@@ -873,6 +905,8 @@ mod tests {
         // 1w with combining character
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
+        assert_eq!(reader.ag_buf, "ë🎸f");
+        assert_eq!(reader.ag_display_bound(), 8);
         assert_eq!(reader.cursor_column, 2);
 
         // 1 to prompt
@@ -1048,27 +1082,32 @@ mod tests {
     }
 
     #[test]
-    fn delete_adjusts_display_end() {
-        let mut reader = LineReader {
-            ag_buf: "123456789012345678901".to_owned(),
-            display_columns: 10,
-            display_lines: 5,
-            first_display_line: 3,
-            cursor_line: 3,
-            ag_display_chars: 20,
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.ag_display_chars, 20);
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.ag_display_chars, 19);
+    fn delete_wraps_cursor_if_first_ag_char_on_next_line() {
+        todo!();
     }
+
+    //    #[test]
+    //    fn delete_adjusts_display_end() {
+    //        let mut reader = LineReader {
+    //            ag_buf: "123456789012345678901".to_owned(),
+    //            display_columns: 10,
+    //            display_lines: 5,
+    //            first_display_line: 3,
+    //            cursor_line: 3,
+    //            ag_display_bound: 20,
+    //            ..Default::default()
+    //        };
+    //        let event =
+    //            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+    //
+    //        let res = reader.handle_event(&event);
+    //        assert!(res.is_continue());
+    //        assert_eq!(reader.ag_display_bound, 20);
+    //
+    //        let res = reader.handle_event(&event);
+    //        assert!(res.is_continue());
+    //        assert_eq!(reader.ag_display_bound, 19);
+    //    }
 
     #[test]
     fn viewport_bottom() {
@@ -1097,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn display_remainder() {
+    fn display_bound_finds_display_end() {
         let mut reader = LineReader::new();
         reader.display_columns = 20;
         reader.display_lines = 24;
@@ -1109,19 +1148,19 @@ mod tests {
         reader.cursor_line = 22;
 
         // ag_buf.is_empty()
-        assert_eq!(reader.display_remainder(), 0);
+        assert_eq!(reader.ag_display_bound(), 0);
 
         // ag_buf.width() < cursor line remainder
         reader.ag_buf.push_str("123🎸");
-        assert_eq!(reader.display_remainder(), 4);
+        assert_eq!(reader.ag_display_bound(), 7);
 
         // ag_buf.width() == cursor line remainder
         reader.ag_buf.push_str("678🎸");
-        assert_eq!(reader.display_remainder(), 8);
+        assert_eq!(reader.ag_display_bound(), 14);
 
         // ag_buf.width() > cursor line remainder
         reader.ag_buf.push_str("1234567890123456789🎸12345");
-        assert_eq!(reader.display_remainder(), 26);
+        assert_eq!(reader.ag_display_bound(), 33);
     }
 
     // Char insertion tests
@@ -1211,7 +1250,42 @@ mod tests {
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
         assert_eq!((reader.cursor_column, reader.cursor_line), (0, 1));
-        assert_eq!(reader.bg_line_idx, vec![0, 9]);
+        assert_eq!(reader.bg_line_idx, vec![0, 12]);
+    }
+
+    #[test]
+    fn char_typed_cursor_follows_next_char_pushed_to_next_line() {
+        let mut reader = LineReader {
+            display_columns: 10,
+            display_lines: 5,
+            bg_buf: ":1234567".to_owned(),
+            prompt_len: 1,
+            prompt_width: 1,
+            ag_buf: "🎸abcdef".to_owned(),
+            first_display_line: 0,
+            first_buffer_line: 0,
+            cursor_column: 8,
+            cursor_line: 0,
+            ..Default::default()
+        };
+
+        // inserting '8' pushes '🎸' to start of next line,
+        // but leaves one blank column on current line.
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Char('8'), KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_line, 1, "reader.cursor_line");
+        assert_eq!(reader.cursor_column, 0, "reader.cursor_column");
+
+        // inserting '9' should fit on previous line, leaving
+        // cursor line unchanged.
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_line, 1, "cursor_line");
+        assert_eq!(reader.cursor_column, 0, "cursor_column");
     }
 
     #[test]
@@ -1299,7 +1373,7 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 119]);
+        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 122]);
         assert_eq!((reader.cursor_column, reader.cursor_line), (0, 4));
         assert_eq!(reader.first_display_line, 0);
         assert_eq!(reader.first_buffer_line, 2);
@@ -1322,7 +1396,7 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 119]);
+        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 122]);
         assert_eq!((reader.cursor_column, reader.cursor_line), (0, 3));
         assert_eq!(reader.first_display_line, 0);
         assert_eq!(reader.first_buffer_line, 3);
@@ -1330,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn char_typed_when_ag_overflows_stops_at_display_remainder() {
+    fn char_typed_when_ag_overflows_stops_at_display_bound() {
         let lines = [
             ":1234567890123456789",
             "01234567890123456789",
@@ -1356,6 +1430,6 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
-        assert_eq!(reader.ag_display_chars, 38);
+        assert_eq!(reader.ag_display_bound(), 39);
     }
 }
