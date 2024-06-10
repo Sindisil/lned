@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn home_moves_to_beginning() {
+    fn home_moves_all_before_gap_to_after_gap() {
         let mut reader = LineReader {
             bg_buf: "lmn".to_owned(),
             ag_buf: "op".to_owned(),
@@ -1215,7 +1215,22 @@ mod tests {
     }
 
     #[test]
-    fn end_moves_to_end() {
+    fn home_at_beginning_does_nothing() {
+        todo!();
+    }
+
+    #[test]
+    fn home_moves_cursor_to_first_column_after_prompt() {
+        todo!();
+    }
+
+    #[test]
+    fn home_past_top_when_ag_fits_pans_buffer() {
+        todo!();
+    }
+
+    #[test]
+    fn end_moves_all_after_gap_to_before_gap() {
         let mut reader = LineReader {
             bg_buf: "lmn".to_owned(),
             ag_buf: "op".to_owned(),
@@ -1227,6 +1242,31 @@ mod tests {
         assert!(res.is_continue());
         assert_eq!(reader.bg_buf, "lmnop");
         assert!(reader.ag_buf.is_empty());
+    }
+
+    #[test]
+    fn end_at_end_does_nothing() {
+        todo!();
+    }
+
+    #[test]
+    fn end_moves_cursor_to_after_last_input_char() {
+        todo!();
+    }
+
+    #[test]
+    fn end_past_eol_wraps_cursor() {
+        todo!();
+    }
+
+    #[test]
+    fn end_past_bottom_when_bg_fits_pans_display() {
+        todo!();
+    }
+
+    #[test]
+    fn end_past_bottom_when_bg_overflows_pans_buffer() {
+        todo!();
     }
 
     #[test]
@@ -1453,15 +1493,48 @@ mod tests {
         assert!(res.is_continue());
         assert_eq!(reader.cursor_line, 1, "reader.cursor_line");
         assert_eq!(reader.cursor_column, 0, "reader.cursor_column");
+    }
+
+    #[test]
+    fn char_typed_with_space_at_end_of_previous_line() {
+        let reader_start = LineReader {
+            display_width: 10,
+            display_lines: 5,
+            bg_buf: ":12345678".to_owned(),
+            prompt_len: 1,
+            prompt_width: 1,
+            ag_buf: "🎸abcd".to_owned(),
+            first_display_line: 0,
+            cursor_column: 0,
+            cursor_line: 1,
+            bg_line_idx: vec![0, 9],
+            penultimate_width: Some(9),
+            ..Default::default()
+        };
 
         // inserting '9' should fit on previous line, leaving
         // cursor line unchanged.
+        let mut reader = reader_start.clone();
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
         assert_eq!(reader.cursor_line, 1, "cursor_line");
         assert_eq!(reader.cursor_column, 0, "cursor_column");
+        assert!(matches!(reader.penultimate_width, Some(w) if w == 10));
+        assert_eq!(reader.bg_line_idx, [0, 10]);
+
+        // inserting '🎸' shouldn't fit on previous line, incrementing
+        // cursor as a normal insert
+        let mut reader = reader_start.clone();
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_line, 1, "cursor_line");
+        assert_eq!(reader.cursor_column, 2, "cursor_column");
+        assert_eq!(reader.bg_line_idx, [0, 9]);
+        assert!(matches!(reader.penultimate_width, Some(w) if w == 9));
     }
 
     #[test]
@@ -1607,5 +1680,30 @@ mod tests {
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
         assert_eq!(reader.ag_display_bound(), 39);
+    }
+
+    #[test]
+    fn resize_of_height_does_not_reflow_buffer() {
+        todo!();
+    }
+
+    #[test]
+    fn resize_changing_width_reflows_buffer() {
+        todo!();
+    }
+
+    #[test]
+    fn resize_changing_both_reflows_buffer() {
+        todo!();
+    }
+
+    #[test]
+    fn resize_smaller() {
+        todo!();
+    }
+
+    #[test]
+    fn resize_larger() {
+        todo!();
     }
 }
