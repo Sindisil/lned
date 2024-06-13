@@ -22,13 +22,13 @@ pub trait LineRead {
     ) -> io::Result<usize>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LineReader {
     /// prompt length, in characters
     prompt_len: usize,
 
     /// prompt display width, in columns
-    prompt_width: usize,
+    prompt_width: u16,
 
     /// characters before the gap (before cursor)
     bg_buf: String,
@@ -109,7 +109,7 @@ impl LineReader {
 
         // initialize gap bufferwith prompt
         self.bg_buf += prompt;
-        self.prompt_width = prompt.width();
+        self.prompt_width = u16::try_from(prompt.width()).unwrap();
         self.prompt_len = prompt.len();
 
         // initialize display line indices & widths
@@ -319,7 +319,6 @@ impl LineReader {
                 if self.cursor_column == 0 {
                     // backspacing to column 0 - check if room to wrap
                     // to end of preceding line
-                    eprintln!("{:?}", self.penultimate_width);
                     if let Some(prev_w) = self.penultimate_width {
                         if prev_w < self.display_width {
                             self.cursor_column = prev_w;
@@ -359,7 +358,6 @@ impl LineReader {
             let prev_cursor_line = self.cursor_line;
 
             if self.cursor_column == 0 {
-                eprintln!("{:?} {prev_width}", self.penultimate_width);
                 self.cursor_column =
                     self.penultimate_width.unwrap() - prev_width;
                 self.cursor_line -= 1;
@@ -454,6 +452,13 @@ impl LineReader {
     fn handle_home(&mut self) -> ControlFlow<()> {
         self.ag_buf
             .insert_str(0, self.bg_buf.drain(self.prompt_len..).as_ref());
+        self.cursor_line = u16::try_from(self.bg_line_idx.len() - 1)
+            .map_or(0, |l| self.cursor_line.saturating_sub(l));
+        self.cursor_column = self.prompt_width;
+        self.bg_line_idx.splice(.., [0]);
+        self.penultimate_width = None;
+        self.first_buffer_line = 0;
+        self.first_display_line = self.cursor_line;
         ControlFlow::Continue(())
     }
 
@@ -899,7 +904,7 @@ mod tests {
     }
 
     #[test]
-    fn backspace_moving_cursor_past_top_pans_buffer() {
+    fn backspace_moving_cursor_above_top_pans_buffer() {
         let lines = [
             ":1234567890123456789",
             "a1234567890123456789",
@@ -1251,17 +1256,99 @@ mod tests {
 
     #[test]
     fn home_at_beginning_does_nothing() {
-        todo!();
+        let mut reader = LineReader {
+            bg_buf: ":".to_owned(),
+            prompt_len: 1,
+            prompt_width: 1,
+            ag_buf: "abc".to_owned(),
+            cursor_column: 1,
+            ..Default::default()
+        };
+        let expected_reader = reader.clone();
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected_reader);
     }
 
     #[test]
     fn home_moves_cursor_to_first_column_after_prompt() {
-        todo!();
+        let lines = [
+            ":123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "012345678",
+            "🎸abc",
+        ];
+
+        let mut reader = LineReader {
+            display_width: 10,
+            bg_buf: lines[0..6].join(""),
+            bg_line_idx: vec![0, 10, 20, 30, 40, 50, 60, 69],
+            penultimate_width: Some(9),
+            prompt_width: 1,
+            prompt_len: 1,
+            cursor_column: 0,
+            cursor_line: 17,
+            first_display_line: 10,
+            ag_buf: lines[7..].join(""),
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.bg_line_idx, [0]);
+        assert!(reader.penultimate_width.is_none(),);
+        assert_eq!(reader.cursor_column, 1, "cursor_column");
+        assert_eq!(reader.cursor_line, 10, "cursor_line");
+        assert_eq!(reader.first_display_line, 10);
     }
 
     #[test]
-    fn home_past_top_when_ag_fits_pans_buffer() {
-        todo!();
+    fn home_above_top_pans_buffer() {
+        let lines = [
+            ":123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "012345678",
+            "🎸abc",
+        ];
+
+        let mut reader = LineReader {
+            display_width: 10,
+            display_lines: 5,
+            bg_buf: lines[0..6].join(""),
+            bg_line_idx: vec![0, 10, 20, 30, 40, 50, 60, 69],
+            penultimate_width: Some(9),
+            prompt_width: 1,
+            prompt_len: 1,
+            cursor_column: 0,
+            cursor_line: 4,
+            first_display_line: 0,
+            first_buffer_line: 3,
+            ag_buf: lines[7..].join(""),
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.bg_line_idx, [0]);
+        assert!(reader.penultimate_width.is_none(),);
+        assert_eq!(reader.cursor_column, 1, "cursor_column");
+        assert_eq!(reader.cursor_line, 0, "cursor_line");
+        assert_eq!(reader.first_buffer_line, 0);
     }
 
     #[test]
@@ -1860,26 +1947,31 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn resize_of_height_does_not_reflow_buffer() {
         todo!();
     }
 
     #[test]
+    #[ignore]
     fn resize_changing_width_reflows_buffer() {
         todo!();
     }
 
     #[test]
+    #[ignore]
     fn resize_changing_both_reflows_buffer() {
         todo!();
     }
 
     #[test]
+    #[ignore]
     fn resize_smaller() {
         todo!();
     }
 
     #[test]
+    #[ignore]
     fn resize_larger() {
         todo!();
     }
