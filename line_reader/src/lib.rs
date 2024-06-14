@@ -171,11 +171,13 @@ impl LineReader {
             self.repaint()?;
         }
 
-        let bytes_read =
-            self.bg_buf.len() - self.prompt_len + self.ag_buf.len();
-        self.move_to_end()?;
+        self.handle_end();
+        self.repaint()?;
+        let mut stdout = io::stdout().lock();
+        stdout.queue(MoveToNextLine(1))?;
+        stdout.flush()?;
+        let bytes_read = self.bg_buf.len() - self.prompt_len;
         *output_buffer += &self.bg_buf[self.prompt_len..];
-        *output_buffer += &self.ag_buf;
         self.bg_buf.clear();
         self.ag_buf.clear();
         Ok(bytes_read)
@@ -541,57 +543,21 @@ impl LineReader {
         let d_width = usize::from(self.display_width);
         let mut col = usize::from(self.cursor_column);
         let mut line = self.cursor_line;
-        let mut indices = self.ag_buf.char_indices();
-        for (_, c) in indices.by_ref() {
+        for (i, c) in self.ag_buf.char_indices() {
             let c_width = c.width().unwrap_or(0);
             col += c_width;
             if col > d_width {
                 line += 1;
                 if line == self.display_lines {
-                    break;
+                    return i;
                 }
                 col = c_width;
             }
         }
-        indices.next().map_or_else(|| self.ag_buf.len(), |(i, _)| i)
+        self.ag_buf.len()
     }
 
     /// Move gap (insetion point) to end of buffer
-    /// Move gap (insertion point) to beginning of buffer
-    #[cfg(not(tarpaulin_include))]
-    fn move_to_end(&mut self) -> io::Result<()> {
-        let (mut cur_col, mut cur_line) = cursor::position()?;
-        let ag_buf_width = self.ag_buf.width();
-
-        let mut stdout = io::stdout().lock();
-        let term_height = usize::from(self.display_lines);
-        let last_line = ag_buf_width / usize::from(self.display_width)
-            + usize::from(cur_line);
-        let new_cursor_line = last_line + 1;
-        if new_cursor_line >= term_height {
-            let scroll_needed = new_cursor_line - term_height + 1;
-            if scroll_needed >= term_height {
-                cur_line = 0;
-                cur_col = 0;
-            } else {
-                let scroll_needed = u16::try_from(scroll_needed).expect(
-                    "scroll_needed < term_height, so should fit in u16",
-                );
-                stdout.queue(ScrollUp(scroll_needed))?;
-                cur_line -= scroll_needed;
-            }
-            stdout
-                .queue(MoveTo(cur_col, cur_line))?
-                .queue(Clear(ClearType::FromCursorDown))?;
-            let offset = ag_buf_width.saturating_sub(
-                ((self.display_lines - 1) * self.display_width) as usize,
-            );
-            write!(stdout, "{}", &self.ag_buf[offset..])?;
-        }
-        stdout.queue(MoveToNextLine(1))?;
-        stdout.flush()
-    }
-
     #[cfg(not(tarpaulin_include))]
     /// render current buffer to display
     fn repaint(&mut self) -> io::Result<()> {
@@ -1348,7 +1314,8 @@ mod tests {
         assert!(reader.penultimate_width.is_none(),);
         assert_eq!(reader.cursor_column, 1, "cursor_column");
         assert_eq!(reader.cursor_line, 0, "cursor_line");
-        assert_eq!(reader.first_buffer_line, 0);
+        assert_eq!(reader.first_buffer_line, 0, "first_buffer_line");
+        assert_eq!(reader.first_display_line, 0, "first_display_line");
     }
 
     #[test]
@@ -1640,7 +1607,7 @@ mod tests {
 
         // ag_buf.width() > cursor line remainder
         reader.ag_buf.push_str("1234567890123456789🎸12345");
-        assert_eq!(reader.ag_display_bound(), 33);
+        assert_eq!(reader.ag_display_bound(), 32);
     }
 
     // Char insertion tests
@@ -1924,7 +1891,7 @@ mod tests {
             "01234567890123456789",
             "01234567890123456789",
             "01234567890123456789",
-            "012345678901234568",
+            "012345678901234567",
         ];
 
         let mut reader = LineReader::new();
@@ -1934,7 +1901,7 @@ mod tests {
         reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
         reader.prompt_len = 1;
         reader.prompt_width = 1;
-        reader.cursor_column = 19;
+        reader.cursor_column = 18;
         reader.cursor_line = 3;
         reader.first_display_line = 0;
         reader.first_buffer_line = 1;
