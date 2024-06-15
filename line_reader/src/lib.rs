@@ -335,12 +335,13 @@ impl LineReader {
                 self.penultimate_width = self
                     .bg_line_idx
                     .last()
+                    .filter(|i| **i > 0)
                     .map(|i| self.bg_buf[*i..].width())
                     .map(|w| u16::try_from(w).unwrap());
-                if self.cursor_line < self.viewport_top() {
-                    self.cursor_line += 1;
-                    self.first_buffer_line -= 1;
-                }
+            }
+            if self.cursor_line < self.viewport_top() {
+                self.cursor_line += 1;
+                self.first_buffer_line -= 1;
             }
         }
         ControlFlow::Continue(())
@@ -357,26 +358,24 @@ impl LineReader {
         {
             self.ag_buf.insert_str(0, &self.bg_buf[prev_idx..]);
             self.bg_buf.truncate(prev_idx);
-            let prev_cursor_line = self.cursor_line;
 
             if self.cursor_column == 0 {
                 self.cursor_column =
                     self.penultimate_width.unwrap() - prev_width;
-                self.cursor_line -= 1;
-            } else {
-                self.cursor_column -= prev_width;
-            }
-            if prev_cursor_line != self.cursor_line {
                 self.bg_line_idx.pop();
                 self.penultimate_width = self
                     .bg_line_idx
                     .last()
+                    .filter(|i| **i != 0)
                     .map(|i| self.bg_buf[*i..].width())
                     .map(|w| u16::try_from(w).unwrap());
-                if self.cursor_line < self.viewport_top() {
-                    self.cursor_line += 1;
+                if self.cursor_line == self.viewport_top() {
                     self.first_buffer_line -= 1;
+                } else {
+                    self.cursor_line -= 1;
                 }
+            } else {
+                self.cursor_column -= prev_width;
             }
         }
 
@@ -824,6 +823,49 @@ mod tests {
     }
 
     #[test]
+    fn backspace_to_prev_line_sets_penultimate_width() {
+        // wrapping to non-prompt line
+        let mut reader = LineReader {
+            display_width: 10,
+            display_lines: 5,
+            bg_buf: ":12345678🎸23456789".to_owned(),
+            prompt_width: 1,
+            prompt_len: 1,
+            bg_line_idx: vec![0, 9, 22],
+            cursor_line: 2,
+            cursor_column: 0,
+            penultimate_width: Some(9),
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.bg_line_idx, [0, 9]);
+        assert!(reader.penultimate_width.is_some_and(|w| w == 9));
+
+        // wrapping to prompt line
+        let mut reader = LineReader {
+            display_width: 10,
+            display_lines: 5,
+            bg_buf: ":12345678🎸".to_owned(),
+            prompt_width: 1,
+            prompt_len: 1,
+            bg_line_idx: vec![0, 9],
+            cursor_line: 1,
+            cursor_column: 2,
+            penultimate_width: Some(9),
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.bg_line_idx, [0]);
+        assert!(reader.penultimate_width.is_none());
+    }
+
+    #[test]
     fn backspace_to_column_0_wraps_cursor_if_room() {
         // room on preceding line
         let mut reader = LineReader::new();
@@ -982,15 +1024,14 @@ mod tests {
     #[test]
     fn left_at_column_0_wraps_cursor_to_preceding_line() {
         let mut reader = LineReader {
-            bg_buf: ":01234567🎸".to_owned(),
-            bg_line_idx: vec![0, 10],
+            bg_buf: ":12345678🎸23456789".to_owned(),
+            bg_line_idx: vec![0, 9, 20],
             penultimate_width: Some(10),
             prompt_width: 1,
             prompt_len: 1,
             display_width: 10,
             display_lines: 5,
-            first_display_line: 3,
-            cursor_line: 4,
+            cursor_line: 2,
             cursor_column: 0,
             ..Default::default()
         };
@@ -998,7 +1039,41 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
-        assert_eq!((reader.cursor_column, reader.cursor_line), (8, 3));
+        assert_eq!((reader.cursor_column, reader.cursor_line), (9, 1));
+        assert!(reader.penultimate_width.is_some_and(|w| w == 9));
+        assert_eq!(reader.bg_line_idx, [0, 9]);
+
+        reader.cursor_column = 0;
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!((reader.cursor_column, reader.cursor_line), (8, 0));
+        assert!(reader.penultimate_width.is_none());
+        assert_eq!(reader.bg_line_idx, [0]);
+    }
+
+    #[test]
+    fn left_wrapping_to_first_line() {
+        let mut reader = LineReader {
+            display_width: 10,
+            display_lines: 5,
+            first_display_line: 0,
+            first_buffer_line: 0,
+            bg_buf: ":0123456789".to_owned(),
+            prompt_len: 1,
+            prompt_width: 1,
+            bg_line_idx: vec![0, 10],
+            penultimate_width: Some(10),
+            cursor_line: 1,
+            cursor_column: 0,
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!((reader.cursor_column, reader.cursor_line), (9, 0));
+        assert!(reader.penultimate_width.is_none());
     }
 
     #[test]
