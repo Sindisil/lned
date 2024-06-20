@@ -1,6 +1,5 @@
-use std::cmp::{self, Ordering};
 use std::io::{self, BufRead, Write};
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, RangeBounds};
 
 use crossterm::cursor::{self, Hide, MoveTo, MoveToNextLine, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
@@ -22,53 +21,39 @@ pub trait LineRead {
     ) -> io::Result<usize>;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct LineReader {
-    /// prompt length, in characters
-    prompt_len: usize,
-
-    /// prompt display width, in columns
-    prompt_width: u16,
-
-    /// characters before the gap (before cursor)
-    bg_buf: String,
-
-    /// indicies of characters that start display lines
-    bg_line_idx: Vec<usize>,
-
-    /// width in columns of line before cursor line, if any
-    penultimate_width: Option<u16>,
-
-    /// characters after the gap (at or after cursor)
-    ag_buf: String,
-
-    /// current display width, in columns
-    display_width: u16,
-
-    /// current display height, in lines
-    display_lines: u16,
-
-    /// Terminal column of cursor position (0 based)
-    cursor_column: u16,
-
-    /// Terminal line of cursor position (0 based)
-    cursor_line: u16,
-
-    /// First display line used
-    first_display_line: u16,
-
-    /// First buffer line displayed
+    buffer: Vec<BufferLine>,
+    input_start: BufferIndex,
+    display_width: usize,
+    display_height: usize,
+    cursor: Cursor,
+    first_display_line: usize,
     first_buffer_line: usize,
-
-    /// Number of chars from `ag_buf` that will fit in display
-    //    ag_display_bound: usize,
-
-    /// Lines to scroll up before rendering
-    scroll_needed: u16,
+    scroll_needed: usize,
 }
 
-// Private structs and enums
-////////
+// Non-public structs, enums, and traits
+///////////////
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct BufferLine {
+    text: String,
+    width: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct BufferIndex {
+    line: usize,
+    offset: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct Cursor {
+    column: usize,
+    line: usize,
+    index: BufferIndex,
+}
 
 /// Struct used to handle enabling `raw_mode`, and more importantly,
 /// who's Drop ensures exiting `raw_mode` and that the cursor doesn't
@@ -88,6 +73,12 @@ pub fn native_eol() -> &'static str {
     }
 }
 
+impl BufferLine {
+    fn len(&self) -> usize {
+        self.text.len()
+    }
+}
+
 // impls for LineReader
 ////////
 
@@ -97,68 +88,42 @@ impl LineReader {
         LineReader { ..Default::default() }
     }
 
+    fn reset(
+        &mut self,
+        display_width: usize,
+        display_height: usize,
+        first_display_line: usize,
+        prompt: &str,
+    ) {
+        self.display_width = display_width;
+        self.display_height = display_height;
+        self.first_display_line = first_display_line;
+        let prompt_line =
+            BufferLine { text: prompt.to_owned(), width: prompt.width() };
+        self.cursor = Cursor {
+            column: prompt_line.width,
+            line: 0,
+            index: BufferIndex { line: 0, offset: prompt_line.text.len() },
+        };
+        self.buffer.splice(.., [prompt_line]);
+        self.reflow(..);
+    }
+
     #[cfg(not(tarpaulin_include))]
     fn accept_line(
         &mut self,
         prompt: &str,
         output_buffer: &mut String,
     ) -> io::Result<usize> {
-        // Get the initial display dimensions
-        (self.display_width, self.display_lines) = terminal::size()?;
-        let (_, initial_cursor_line) = cursor::position()?;
-
-        // initialize gap bufferwith prompt
-        self.bg_buf += prompt;
-        self.prompt_width = u16::try_from(prompt.width()).unwrap();
-        self.prompt_len = prompt.len();
-
-        // initialize display line indices & widths
-        self.bg_line_idx.splice(.., [0]);
-        if self.prompt_len > 0 {
-            let mut col = 0;
-            for (i, c) in self.bg_buf.char_indices() {
-                let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
-                col += w;
-                if col > self.display_width {
-                    self.bg_line_idx.push(i);
-                    col = w;
-                }
-            }
-        }
-        self.penultimate_width = self
-            .bg_line_idx
-            .iter()
-            .nth_back(1)
-            .map(|i| self.bg_buf[*i..].width())
-            .map(|w| u16::try_from(w).unwrap());
-
-        // convert some values to usize for convenience
-        let display_lines = usize::from(self.display_lines);
-        let cursor_line = usize::from(initial_cursor_line);
-
-        // Initialize rendering related values
-        let last_buffer_line_idx =
-            self.bg_line_idx.last().copied().unwrap_or(0);
-        self.cursor_column =
-            u16::try_from(self.bg_buf[last_buffer_line_idx..].width()).unwrap();
-        let mut new_cursor_line = cursor_line + self.bg_line_idx.len() - 1;
-        if self.cursor_column == self.display_width {
-            new_cursor_line += 1;
-            self.cursor_column = 0;
-        }
-        self.cursor_line = new_cursor_line.try_into().unwrap();
-
-        (self.first_display_line, self.first_buffer_line, self.scroll_needed) =
-            if new_cursor_line > display_lines {
-                let overrun = new_cursor_line - display_lines + 1;
-                let lines_left = display_lines - cursor_line - 1;
-                let scroll_needed =
-                    u16::try_from(cmp::min(overrun, lines_left)).unwrap();
-                let first_display_line = cursor_line.saturating_sub(overrun);
-                (first_display_line.try_into().unwrap(), overrun, scroll_needed)
-            } else {
-                (cursor_line.try_into().unwrap(), 0, 0)
-            };
+        // reset for new input
+        let (display_width, display_height) = terminal::size()?;
+        let (_, first_display_line) = cursor::position()?;
+        self.reset(
+            display_width.into(),
+            display_height.into(),
+            first_display_line.into(),
+            prompt,
+        );
 
         let _render_ctx = RenderContext::new();
         terminal::enable_raw_mode()?;
@@ -176,11 +141,15 @@ impl LineReader {
         let mut stdout = io::stdout().lock();
         stdout.queue(MoveToNextLine(1))?;
         stdout.flush()?;
-        let bytes_read = self.bg_buf.len() - self.prompt_len;
-        *output_buffer += &self.bg_buf[self.prompt_len..];
-        self.bg_buf.clear();
-        self.ag_buf.clear();
-        Ok(bytes_read)
+
+        let prev_bytes = output_buffer.len();
+        output_buffer.extend(
+            self.buffer
+                .iter()
+                .flat_map(|l| l.text.chars())
+                .skip(prompt.chars().count()),
+        );
+        Ok(output_buffer.len() - prev_bytes)
     }
 
     fn handle_event(&mut self, event: &Event) -> ControlFlow<()> {
@@ -195,7 +164,7 @@ impl LineReader {
     fn handle_key_event(&mut self, event: &KeyEvent) -> ControlFlow<()> {
         match event.code {
             KeyCode::Enter => {
-                self.ag_buf.push_str(native_eol());
+                self.buffer.last_mut().unwrap().text.push_str(native_eol());
                 ControlFlow::Break(())
             }
             KeyCode::Left => self.handle_left(),
@@ -218,81 +187,17 @@ impl LineReader {
     fn handle_char_typed(&mut self, c: char) -> ControlFlow<()> {
         let c_width = c.width().unwrap_or(0);
 
-        // handle zero width (combining) characters
-        if c_width == 0 {
-            // zero width char only valid if not the first character
-            if self.bg_buf.len() > self.prompt_len {
-                self.bg_buf.push(c);
-            }
-            return ControlFlow::Continue(());
-        }
-
-        let c_width = u16::try_from(c_width).unwrap();
-        let last_line_space = self.display_width - self.cursor_column;
-        let prev_line_space =
-            self.penultimate_width.map(|w| self.display_width - w);
-
-        self.bg_buf.push(c);
-
-        if self.cursor_column == 0 {
-            if let Some(prev_line_space) = prev_line_space {
-                // if there's a line before the cursor line
-                if prev_line_space < c_width {
-                    // new char doesnt fit on previous line
-                    self.cursor_column += c_width;
-                } else if let Some(i) = self.bg_line_idx.last_mut() {
-                    // new char fits previous line
-                    *i += c.len_utf8();
-                    *self.penultimate_width.get_or_insert(0) += c_width;
-                }
-            }
-        } else {
-            match last_line_space.cmp(&c_width) {
-                // typed character overflows cursor line
-                Ordering::Less => {
-                    self.penultimate_width = Some(self.cursor_column);
-                    self.cursor_column = c_width;
-                    self.cursor_line += 1;
-                    self.bg_line_idx.push(self.bg_buf.len() - c.len_utf8());
-                }
-                // typed character exactly fills cursor line
-                Ordering::Equal => {
-                    self.penultimate_width = Some(self.display_width);
-                    self.cursor_column = 0;
-                    self.cursor_line += 1;
-                    self.bg_line_idx.push(self.bg_buf.len());
-                }
-                // typed character fits on cursor line
-                Ordering::Greater => {
-                    let ag_char_width =
-                        self.ag_buf.chars().next().map_or(0, |c| {
-                            u16::try_from(c.width().unwrap_or(0)).unwrap()
-                        });
-                    if last_line_space >= c_width + ag_char_width {
-                        // new char doesn't push first ag_char to next line
-                        self.cursor_column += c_width;
-                    } else {
-                        // new char pushes first ag_char to next line. cursor follows.
-                        self.penultimate_width = Some(self.cursor_column);
-                        self.cursor_column = 0;
-                        self.cursor_line += 1;
-                        self.bg_line_idx.push(self.bg_buf.len() - c.len_utf8());
-                    }
-                }
-            }
-        }
-
-        // handle cursor moving below viewport bottom
-        if self.cursor_line > self.viewport_bottom() {
-            self.cursor_line -= 1;
-            if self.first_buffer_line == 0 {
-                self.scroll_needed = 1;
-            }
-            if self.first_display_line == 0 {
-                self.first_buffer_line += 1;
-            } else {
-                self.first_display_line =
-                    self.first_display_line.saturating_sub(1);
+        if c_width > 0 || self.cursor.index != self.input_start {
+            self.buffer[self.cursor.index.line]
+                .text
+                .insert(self.cursor.index.offset, c);
+            let line = &mut self.buffer[self.cursor.index.line];
+            line.text.insert(self.cursor.index.offset, c);
+            line.width += c_width;
+            self.cursor.index.offset += c.len_utf8();
+            self.cursor.column += c_width;
+            if self.cursor.column >= self.display_width {
+                self.reflow(self.cursor.index.line..);
             }
         }
 
@@ -300,291 +205,82 @@ impl LineReader {
     }
 
     fn handle_backspace(&mut self) -> ControlFlow<()> {
-        if let Some((i, c)) = self
-            .bg_buf
-            .char_indices()
-            .next_back()
-            .filter(|(i, _)| *i >= self.prompt_len)
-        {
-            self.bg_buf.truncate(i);
-            let prev_cursor_line = self.cursor_line;
-            let c_width = u16::try_from(c.width().unwrap_or(0)).unwrap();
-
-            if self.cursor_column == 0 && c_width > 0 {
-                // backspacing from column 0, wrap to position of
-                // removed char on preceding line.
-                self.cursor_column = self.penultimate_width.unwrap() - c_width;
-                self.cursor_line -= 1;
-            } else {
-                self.cursor_column -= c_width;
-
-                if self.cursor_column == 0 {
-                    // backspacing to column 0 - check if room to wrap
-                    // to end of preceding line
-                    if let Some(prev_w) = self.penultimate_width {
-                        if prev_w < self.display_width {
-                            self.cursor_column = prev_w;
-                            self.cursor_line -= 1;
-                        }
-                    }
-                }
-            }
-
-            if prev_cursor_line != self.cursor_line {
-                self.bg_line_idx.pop();
-                self.penultimate_width = self
-                    .bg_line_idx
-                    .last()
-                    .filter(|i| **i > 0)
-                    .map(|i| self.bg_buf[*i..].width())
-                    .map(|w| u16::try_from(w).unwrap());
-            }
-            if self.cursor_line < self.viewport_top() {
-                self.cursor_line += 1;
-                self.first_buffer_line -= 1;
-            }
-        }
         ControlFlow::Continue(())
     }
 
     fn handle_left(&mut self) -> ControlFlow<()> {
-        if let Some((prev_idx, prev_width)) = self
-            .bg_buf
-            .char_indices()
-            .map(|(i, c)| (i, c, c.width()))
-            .rfind(|(_, _, w)| w.is_some_and(|w| w > 0))
-            .filter(|(i, _, _)| *i >= self.prompt_len)
-            .map(|(i, _, w)| (i, u16::try_from(w.unwrap()).unwrap()))
-        {
-            self.ag_buf.insert_str(0, &self.bg_buf[prev_idx..]);
-            self.bg_buf.truncate(prev_idx);
-
-            if self.cursor_column == 0 {
-                self.cursor_column =
-                    self.penultimate_width.unwrap() - prev_width;
-                self.bg_line_idx.pop();
-                self.penultimate_width = self
-                    .bg_line_idx
-                    .last()
-                    .filter(|i| **i != 0)
-                    .map(|i| self.bg_buf[*i..].width())
-                    .map(|w| u16::try_from(w).unwrap());
-                if self.cursor_line == self.viewport_top() {
-                    self.first_buffer_line -= 1;
-                } else {
-                    self.cursor_line -= 1;
-                }
-            } else {
-                self.cursor_column -= prev_width;
-            }
-        }
-
         ControlFlow::Continue(())
     }
 
     fn handle_right(&mut self) -> ControlFlow<()> {
-        let skipped_width = {
-            let skipped_chars = if let Some((next_idx, _)) = self
-                .ag_buf
-                .char_indices()
-                .skip(1)
-                .map(|(i, c)| (i, c.width()))
-                .find(|(_, w)| w.is_some_and(|w| w > 0))
-            {
-                self.ag_buf.drain(..next_idx)
-            } else {
-                self.ag_buf.drain(..)
-            };
-            self.bg_buf.push_str(skipped_chars.as_str());
-            u16::try_from(skipped_chars.as_str().width()).unwrap()
-        };
-        let space_left = self.display_width - self.cursor_column;
-        self.cursor_column += skipped_width;
-        if space_left <= skipped_width {
-            self.bg_line_idx.push(self.bg_buf.len());
-            self.penultimate_width = Some(self.cursor_column);
-            self.cursor_line += 1;
-            self.cursor_column = 0;
-        }
-
-        // handle cursor moving below viewport bottom
-        if self.cursor_line > self.viewport_bottom() {
-            self.cursor_line -= 1;
-            if self.first_buffer_line == 0 {
-                self.scroll_needed = 1;
-            }
-            if self.first_display_line == 0 {
-                self.first_buffer_line += 1;
-            } else {
-                self.first_display_line =
-                    self.first_display_line.saturating_sub(1);
-            }
-        }
-
         ControlFlow::Continue(())
     }
 
     fn handle_delete(&mut self) -> ControlFlow<()> {
-        if let Some((next_idx, next_width)) = self
-            .ag_buf
-            .char_indices()
-            .skip(1)
-            .map(|(i, c)| (i, c, c.width()))
-            .find(|(_, _, w)| w.is_some_and(|w| w > 0))
-            .map(|(i, _, w)| (i, u16::try_from(w.unwrap()).unwrap()))
-        {
-            self.ag_buf.drain(..next_idx);
-            if let Some(penultimate_width) = self.penultimate_width {
-                if self.display_width - penultimate_width <= next_width {
-                    self.cursor_column = penultimate_width;
-                    self.cursor_line -= 1;
-                    self.bg_line_idx.pop();
-                    self.penultimate_width = self.bg_line_idx.last().map(|i| {
-                        u16::try_from(self.bg_buf[*i..].width()).unwrap()
-                    });
-                }
-            }
-        } else if !self.ag_buf.is_empty() {
-            self.ag_buf.clear();
-        }
         ControlFlow::Continue(())
     }
 
     fn handle_home(&mut self) -> ControlFlow<()> {
-        self.ag_buf
-            .insert_str(0, self.bg_buf.drain(self.prompt_len..).as_ref());
-        self.cursor_line = u16::try_from(self.bg_line_idx.len() - 1)
-            .map_or(0, |l| self.cursor_line.saturating_sub(l));
-        self.cursor_column = self.prompt_width;
-        self.bg_line_idx.splice(.., [0]);
-        self.penultimate_width = None;
-        self.first_buffer_line = 0;
-        self.first_display_line = self.cursor_line;
         ControlFlow::Continue(())
     }
 
     fn handle_end(&mut self) -> ControlFlow<()> {
-        if !self.ag_buf.is_empty() {
-            self.bg_buf.push_str(&self.ag_buf[..]);
-            self.ag_buf.clear();
-        }
-
-        let prev_bg_lines = self.bg_line_idx.len();
-
-        // rebuild bg_line_idx
-        self.bg_line_idx.splice(.., [0]);
-        let mut col = 0;
-        for (i, c) in self.bg_buf.char_indices() {
-            let w = c.width().unwrap_or(0);
-            col += w;
-            if col > self.display_width.into() {
-                self.bg_line_idx.push(i);
-                col = w;
-            }
-        }
-        if let Some(i) = self.bg_line_idx.last() {
-            if self.bg_buf[*i..].width() == self.display_width.into() {
-                self.bg_line_idx.push(self.bg_buf.len());
-            }
-        }
-
-        let added_bg_lines = self.bg_line_idx.len() - prev_bg_lines;
-
-        // set new penultimate_width
-        let mut idx_iter = self.bg_line_idx.iter();
-        let last_idx = idx_iter.next_back().unwrap();
-        let penultimate_idx = idx_iter.next_back();
-
-        self.penultimate_width = penultimate_idx.and_then(|i| {
-            u16::try_from(self.bg_buf[*i..*last_idx].width()).ok()
-        });
-
-        // compute new cursor position and possibly update display start
-        self.cursor_column =
-            u16::try_from(self.bg_buf[*last_idx..].width()).unwrap();
-        if added_bg_lines < (self.display_lines - self.cursor_line).into() {
-            // last line was in display
-            self.cursor_line += u16::try_from(added_bg_lines).unwrap();
-        } else {
-            // last line was off screen
-            self.cursor_line = self.display_lines - 1;
-            let prev_first_line = self.first_display_line;
-            self.first_display_line = u16::try_from(self.bg_line_idx.len())
-                .map_or_else(|_| 0, |l| self.cursor_line.saturating_sub(l));
-            self.scroll_needed =
-                prev_first_line.saturating_sub(self.first_display_line);
-            self.first_buffer_line = self.bg_line_idx.len().saturating_sub(
-                usize::from(self.display_lines - self.first_display_line),
-            );
-        }
-
         ControlFlow::Continue(())
     }
 
     /// Compute last line of viewport
     fn viewport_bottom(&self) -> u16 {
-        if self.ag_buf.width()
-            <= (self.display_width.saturating_sub(self.cursor_column)).into()
-        {
-            self.display_lines - 1
-        } else {
-            self.display_lines - 2
-        }
+        todo!();
     }
 
     /// Compute first line of viewport
     fn viewport_top(&self) -> u16 {
-        (self.first_buffer_line > 0).into()
+        (self.first_display_line > 0).into()
     }
 
-    /// Compute portion of `ag_buf` that fits in display
-    fn ag_display_bound(&self) -> usize {
-        let d_width = usize::from(self.display_width);
-        let mut col = usize::from(self.cursor_column);
-        let mut line = self.cursor_line;
-        for (i, c) in self.ag_buf.char_indices() {
-            let c_width = c.width().unwrap_or(0);
-            col += c_width;
-            if col > d_width {
-                line += 1;
-                if line == self.display_lines {
-                    return i;
-                }
-                col = c_width;
-            }
-        }
-        self.ag_buf.len()
+    /// Reflow buffer lines to fit display_width, and
+    /// snap cursor location to within viewport.
+    /// Also might result in setting scroll needed.
+    fn reflow<R>(&mut self, span: R)
+    where
+        R: RangeBounds<usize>,
+    {
+        todo!();
     }
 
-    /// Move gap (insetion point) to end of buffer
     #[cfg(not(tarpaulin_include))]
     /// render current buffer to display
     fn repaint(&mut self) -> io::Result<()> {
+        let display_lines = self.display_height - self.first_display_line;
+        let buffer_limit = self.buffer.len().min(display_lines);
+
         let mut stdout = io::stdout().lock();
 
         stdout.queue(Hide)?;
 
         if self.scroll_needed > 0 {
-            stdout.queue(ScrollUp(self.scroll_needed))?;
+            let scroll_needed = u16::try_from(self.scroll_needed)
+                .expect("scroll needed fits in u16");
+            stdout.queue(ScrollUp(scroll_needed))?;
             self.scroll_needed = 0;
         }
+        // convert values to u16 for crossterm
+        let first_display_line = u16::try_from(self.first_display_line)
+            .expect("first_display_line fits u16");
+        let cursor_column =
+            u16::try_from(self.cursor.column).expect("cursor column fits u16");
+        let cursor_line =
+            u16::try_from(self.cursor.line).expect("cursor line fits u16");
 
         stdout
-            .queue(MoveTo(0, self.first_display_line))?
-            .queue(Clear(ClearType::FromCursorDown))?
-            .write_all(
-                self.bg_buf[self.bg_line_idx[self.first_buffer_line]..]
-                    .as_bytes(),
-            )?;
-        if !self.ag_buf.is_empty() {
-            stdout.write_all(
-                self.ag_buf[0..self.ag_display_bound()].as_bytes(),
-            )?;
+            .queue(MoveTo(0, first_display_line))?
+            .queue(Clear(ClearType::FromCursorDown))?;
+
+        for line in &self.buffer[self.first_buffer_line..buffer_limit] {
+            stdout.write_all(&line.text.as_bytes())?;
         }
-        stdout
-            .queue(MoveTo(self.cursor_column, self.cursor_line))?
-            .queue(Show)?
-            .flush()
+
+        stdout.queue(MoveTo(cursor_column, cursor_line))?.queue(Show)?.flush()
     }
 }
 
@@ -596,26 +292,6 @@ impl LineRead for LineReader {
         buffer: &mut String,
     ) -> io::Result<usize> {
         self.accept_line(prompt, buffer)
-    }
-}
-
-impl Default for LineReader {
-    fn default() -> Self {
-        LineReader {
-            prompt_len: 0,
-            prompt_width: 0,
-            bg_buf: String::new(),
-            bg_line_idx: vec![0],
-            penultimate_width: None,
-            ag_buf: String::new(),
-            display_width: 80,
-            display_lines: 24,
-            cursor_column: 0,
-            cursor_line: 23,
-            first_display_line: 23,
-            first_buffer_line: 0,
-            scroll_needed: 0,
-        }
     }
 }
 
@@ -659,19 +335,213 @@ mod tests {
 
     use crossterm::event::KeyModifiers;
 
-    // tests for LineReader
-    ////////
+    struct LineReaderBuilder {
+        text: Option<Vec<String>>,
+        cursor: Cursor,
+        display_width: usize,
+        display_height: usize,
+        first_display_line: usize,
+        first_buffer_line: usize,
+        input_start: BufferIndex,
+    }
 
-    #[test]
-    fn create_new_reader() {
-        let reader = LineReader::new();
-        assert_eq!(reader.bg_buf.len(), 0);
+    impl LineReaderBuilder {
+        fn new() -> Self {
+            LineReaderBuilder {
+                text: None,
+                display_width: 10,
+                display_height: 5,
+                first_display_line: 0,
+                first_buffer_line: 0,
+                cursor: Cursor { ..Default::default() },
+                input_start: BufferIndex { line: 0, offset: 0 },
+            }
+        }
+
+        fn input_start(&mut self, i: BufferIndex) -> &mut Self {
+            self.input_start = i;
+            self
+        }
+
+        fn first_buffer_line(&mut self, l: usize) -> &mut Self {
+            self.first_buffer_line = l;
+            self
+        }
+
+        fn first_display_line(&mut self, l: usize) -> &mut Self {
+            self.first_display_line = l;
+            self
+        }
+
+        fn display_height(&mut self, h: usize) -> &mut Self {
+            self.display_height = h;
+            self
+        }
+
+        fn display_width(&mut self, w: usize) -> &mut Self {
+            self.display_width = w;
+            self
+        }
+
+        fn cursor(&mut self, c: Cursor) -> &mut Self {
+            self.cursor = c;
+            self
+        }
+
+        fn text<S>(&mut self, t: &[S]) -> &mut Self
+        where
+            S: AsRef<str>,
+        {
+            self.text = Some(
+                t.as_ref().iter().map(|s| s.as_ref().to_owned()).collect(),
+            );
+            self
+        }
+
+        fn build(&self) -> LineReader {
+            let buffer = self.text.as_ref().map_or_else(
+                || Vec::new(),
+                |t| {
+                    t.iter()
+                        .cloned()
+                        .map(|text| {
+                            let width = text.width();
+                            BufferLine { text, width }
+                        })
+                        .collect::<Vec<BufferLine>>()
+                },
+            );
+            for l in &buffer {
+                if l.width > self.display_width {
+                    panic!("Line too wide: {l:?} > {}", self.display_width);
+                }
+            }
+            if self.input_start.line > buffer.len()
+                || (buffer.len() > 0
+                    && self.input_start.offset
+                        > buffer[self.input_start.line].len())
+            {
+                panic!("input_start out of range: {:?}", self.input_start);
+            }
+            if self.cursor.column >= self.display_width {
+                panic!(
+                    "cursor.column too large: {} >= {}",
+                    self.cursor.column, self.display_width
+                );
+            }
+            if self.cursor.line >= self.display_height {
+                panic!(
+                    "cursor.line too large: {} >= {}",
+                    self.cursor.line, self.display_height
+                );
+            }
+            if self.first_buffer_line > buffer.len() {
+                panic!(
+                    "first_buffer_line too large: {} > {}",
+                    self.first_buffer_line,
+                    buffer.len()
+                );
+            }
+            LineReader {
+                buffer,
+                input_start: self.input_start,
+                display_width: self.display_width,
+                display_height: self.display_height,
+                cursor: self.cursor,
+                first_display_line: self.first_display_line,
+                first_buffer_line: self.first_buffer_line,
+                scroll_needed: 0,
+            }
+        }
     }
 
     #[test]
-    fn create_default_reader() {
-        let reader = LineReader { ..Default::default() };
-        assert_eq!(reader.bg_buf.len(), 0);
+    fn builder_base_case() {
+        let b = LineReaderBuilder::new();
+        let r = b.build();
+        assert_eq!(
+            r,
+            LineReader {
+                display_width: 10,
+                display_height: 5,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn builder_simple_case() {
+        let mut b = LineReaderBuilder::new();
+        let r = b
+            .text(&vec![":ë🎸o"])
+            .cursor(Cursor {
+                line: 0,
+                column: 5,
+                index: BufferIndex { line: 0, offset: 9 },
+            })
+            .build();
+        assert_eq!(
+            r,
+            LineReader {
+                buffer: vec![BufferLine {
+                    text: ":ë🎸o".to_owned(), width: 5
+                },],
+                cursor: Cursor {
+                    line: 0,
+                    column: 5,
+                    index: BufferIndex { line: 0, offset: 9 },
+                },
+                display_width: 10,
+                display_height: 5,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn builder_full_case() {
+        let expected = LineReader {
+            buffer: vec![
+                BufferLine { text: ":123456789abcde".to_owned(), width: 15 },
+                BufferLine { text: "🎸23456789abcdef".to_owned(), width: 16 },
+                BufferLine { text: "🎸23456789abcdef".to_owned(), width: 16 },
+                BufferLine { text: "🎸23456789abcdef".to_owned(), width: 16 },
+                BufferLine { text: "🎸23456789abcdef".to_owned(), width: 16 },
+                BufferLine { text: "🎸23456789abcdef".to_owned(), width: 16 },
+                BufferLine { text: "012345".to_owned(), width: 6 },
+            ],
+            input_start: BufferIndex { line: 2, offset: 6 },
+            display_width: 16,
+            display_height: 6,
+            cursor: Cursor {
+                line: 5,
+                column: 6,
+                index: BufferIndex { line: 6, offset: 6 },
+            },
+            first_display_line: 0,
+            first_buffer_line: 1,
+            scroll_needed: 0,
+        };
+
+        let mut b = LineReaderBuilder::new();
+        b.text(&vec![
+            ":123456789abcde",
+            "🎸23456789abcdef",
+            "🎸23456789abcdef",
+            "🎸23456789abcdef",
+            "🎸23456789abcdef",
+            "🎸23456789abcdef",
+            "012345",
+        ]);
+        b.display_width(16).display_height(6);
+        b.input_start(BufferIndex { line: 2, offset: 6 }).cursor(Cursor {
+            line: 5,
+            column: 6,
+            index: BufferIndex { line: 6, offset: 6 },
+        });
+        b.first_display_line(0).first_buffer_line(1);
+        let r = b.build();
+        assert_eq!(r, expected);
     }
 
     #[test]
@@ -693,1328 +563,15 @@ mod tests {
 
     #[test]
     fn enter_breaks_input_loop() {
-        let buffer_text = "This is some text.";
+        let text = "This is some text.".to_owned();
+        let width = text.width();
         let mut reader = LineReader {
-            bg_buf: buffer_text[..8].to_owned(),
-            ag_buf: buffer_text[8..].to_owned(),
+            buffer: vec![BufferLine { text, width }],
             ..Default::default()
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, ControlFlow::Break(())));
-    }
-
-    #[test]
-    fn backspace_removes_only_last_input_char_before_gap() {
-        let mut reader = LineReader::new();
-        reader.bg_buf.push_str(":ë̱🎸");
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 4;
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-
-        // 2w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":ë̱");
-
-        // 1st 0w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":ë");
-
-        // 2nd 0w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":e");
-
-        // 1w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":");
-
-        // prompt
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":");
-    }
-
-    #[test]
-    fn backspace_moves_cursor_back_removed_char_width() {
-        let mut reader = LineReader::new();
-        reader.bg_buf.push_str(":ë̱🎸");
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 4;
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-
-        // 2w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 2);
-
-        // 1st 0w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 2);
-
-        // 2nd 0w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 2);
-
-        // 1w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 1);
-
-        // prompt
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 1);
-
-        // on second line when first line doesn't fill full width
-        let mut reader = LineReader::new();
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.display_width = 20;
-        reader.display_lines = 10;
-        reader.bg_buf.push_str(":123456789012345678🎸🎸");
-        reader.bg_line_idx = vec![0, 20];
-        reader.first_display_line = 8;
-        reader.cursor_line = 9;
-        reader.cursor_column = 4;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":123456789012345678🎸");
-        assert_eq!(reader.cursor_column, 2);
-        assert_eq!(reader.cursor_line, 9);
-    }
-
-    #[test]
-    fn backspace_at_column_0_wraps_cursor_to_preceding_line() {
-        let mut reader = LineReader::new();
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.display_width = 20;
-        reader.display_lines = 10;
-        reader.bg_buf.push_str(":1234567890123456789");
-        reader.bg_line_idx = vec![0, 20];
-        reader.penultimate_width = Some(20);
-        reader.first_display_line = 8;
-        reader.cursor_line = 9;
-        reader.cursor_column = 0;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":123456789012345678");
-        assert_eq!(reader.cursor_column, 19);
-        assert_eq!(reader.cursor_line, 8);
-        assert_eq!(reader.first_display_line, 8);
-        assert_eq!(reader.bg_line_idx, vec![0]);
-    }
-
-    #[test]
-    fn backspace_to_prev_line_sets_penultimate_width() {
-        // wrapping to non-prompt line
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: ":12345678🎸23456789".to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            bg_line_idx: vec![0, 9, 22],
-            cursor_line: 2,
-            cursor_column: 0,
-            penultimate_width: Some(9),
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, [0, 9]);
-        assert!(reader.penultimate_width.is_some_and(|w| w == 9));
-
-        // wrapping to prompt line
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: ":12345678🎸".to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            bg_line_idx: vec![0, 9],
-            cursor_line: 1,
-            cursor_column: 2,
-            penultimate_width: Some(9),
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, [0]);
-        assert!(reader.penultimate_width.is_none());
-    }
-
-    #[test]
-    fn backspace_to_column_0_wraps_cursor_if_room() {
-        // room on preceding line
-        let mut reader = LineReader::new();
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.display_width = 20;
-        reader.display_lines = 10;
-        reader.bg_buf.push_str(":123456789012345678🎸");
-        reader.bg_line_idx = vec![0, 20];
-        reader.penultimate_width = Some(19);
-        reader.first_display_line = 8;
-        reader.cursor_line = 9;
-        reader.cursor_column = 2;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":123456789012345678");
-        assert_eq!(reader.cursor_column, 19);
-        assert_eq!(reader.cursor_line, 8);
-        assert_eq!(reader.first_display_line, 8);
-        assert_eq!(reader.bg_line_idx, vec![0]);
-
-        // no room on preceding line
-        let mut reader = LineReader::new();
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.display_width = 20;
-        reader.display_lines = 10;
-        reader.bg_buf.push_str(":1234567890123456789🎸");
-        reader.bg_line_idx = vec![0, 20];
-        reader.first_display_line = 8;
-        reader.cursor_line = 9;
-        reader.cursor_column = 2;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":1234567890123456789");
-        assert_eq!(reader.cursor_column, 0);
-        assert_eq!(reader.cursor_line, 9);
-        assert_eq!(reader.first_display_line, 8);
-        assert_eq!(reader.bg_line_idx, vec![0, 20]);
-    }
-
-    #[test]
-    fn backspace_moving_cursor_above_top_pans_buffer() {
-        let lines = [
-            ":1234567890123456789",
-            "a1234567890123456789",
-            "b1234567890123456789",
-            "c1234567890123456789",
-            "d1234567890123456789",
-        ];
-
-        let mut reader = LineReader {
-            display_width: 20,
-            display_lines: 5,
-            bg_buf: lines.join(""),
-            bg_line_idx: vec![0, 20, 40, 60, 80, 100],
-            penultimate_width: Some(20),
-            prompt_len: 1,
-            prompt_width: 1,
-            cursor_column: 0,
-            cursor_line: 1,
-            first_display_line: 0,
-            first_buffer_line: 4,
-            ..Default::default()
-        };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 19);
-        assert_eq!(reader.cursor_line, 1);
-        assert_eq!(reader.first_display_line, 0);
-        assert_eq!(reader.first_buffer_line, 3);
-        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80,]);
-    }
-
-    #[test]
-    fn left_moves_to_previous_base_char() {
-        let buffer_text = "dëf";
-        let mut reader = LineReader {
-            bg_buf: buffer_text.to_owned(),
-            cursor_column: 3,
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_buf, "dë");
-        assert_eq!(reader.ag_buf, "f");
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_buf, "d");
-        assert_eq!(reader.ag_buf, "ëf");
-    }
-
-    #[test]
-    fn left_at_beginning_does_nothing() {
-        let buffer_text = "dëf";
-        let mut reader =
-            LineReader { ag_buf: buffer_text.to_owned(), ..Default::default() };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.ag_buf, buffer_text);
-        assert!(reader.bg_buf.is_empty());
-    }
-
-    #[test]
-    fn left_moves_cursor_back_by_preceding_char_width() {
-        let mut reader = LineReader {
-            bg_buf: ":dë🎸f".to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            cursor_column: 6,
-            ..Default::default()
-        };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-
-        // 1w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 5);
-
-        // 2w
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 3);
-
-        // 1w with combining character
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.ag_buf, "ë🎸f");
-        assert_eq!(reader.ag_display_bound(), 8);
-        assert_eq!(reader.cursor_column, 2);
-
-        // 1 to prompt
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 1);
-
-        // at prompt
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 1);
-    }
-
-    #[test]
-    fn left_at_column_0_wraps_cursor_to_preceding_line() {
-        let mut reader = LineReader {
-            bg_buf: ":12345678🎸23456789".to_owned(),
-            bg_line_idx: vec![0, 9, 20],
-            penultimate_width: Some(10),
-            prompt_width: 1,
-            prompt_len: 1,
-            display_width: 10,
-            display_lines: 5,
-            cursor_line: 2,
-            cursor_column: 0,
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!((reader.cursor_column, reader.cursor_line), (9, 1));
-        assert!(reader.penultimate_width.is_some_and(|w| w == 9));
-        assert_eq!(reader.bg_line_idx, [0, 9]);
-
-        reader.cursor_column = 0;
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!((reader.cursor_column, reader.cursor_line), (8, 0));
-        assert!(reader.penultimate_width.is_none());
-        assert_eq!(reader.bg_line_idx, [0]);
-    }
-
-    #[test]
-    fn left_wrapping_to_first_line() {
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            first_display_line: 0,
-            first_buffer_line: 0,
-            bg_buf: ":0123456789".to_owned(),
-            prompt_len: 1,
-            prompt_width: 1,
-            bg_line_idx: vec![0, 10],
-            penultimate_width: Some(10),
-            cursor_line: 1,
-            cursor_column: 0,
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!((reader.cursor_column, reader.cursor_line), (9, 0));
-        assert!(reader.penultimate_width.is_none());
-    }
-
-    #[test]
-    fn left_wrapping_cursor_above_top_pans_buffer() {
-        let lines = [
-            ":1234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-        ];
-
-        let mut reader = LineReader {
-            display_width: 20,
-            display_lines: 5,
-            bg_buf: lines.join(""),
-            bg_line_idx: vec![0, 20, 40, 60, 80, 100],
-            penultimate_width: Some(20),
-            prompt_len: 1,
-            prompt_width: 1,
-            cursor_column: 0,
-            cursor_line: 1,
-            first_display_line: 0,
-            first_buffer_line: 4,
-            ..Default::default()
-        };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 19);
-        assert_eq!(reader.cursor_line, 1);
-        assert_eq!(reader.first_display_line, 0);
-        assert_eq!(reader.first_buffer_line, 3);
-        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80,]);
-    }
-
-    #[test]
-    fn right_moves_to_next_base_char() {
-        let buffer_text = "dëf";
-        let mut reader =
-            LineReader { ag_buf: buffer_text.to_owned(), ..Default::default() };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_buf, "d");
-        assert_eq!(reader.ag_buf, "ëf");
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_buf, "dë");
-        assert_eq!(reader.ag_buf, "f");
-    }
-
-    #[test]
-    fn right_moves_past_final_char() {
-        let mut reader = LineReader {
-            bg_buf: "lm".to_owned(),
-            ag_buf: "ñ".to_owned(),
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert!(reader.ag_buf.is_empty());
-        assert_eq!(reader.bg_buf, "lmñ");
-    }
-
-    #[test]
-    fn right_at_end_does_nothing() {
-        let mut reader =
-            LineReader { bg_buf: "lmñ".to_owned(), ..Default::default() };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert!(reader.ag_buf.is_empty());
-        assert_eq!(reader.bg_buf, "lmñ");
-    }
-
-    #[test]
-    fn right_moves_cursor_forward_base_char_width() {
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: ":".to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            bg_line_idx: vec![0],
-            ag_buf: "aë🎸i".to_owned(),
-            first_display_line: 0,
-            cursor_line: 0,
-            cursor_column: 1,
-            ..Default::default()
-        };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 2);
-
-        // right over 1w char including 0w combining char
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 3);
-
-        // right over 2w char
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 5);
-    }
-
-    #[test]
-    fn right_from_line_end_wraps_cursor() {
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: ":12345678".to_owned(),
-            ag_buf: "9abcdef".to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            first_display_line: 0,
-            cursor_line: 0,
-            cursor_column: 9,
-            ..Default::default()
-        };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_line, 1, "cursor_line");
-        assert_eq!(reader.cursor_column, 0, "cursor_column");
-        assert_eq!(reader.bg_line_idx, [0, 10]);
-        assert_eq!(reader.penultimate_width, Some(10));
-    }
-
-    #[test]
-    fn right_to_bottom_when_bg_fits_pans_display() {
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: ":12345678".to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            bg_line_idx: vec![0],
-            ag_buf: "abcdefghijABCDEFGHIJ".to_owned(),
-            first_display_line: 3,
-            penultimate_width: None,
-            cursor_line: 3,
-            cursor_column: 9,
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_line, 3, "cursor_line");
-        assert_eq!(reader.cursor_column, 0, "cursor_column");
-        assert_eq!(reader.first_display_line, 2, "first_display_line");
-        assert_eq!(reader.scroll_needed, 1, "scroll_needed");
-    }
-
-    #[test]
-    fn right_to_bottom_when_bg_overflows_pans_buffer() {
-        let lines = [
-            ":123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "012345678",
-        ];
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: lines.join(""),
-            prompt_width: 1,
-            prompt_len: 1,
-            bg_line_idx: vec![0, 10, 20, 30, 40, 50, 60],
-            ag_buf: "abcdefghijABCDEFGHIJ".to_owned(),
-            first_buffer_line: 3,
-            first_display_line: 0,
-            penultimate_width: Some(10),
-            cursor_line: 4,
-            cursor_column: 9,
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_line, 4, "cursor_line");
-        assert_eq!(reader.cursor_column, 0, "cursor_column");
-        assert_eq!(reader.first_buffer_line, 4, "first_buffer_line");
-    }
-
-    #[test]
-    fn home_moves_all_before_gap_to_after_gap() {
-        let mut reader = LineReader {
-            bg_buf: "lmn".to_owned(),
-            ag_buf: "op".to_owned(),
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert!(reader.bg_buf.is_empty());
-        assert_eq!(reader.ag_buf, "lmnop");
-    }
-
-    #[test]
-    fn home_at_beginning_does_nothing() {
-        let mut reader = LineReader {
-            bg_buf: ":".to_owned(),
-            prompt_len: 1,
-            prompt_width: 1,
-            ag_buf: "abc".to_owned(),
-            cursor_column: 1,
-            ..Default::default()
-        };
-        let expected_reader = reader.clone();
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader, expected_reader);
-    }
-
-    #[test]
-    fn home_moves_cursor_to_first_column_after_prompt() {
-        let lines = [
-            ":123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "012345678",
-            "🎸abc",
-        ];
-
-        let mut reader = LineReader {
-            display_width: 10,
-            bg_buf: lines[0..6].join(""),
-            bg_line_idx: vec![0, 10, 20, 30, 40, 50, 60, 69],
-            penultimate_width: Some(9),
-            prompt_width: 1,
-            prompt_len: 1,
-            cursor_column: 0,
-            cursor_line: 17,
-            first_display_line: 10,
-            ag_buf: lines[7..].join(""),
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, [0]);
-        assert!(reader.penultimate_width.is_none(),);
-        assert_eq!(reader.cursor_column, 1, "cursor_column");
-        assert_eq!(reader.cursor_line, 10, "cursor_line");
-        assert_eq!(reader.first_display_line, 10);
-    }
-
-    #[test]
-    fn home_above_top_pans_buffer() {
-        let lines = [
-            ":123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "012345678",
-            "🎸abc",
-        ];
-
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: lines[0..6].join(""),
-            bg_line_idx: vec![0, 10, 20, 30, 40, 50, 60, 69],
-            penultimate_width: Some(9),
-            prompt_width: 1,
-            prompt_len: 1,
-            cursor_column: 0,
-            cursor_line: 4,
-            first_display_line: 0,
-            first_buffer_line: 3,
-            ag_buf: lines[7..].join(""),
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, [0]);
-        assert!(reader.penultimate_width.is_none(),);
-        assert_eq!(reader.cursor_column, 1, "cursor_column");
-        assert_eq!(reader.cursor_line, 0, "cursor_line");
-        assert_eq!(reader.first_buffer_line, 0, "first_buffer_line");
-        assert_eq!(reader.first_display_line, 0, "first_display_line");
-    }
-
-    #[test]
-    fn end_moves_all_after_gap_to_before_gap() {
-        let lines = [
-            ":12345678",
-            "9",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "012345678",
-            "🎸abc",
-        ];
-
-        let mut reader = LineReader {
-            display_width: 10,
-            bg_buf: lines[0].to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            cursor_column: 8,
-            cursor_line: 0,
-            first_display_line: 0,
-            ag_buf: lines[1..].join(""),
-            ..Default::default()
-        };
-        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_buf, lines.join(""));
-        assert!(reader.ag_buf.is_empty());
-    }
-
-    #[test]
-    fn end_moves_cursor_to_after_last_input_char() {
-        let lines = [
-            ":12345678",
-            "9",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "012345678",
-            "🎸abc",
-        ];
-
-        let mut reader = LineReader {
-            display_width: 10,
-            bg_buf: lines[0].to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            cursor_column: 9,
-            cursor_line: 0,
-            first_display_line: 0,
-            ag_buf: lines[1..].join(""),
-            ..Default::default()
-        };
-        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, [0, 10, 20, 30, 40, 50, 60, 69]);
-        assert!(
-            reader.penultimate_width.is_some_and(|w| w == 9),
-            "{:?}",
-            reader.penultimate_width
-        );
-        assert_eq!(reader.cursor_column, 5, "cursor_column");
-        assert_eq!(reader.cursor_line, 7, "cursor_line");
-    }
-
-    #[test]
-    fn end_past_eol_wraps_cursor() {
-        let lines = [":12345678", "9"];
-
-        let mut reader = LineReader {
-            display_width: 10,
-            bg_buf: lines[0].to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            cursor_column: 9,
-            cursor_line: 0,
-            first_display_line: 0,
-            ag_buf: lines[1..].join(""),
-            ..Default::default()
-        };
-        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, [0, 10,]);
-        assert!(
-            reader.penultimate_width.is_some_and(|w| w == 10),
-            "{:?}",
-            reader.penultimate_width
-        );
-        assert_eq!(reader.cursor_column, 0, "cursor_column");
-        assert_eq!(reader.cursor_line, 1, "cursor_line");
-    }
-
-    #[test]
-    fn end_past_bottom_when_bg_fits_pans_display() {
-        let lines = [
-            ":12345678",
-            "9",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "012345678",
-            "🎸abc",
-        ];
-
-        let mut reader = LineReader {
-            display_width: 10,
-            bg_buf: lines[0].to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            cursor_column: 9,
-            cursor_line: 22,
-            first_display_line: 22,
-            ag_buf: lines[1..].join(""),
-            ..Default::default()
-        };
-        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, [0, 10, 20, 30, 40, 50, 60, 69]);
-        assert!(
-            reader.penultimate_width.is_some_and(|w| w == 9),
-            "{:?}",
-            reader.penultimate_width
-        );
-        assert_eq!(reader.cursor_column, 5, "cursor_column");
-        assert_eq!(reader.cursor_line, 23, "cursor_line");
-        assert_eq!(reader.scroll_needed, 7);
-    }
-
-    #[test]
-    fn end_past_bottom_when_bg_overflows_pans_buffer() {
-        let lines = [
-            ":12345678",
-            "9",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "0123456789",
-            "012345678",
-            "🎸abc",
-        ];
-
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: lines[0].to_owned(),
-            prompt_width: 1,
-            prompt_len: 1,
-            cursor_column: 9,
-            cursor_line: 0,
-            first_display_line: 0,
-            ag_buf: lines[1..].join(""),
-            ..Default::default()
-        };
-        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, [0, 10, 20, 30, 40, 50, 60, 69]);
-        assert!(
-            reader.penultimate_width.is_some_and(|w| w == 9),
-            "{:?}",
-            reader.penultimate_width
-        );
-        assert_eq!(reader.cursor_column, 5, "cursor_column");
-        assert_eq!(reader.cursor_line, 4, "cursor_line");
-        assert_eq!(reader.first_buffer_line, 3);
-    }
-
-    #[test]
-    fn delete_removes_char_with_combining_marks() {
-        let mut reader = LineReader {
-            bg_buf: "d".to_owned(),
-            ag_buf: "ëf".to_owned(),
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.ag_buf, "f");
-        assert_eq!(reader.bg_buf, "d");
-    }
-
-    #[test]
-    fn delete_removes_last_char() {
-        let mut reader = LineReader {
-            bg_buf: "d".to_owned(),
-            ag_buf: "ë".to_owned(),
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert!(reader.ag_buf.is_empty());
-        assert_eq!(reader.bg_buf, "d");
-    }
-
-    #[test]
-    fn delete_wraps_cursor_if_first_ag_char_fits_prev_line() {
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            first_display_line: 0,
-            bg_buf: ":12345678".to_owned(),
-            prompt_len: 1,
-            prompt_width: 1,
-            ag_buf: "🎸ab".to_owned(),
-            bg_line_idx: vec![0, 9],
-            penultimate_width: Some(9),
-            cursor_line: 1,
-            cursor_column: 0,
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_line, 0, "cursor_line");
-        assert_eq!(reader.cursor_column, 9, "cursor_column");
-        assert_eq!(reader.bg_line_idx, [0]);
-    }
-
-    #[test]
-    fn viewport_bottom() {
-        let mut reader = LineReader::new();
-        reader.display_width = 20;
-        reader.display_lines = 24;
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.bg_buf.push_str(":1234567890");
-        reader.cursor_column = 11;
-
-        // ag_buf.is_empty()
-        assert_eq!(reader.viewport_bottom(), 23);
-
-        // ag_buf.width() < cursor line remainder
-        reader.ag_buf.push_str("12345");
-        assert_eq!(reader.viewport_bottom(), 23);
-
-        // ag_buf.width() == cursor line remainder
-        reader.ag_buf.push_str("67890");
-        assert_eq!(reader.viewport_bottom(), 22);
-
-        // ag_buf.width() > cursor line remainder
-        reader.ag_buf.push_str("1234567890123456789012345");
-        assert_eq!(reader.viewport_bottom(), 22);
-    }
-
-    #[test]
-    fn display_bound_finds_display_end() {
-        let mut reader = LineReader::new();
-        reader.display_width = 20;
-        reader.display_lines = 24;
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.bg_buf.push_str(":1234567890");
-        reader.cursor_column = 11;
-        reader.first_display_line = 22;
-        reader.cursor_line = 22;
-
-        // ag_buf.is_empty()
-        assert_eq!(reader.ag_display_bound(), 0);
-
-        // ag_buf.width() < cursor line remainder
-        reader.ag_buf.push_str("123🎸");
-        assert_eq!(reader.ag_display_bound(), 7);
-
-        // ag_buf.width() == cursor line remainder
-        reader.ag_buf.push_str("678🎸");
-        assert_eq!(reader.ag_display_bound(), 14);
-
-        // ag_buf.width() > cursor line remainder
-        reader.ag_buf.push_str("1234567890123456789🎸12345");
-        assert_eq!(reader.ag_display_bound(), 32);
-    }
-
-    // Char insertion tests
-
-    #[test]
-    fn char_typed_non_0w_inserts() {
-        let mut reader = LineReader::new();
-        reader.bg_buf.push(':');
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 1;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":🎸");
-    }
-
-    #[test]
-    fn char_typed_0w_requires_base_char() {
-        let mut reader = LineReader::new();
-        reader.bg_buf.push(':');
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 1;
-        let event = Event::Key(KeyEvent::new(
-            KeyCode::Char('\u{0308}'),
-            KeyModifiers::NONE,
-        ));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":");
-
-        let mut reader = LineReader::new();
-        reader.bg_buf.push_str(":e");
-        reader.prompt_len = ".".len();
-        reader.prompt_width = 1;
-        reader.cursor_column = 2;
-        let event = Event::Key(KeyEvent::new(
-            KeyCode::Char('\u{0308}'),
-            KeyModifiers::NONE,
-        ));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(&reader.bg_buf, ":e\u{0308}");
-    }
-
-    #[test]
-    fn char_typed_before_eol_moves_cursor_char_width() {
-        let mut reader = LineReader::new();
-        reader.bg_buf.push_str(":e");
-        reader.prompt_len = ".".len();
-        reader.prompt_width = 1;
-        reader.cursor_column = 2;
-        let event = Event::Key(KeyEvent::new(
-            KeyCode::Char('\u{0308}'),
-            KeyModifiers::NONE,
-        ));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!((reader.cursor_column, reader.cursor_line), (2, 23));
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 3);
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_column, 5);
-    }
-
-    #[test]
-    fn char_typed_to_eol_before_bottom_wraps_cursor_to_column_0() {
-        let mut reader = LineReader::new();
-        reader.display_width = 10;
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.bg_buf.push_str(":1234567");
-        reader.cursor_column = 8;
-        reader.cursor_line = 0;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!((reader.cursor_column, reader.cursor_line), (0, 1));
-        assert_eq!(reader.bg_line_idx, vec![0, 12]);
-    }
-
-    #[test]
-    fn char_typed_cursor_follows_next_char_pushed_to_next_line() {
-        let mut reader = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: ":1234567".to_owned(),
-            prompt_len: 1,
-            prompt_width: 1,
-            ag_buf: "🎸abcdef".to_owned(),
-            first_display_line: 0,
-            first_buffer_line: 0,
-            cursor_column: 8,
-            cursor_line: 0,
-            ..Default::default()
-        };
-
-        // inserting '8' pushes '🎸' to start of next line,
-        // but leaves one blank column on current line.
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('8'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_line, 1, "reader.cursor_line");
-        assert_eq!(reader.cursor_column, 0, "reader.cursor_column");
-    }
-
-    #[test]
-    fn char_typed_with_space_at_end_of_previous_line() {
-        let reader_start = LineReader {
-            display_width: 10,
-            display_lines: 5,
-            bg_buf: ":12345678".to_owned(),
-            prompt_len: 1,
-            prompt_width: 1,
-            ag_buf: "🎸abcd".to_owned(),
-            first_display_line: 0,
-            cursor_column: 0,
-            cursor_line: 1,
-            bg_line_idx: vec![0, 9],
-            penultimate_width: Some(9),
-            ..Default::default()
-        };
-
-        // inserting '9' should fit on previous line, leaving
-        // cursor line unchanged.
-        let mut reader = reader_start.clone();
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_line, 1, "cursor_line");
-        assert_eq!(reader.cursor_column, 0, "cursor_column");
-        assert!(matches!(reader.penultimate_width, Some(w) if w == 10));
-        assert_eq!(reader.bg_line_idx, [0, 10]);
-
-        // inserting '🎸' shouldn't fit on previous line, incrementing
-        // cursor as a normal insert
-        let mut reader = reader_start.clone();
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.cursor_line, 1, "cursor_line");
-        assert_eq!(reader.cursor_column, 2, "cursor_column");
-        assert_eq!(reader.bg_line_idx, [0, 9]);
-        assert!(matches!(reader.penultimate_width, Some(w) if w == 9));
-    }
-
-    #[test]
-    fn char_typed_past_eol_before_bottom_wraps_cursor_to_after_char() {
-        let mut reader = LineReader::new();
-        reader.display_width = 10;
-        reader.bg_buf.push_str(":12345678");
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 9;
-        reader.cursor_line = 0;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!((reader.cursor_column, reader.cursor_line), (2, 1));
-        assert_eq!(reader.bg_line_idx, vec![0, 9]);
-    }
-
-    #[test]
-    fn char_typed_to_bottom_when_bg_fits_pans_display() {
-        // ag_buf.is_empty(), so viewport == display
-        let mut reader = LineReader::new();
-        reader.display_width = 20;
-        reader.display_lines = 5;
-        reader.bg_buf.push_str(":123456789012345678");
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 19;
-        reader.cursor_line = 4;
-        reader.first_display_line = 4;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, vec![0, 19]);
-        assert_eq!((reader.cursor_column, reader.cursor_line), (2, 4));
-        assert_eq!(reader.first_display_line, 3);
-        assert_eq!(reader.scroll_needed, 1);
-
-        // ag_buf.width() past bottom of display, so viewport == display - 1
-        let mut reader = LineReader::new();
-        reader.display_width = 20;
-        reader.display_lines = 5;
-        reader.bg_buf.push_str(":123456789012345678");
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 19;
-        reader.cursor_line = 3;
-        reader.first_display_line = 3;
-        reader.ag_buf.push_str("123456789012345678901234567890123456789");
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!((reader.cursor_column, reader.cursor_line), (2, 3));
-        assert_eq!(reader.first_display_line, 2);
-        assert_eq!(reader.scroll_needed, 1);
-    }
-
-    #[test]
-    fn char_typed_to_bottom_when_bg_overflows_pans_buffer() {
-        // ag_buf.is_empty(), so viewport == display
-        let lines = [
-            ":1234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "012345678901234567",
-        ];
-
-        let mut reader = LineReader::new();
-        reader.display_width = 20;
-        reader.display_lines = 5;
-        reader.bg_buf.push_str(&lines.join(""));
-        reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 18;
-        reader.cursor_line = 4;
-        reader.first_display_line = 0;
-        reader.first_buffer_line = 1;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 122]);
-        assert_eq!((reader.cursor_column, reader.cursor_line), (0, 4));
-        assert_eq!(reader.first_display_line, 0);
-        assert_eq!(reader.first_buffer_line, 2);
-        assert_eq!(reader.scroll_needed, 0);
-
-        // ag_buf.width() past bottom of display, so viewport == display - 1
-        let mut reader = LineReader::new();
-        reader.display_width = 20;
-        reader.display_lines = 5;
-        reader.bg_buf.push_str(&lines.join(""));
-        reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 18;
-        reader.cursor_line = 3;
-        reader.first_display_line = 0;
-        reader.first_buffer_line = 2;
-        reader.ag_buf.push_str("123456789012345678901234567890123456789");
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 122]);
-        assert_eq!((reader.cursor_column, reader.cursor_line), (0, 3));
-        assert_eq!(reader.first_display_line, 0);
-        assert_eq!(reader.first_buffer_line, 3);
-        assert_eq!(reader.scroll_needed, 0);
-    }
-
-    #[test]
-    fn char_typed_when_ag_overflows_stops_at_display_bound() {
-        let lines = [
-            ":1234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "01234567890123456789",
-            "012345678901234567",
-        ];
-
-        let mut reader = LineReader::new();
-        reader.display_width = 20;
-        reader.display_lines = 5;
-        reader.bg_buf.push_str(&lines.join(""));
-        reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 18;
-        reader.cursor_line = 3;
-        reader.first_display_line = 0;
-        reader.first_buffer_line = 1;
-        reader.ag_buf.push_str("123456789012345678901234567890123456789");
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader.ag_display_bound(), 39);
-    }
-
-    #[test]
-    #[ignore]
-    fn resize_of_height_does_not_reflow_buffer() {
-        todo!();
-    }
-
-    #[test]
-    #[ignore]
-    fn resize_changing_width_reflows_buffer() {
-        todo!();
-    }
-
-    #[test]
-    #[ignore]
-    fn resize_changing_both_reflows_buffer() {
-        todo!();
-    }
-
-    #[test]
-    #[ignore]
-    fn resize_smaller() {
-        todo!();
-    }
-
-    #[test]
-    #[ignore]
-    fn resize_larger() {
-        todo!();
     }
 }
