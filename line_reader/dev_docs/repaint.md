@@ -67,9 +67,7 @@ actual I/O untested.
 
 ### Top level prodedure
 
-** TODO: differentiate between buffer gap and cursor position!!!
-
-    1.  In event handlers, make associated upates to display model.        
+    1.  In event handlers, make associated upates to buffer model.        
         a.  Resize
             i.      Update display columns & lines
             ii.     If dimensions have changed, update bg_buf display line
@@ -153,8 +151,7 @@ actual I/O untested.
             v.      Compute any necessary scroll distance
         f.  Return
             i.      Move to end
-        g.  Cancel  (ctrl-d)
-            i.      Moe to end
+
     2.  Render buffer to display.
         a. Hide cursor
         b. ScrollUp if needed.
@@ -164,8 +161,114 @@ actual I/O untested.
         f. Write as much of ag_buf as fits in display
         g. Move cursor to cursor position
         f. Show cursor
+
+##  IV. Event driven with simplified buffer model
+
+</record_scratch>
+
+All the previous models assume a gap buffer, but the overwhelmingly most
+common case will be a sigle display line, and virtually all use cases will
+result in less than ten display lines worth of text. Therefore, much of the
+complexity in the previous models is almost certainly unnecessary.
+
+### A.  Simplified Data Model
+
+A simpler model would be to use a buffer of lines limited to display line
+width, along with display position related values, and a bit of metadata to
+eliminate unnecessary repeated scanning over line contents.
+
+struct BufferLine {
+  text: String,
+  width: usize,
+}
+
+struct BufferIndex {
+  line: usize,
+  offset: usize,
+}
+  
+struct DisplayPosition {
+  column: usize,
+  line: usize,
+  buffer_offset: BufferOffset,
+}
+
+
+struct LineReader {
+  buffer: Vec<BufferLine>,
+  input_start: BufferIndex,
+  display_width: usize,
+  display_height: usize,
+  cursor: DisplayPosition,
+  display_start: DisplayPosition,
+  scroll_needed: usize,
+}
+
+### B.  Update and Rendering
+
+It still makes sense to use something like the Event based update model,
+above, to make the common case simple, but there might be simplification
+opportunities if efficiency in less common cases is deprioritized.
+
+    1.  In event handlers, make associated upates to buffer model.        
+        a.  Resize
+            i.      Update display columns & lines
+            ii.     Reflow the entire buffer
+        b.  Char(c)
+            i.      If c.width() > 0, or there is at least one
+                    preceding non-zero width character before the cursor,
+                    append new character after the cursor, adjusting the
+                    line width and cursor offset accordingly
+            ii.     If character width > 0, update the buffer line's width
+                    and update the cursor display location
+            iii.    If line.width > display_width, reflow buffer from
+                    cursor line
+        c.  Left
+            i.      Move cursor buffer offset to first preceding non-zero
+                    width character in the buffer
+            ii.     Reflow the buffer from cursor line
+        d.  Right
+            i.      Move cursor forward to next non-zero with character in
+                    the buffer.
+            ii.     Reflow the buffer from cursor line
+        e.  Backspace
+            i.      If at input_start, do nothing.
+            ii.     If offset is 0, set cursor_position to one past last
+                    char on previous buffer line.
+            iii.    Remove char before cursor and subtract it's len_utf8
+                    from the cursor offset.
+            iv.     If removed char had non-zero width, reflow buffer from
+                    cursor line 
+        f.  Delete
+            i.      If at end of last buffer line, do nothing.
+            ii.     Remove character at cursor and any following zero width
+                    characters.
+            ii.     Reflow buffer from cursor line
+        g.  Home
+            i.      Move cursor to first input character
+            ii.     Reflow buffer from cursor line
+        e.  End
+            i.      Move cursor to end of buffer
+            ii.     Reflow buffer from cursor line
+        f.  Return
+            i.      Move cursor to end of buffer
+            ii.     Reflow buffer from cursor line
+    2. Rendering/repaint
+        a. Compute last buffer line to display
+            i.  display_lines =
+                    self.display_height - self.display_start.line
+            ii. last_buffer_line = buffer.len().min(display_lines)
+        b. Hide cursor
+        c. ScrollUp if needed.
+        d. Move cursor to (0, self.display_start.line)
+        d. Clear to end
+        e. Write buffer[self.display_start.offset.line..last_buffer_line]
+            *   if terminal emulators don't wrap as expected, move terminal
+                cursor to beginning of each line prior to writing
+        f. Move cursor to (self.cursor.column, self.cursor.line)
+        g. Show cursor
         
-### Test cases
+## Test cases
 I. Char(c)
     A. Insertion widths
         1.  0w (e.g., combining mark u0308 '̈¨')
