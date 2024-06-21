@@ -238,7 +238,7 @@ impl LineReader {
         (self.first_display_line > 0).into()
     }
 
-    /// Reflow buffer lines to fit display_width, and
+    /// Reflow buffer lines to fit `display_width`, and
     /// snap cursor location to within viewport.
     /// Also might result in setting scroll needed.
     fn reflow<R>(&mut self, span: R)
@@ -277,7 +277,7 @@ impl LineReader {
             .queue(Clear(ClearType::FromCursorDown))?;
 
         for line in &self.buffer[self.first_buffer_line..buffer_limit] {
-            stdout.write_all(&line.text.as_bytes())?;
+            stdout.write_all(line.text.as_bytes())?;
         }
 
         stdout.queue(MoveTo(cursor_column, cursor_line))?.queue(Show)?.flush()
@@ -399,49 +399,47 @@ mod tests {
         }
 
         fn build(&self) -> LineReader {
-            let buffer = self.text.as_ref().map_or_else(
-                || Vec::new(),
-                |t| {
-                    t.iter()
-                        .cloned()
-                        .map(|text| {
-                            let width = text.width();
-                            BufferLine { text, width }
-                        })
-                        .collect::<Vec<BufferLine>>()
-                },
-            );
+            let buffer = self.text.as_ref().map_or_else(Vec::new, |t| {
+                t.iter()
+                    .cloned()
+                    .map(|text| {
+                        let width = text.width();
+                        BufferLine { text, width }
+                    })
+                    .collect::<Vec<BufferLine>>()
+            });
             for l in &buffer {
-                if l.width > self.display_width {
-                    panic!("Line too wide: {l:?} > {}", self.display_width);
-                }
+                assert!(l.width <= self.display_width,);
             }
-            if self.input_start.line > buffer.len()
-                || (buffer.len() > 0
-                    && self.input_start.offset
-                        > buffer[self.input_start.line].len())
-            {
-                panic!("input_start out of range: {:?}", self.input_start);
-            }
-            if self.cursor.column >= self.display_width {
-                panic!(
-                    "cursor.column too large: {} >= {}",
-                    self.cursor.column, self.display_width
+            if buffer.is_empty() {
+                assert_eq!(
+                    self.input_start,
+                    BufferIndex { line: 0, offset: 0 }
+                );
+                assert_eq!(
+                    self.cursor.index,
+                    BufferIndex { line: 0, offset: 0 }
+                );
+            } else {
+                assert!(
+                    (self.cursor.index.line == buffer.len()
+                        && self.cursor.index.offset == 0)
+                        || (self.cursor.index.line < buffer.len()
+                            && self.cursor.index.offset
+                                <= buffer[self.cursor.index.line].len())
+                );
+                assert!(
+                    (self.input_start.line == buffer.len()
+                        && self.input_start.offset == 0)
+                        || (self.input_start.line < buffer.len()
+                            && self.input_start.offset
+                                <= buffer[self.input_start.line].len())
                 );
             }
-            if self.cursor.line >= self.display_height {
-                panic!(
-                    "cursor.line too large: {} >= {}",
-                    self.cursor.line, self.display_height
-                );
-            }
-            if self.first_buffer_line > buffer.len() {
-                panic!(
-                    "first_buffer_line too large: {} > {}",
-                    self.first_buffer_line,
-                    buffer.len()
-                );
-            }
+            assert!(self.cursor.column < self.display_width);
+            assert!(self.cursor.line < self.display_height);
+            assert!(self.first_buffer_line <= buffer.len());
+
             LineReader {
                 buffer,
                 input_start: self.input_start,
@@ -473,7 +471,7 @@ mod tests {
     fn builder_simple_case() {
         let mut b = LineReaderBuilder::new();
         let r = b
-            .text(&vec![":ë🎸o"])
+            .text(&[":ë🎸o"])
             .cursor(Cursor {
                 line: 0,
                 column: 5,
@@ -524,7 +522,7 @@ mod tests {
         };
 
         let mut b = LineReaderBuilder::new();
-        b.text(&vec![
+        b.text(&[
             ":123456789abcde",
             "🎸23456789abcdef",
             "🎸23456789abcdef",
