@@ -1,4 +1,4 @@
-# Requirements
+#   Requirements
     1. Unless the terminal is less than three lines high, the cursor
        doesn't move to the first or last line of the terminal unless
        that would put it in the last line of the buffer (i.e., there
@@ -10,172 +10,18 @@
     4. Modulo terminl bugs, line_reader should support terminal window
        resizing.
 
-# Rendering methods
+#   Data model
 
-##  I.  Cursor centric
+Previous designes assumed a gap buffer for input, but the overwhelmingly
+most common case will be a sigle display line, and virtually all use cases
+will result in single digit display lines worth of text. Therefore, most
+of the complexity in the previous models is unnecessary.
 
-Essentially, calculate everything at repaint time, using cursor
-position (column, line) as main point of reference. Basic update is
-straight forward, but becomes inefficient and unnecessarily complex
-in cases of large buffers and large changes to the buffers.
+##  A.  Simplified Data Model
 
-### Top level procedure
-
-	1.	Compute new cursor position given current display start
-		and buffer content.
-	2.	If cursor would be outside viewport, compute new display start
-	   	and cursor position so that the cursor will be on the last line
-	   	of the viewport in that direction.
-	3.	If new display start is above current display start, compute
-		the appropriate number of lines to scroll to preserve any
-		scrollback buffer history.
-    4.  Render buffer to display
-    5.  Save new cursor position and display start
-
-##  II. Line centric
-
-Not entirely different from the first method, but uses a vector of
-display line indicies rather than scanning the buffer as needed.
-Should solve most of the issues of the first method.
-
-### Top level procedure
-
-    1.  If the buffer contents (not just the cursor position) or the
-        display dimentions change, update the display line indices.
-        Probably most efficiently done in the appropriate event handlers.
-    2.  Using line indicies, compute new cursor position given current
-        display start.
-	2.	If cursor would be outside viewport, compute new display start
-	   	and cursor position so that the cursor will be on the last line
-	   	of the viewport in that direction.
-	3.	If new display start is above current display start, compute
-		the appropriate number of lines to scroll to preserve any
-		scrollback buffer history.
-    4.  Render buffer to display
-    5.  Save new cursor position and display start
-    
-##  III.    Event driven
-
-Given that the most efficient time to update the display line offsets
-seems to be in the associated event handlers, it seems worth
-considering computing the full display model at event handling time,
-leaving only actual rendering to be done during repaint.
-
-In addition to likely being even more efficient, it would afford the
-opportunity to unit test the display model generation, leaving only
-actual I/O untested.
-
-### Top level prodedure
-
-    1.  In event handlers, make associated upates to buffer model.        
-        a.  Resize
-            i.      Update display columns & lines
-            ii.     If dimensions have changed, update bg_buf display line
-                    offsets
-            iii.    If line offsets have changed, update cursor position
-            iv.     If new cursor position is outside viewport, update
-                    display start and cursor postion to place cursor on
-                    last line of viewport.
-            v.      Compute any necessary scroll distance
-            vi.     If ag_buf isn't empty, compute end bound of displayed
-                    slice
-        b.  Char(c)
-            i.      If character width > 0, or there is at least one
-                    preceding non-zero width character before the gap,
-                    append new character before the gap.
-            ii.     If character width > 0, update bg_buf display line
-                    offsets starting from cursor line
-            iii.    If line offsets have changed, update cursor position
-            iv.     If new cursor position is outside viewport, update
-                    display start and cursor postion to place cursor on
-                    last line of viewport.
-            v.      Compute any necessary scroll distance
-            vi.     If ag_buf isn't empty, compute end bound of displayed
-                    slice
-        c.  Left
-            i.      Move last non-zero width char from back of bg_buf
-                    to front of ag_buf, along with any following zero
-                    width chars
-            ii.     Truncate last display line offset if it's beyond
-                    bg_buf len
-            iii.    Compute new cursor position
-            iv.     If new cursor position is outside viewport, update
-                    display start and cursor postion to place cursor on
-                    first line of viewport.
-            v.      If ag_buf isn't empty, compute end bound of displayed
-                    slice
-        d.  Right
-            i.      Move first char from front of ag_buf to back of
-                    bg_buf, along with any following zero width chars
-            ii.     Update bg_buf display line offsets starting from
-                    cursor line
-            iii.    Compute new cursor position
-            iv.     If new cursor position is outside viewport, update
-                    display start and cursor postion to place cursor on
-                    first line of viewport.
-            v.      Compute any necessary scroll distance
-            vi.     If ag_buf isn't empty, compute end bound of displayed
-                    slice
-        e.  Backspace
-            i.      Remove last char before gap
-            ii.     Truncate last display line offset if it's beyond
-                    bg_buf len
-            iii.    If removed char had non-zero width, compute new
-                    cursor position.
-            iv.     If new cursor position is outside viewport, update
-                    display start and cursor postion to place cursor on
-                    last line of viewport.
-            v.      If ag_buf isn't empty, compute end bound of displayed
-                    slice
-        f.  Delete
-            i.      Remove first char and any following zero width chars
-                    from front of ag_buf
-            ii.     If ag_buf isn't empty, compute end bound of displayed
-                    slice
-        g.  Home
-            i.      Move content of bg_buf to front of ag_buf
-            ii.     Compute new cursor position.
-            iii.    If new cursor position is outside viewport, update
-                    display start and cursor postion to place cursor on
-                    last line of viewport.
-            iv.     If ag_buf isn't empty, compute end bound of displayed
-                    slice
-        e.  End
-            i.      Move contents of ag_buf to back of bg_buf
-            ii.     Update display line indices, starting with cursor
-                    line.
-            iii.    Compute new cursor position
-            iv.     If new cursor position is outside viewport, update
-                    display start and cursor postion to place cursor on
-                    first line of viewport.
-            v.      Compute any necessary scroll distance
-        f.  Return
-            i.      Move to end
-
-    2.  Render buffer to display.
-        a. Hide cursor
-        b. ScrollUp if needed.
-        c. Move cursor to (0, first_display_line)
-        d. Clear to end
-        e. Write bg_buf from first_buffer_line
-        f. Write as much of ag_buf as fits in display
-        g. Move cursor to cursor position
-        f. Show cursor
-
-##  IV. Event driven with simplified buffer model
-
-</record_scratch>
-
-All the previous models assume a gap buffer, but the overwhelmingly most
-common case will be a sigle display line, and virtually all use cases will
-result in less than ten display lines worth of text. Therefore, much of the
-complexity in the previous models is almost certainly unnecessary.
-
-### A.  Simplified Data Model
-
-A simpler model would be to use a buffer of lines limited to display line
-width, along with display position related values, and a bit of metadata to
-eliminate unnecessary repeated scanning over line contents.
+The new model is a buffer of lines limited to display line width, along
+with display position related values, and a bit of metadata to eliminate
+excessive scanning of line contents.
 
 struct BufferLine {
   text: String,
@@ -204,11 +50,7 @@ struct LineReader {
   scroll_needed: usize,
 }
 
-### B.  Update and Rendering
-
-It still makes sense to use something like the Event based update model,
-above, to make the common case simple, but there might be simplification
-opportunities if efficiency in less common cases is deprioritized.
+##  B.  Update and Rendering
 
     1.  In event handlers, make associated upates to buffer model.        
         a.  Resize
@@ -253,7 +95,23 @@ opportunities if efficiency in less common cases is deprioritized.
         f.  Return
             i.      Move cursor to end of buffer
             ii.     Reflow buffer from cursor line
-    2. Rendering/repaint
+    2.  Reflow
+        The reflow routine needs to:
+        a.  reflow the buffer, filling lines as full as possible, and
+            wrapping any overflow to following lines
+        b.  maintain the cursor dispalay position with the display
+            position of the buffer location the cursor tracks
+        b.  constrain the cursor to the viewport
+            i.  If it's below the viewport, pan the buffer down enough
+                to bring it to the last line of the viewport by adjusting
+                first_buffer_line and, if it wasn't already 0,
+                first_display_line. If first_display_line is adjusted,
+                scroll_needed is the difference between the old and new
+                values.
+            ii. If it's above the viewport, pan the buffer up enough
+                to bring it to the first line of the viewport by adjusting
+                first_buffer_line.
+    3.  Rendering/repaint
         a. Compute last buffer line to display
             i.  display_lines =
                     self.display_height - self.display_start.line
@@ -275,15 +133,25 @@ I. Char(c)
         2.  1w (e.g., the letter 'a')
         3.  2w (e.g., the guitar symbol u1f3b8 '🎸')
     B. Test cases
-        1.  Insertion of each width works as expected in base case
-        2.  Insertion of each size that fills line to last column wraps
-            cursor to column zero of next line.
-        3.  Insertion that won't fit line wraps character to start of next
-            line and moves cursor to first colum after character.
-        4.  Insertion that puts cursor below viewport adjusts display
-            start to keep cursor on last line of viewport, scrolling up as
-            necessary.
-        5.  Insertion reflows buffer from previous cursor line down.
+        1.  Input of each width works as expected in base case
+            a.  0w requires preceding base character
+            b.  each width inserts character and moves cursor appropriate
+                width and offset
+            c.  input at start of line is appended to preceding line if it
+                fits (eg. 0w char, or 1w char if first char on cursor line
+                is a 2w char that didn't fit preceding line)
+        2.  Cursor is maintained in the first available display cell after
+            the new input.
+            a.  Input that fills line to last column wraps cursor to start
+                of next line.
+            b.  Input that won't fit line wraps character to start of next
+                line and moves cursor to first column after character.
+            c.  Input that pushes characters at cursor to next line moves
+                cursor with the reflowed characters
+        6.  Cursor is bound to the viewport
+            a.  Input that puts cursor below viewport adjusts display start
+                to keep cursor on last line of viewport, scrolling up as
+                necessary.
 II. Backspace
     A. Removed widths
         1.  0w (e.g., combining mark u0308 '̈¨')
