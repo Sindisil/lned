@@ -21,7 +21,7 @@ pub trait LineRead {
     ) -> io::Result<usize>;
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LineReader {
     buffer: Vec<BufferLine>,
     input_start: BufferIndex,
@@ -36,7 +36,7 @@ pub struct LineReader {
 // Non-public structs, enums, and traits
 ///////////////
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 struct BufferLine {
     text: String,
     width: usize,
@@ -74,18 +74,66 @@ pub fn native_eol() -> &'static str {
 }
 
 impl BufferLine {
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.text.len()
+    }
+
+    pub(crate) fn new() -> BufferLine {
+        BufferLine { text: String::new(), width: 0 }
+    }
+}
+
+impl From<&str> for BufferLine {
+    fn from(value: &str) -> BufferLine {
+        let width = value.width();
+        BufferLine { text: value.to_owned(), width }
+    }
+}
+
+impl BufferIndex {
+    pub(crate) fn new() -> BufferIndex {
+        BufferIndex { ..Default::default() }
+    }
+}
+
+impl From<(usize, usize)> for BufferIndex {
+    fn from((line, offset): (usize, usize)) -> BufferIndex {
+        BufferIndex { line, offset }
+    }
+}
+
+impl Cursor {
+    pub(crate) fn new() -> Cursor {
+        Cursor { ..Default::default() }
     }
 }
 
 // impls for LineReader
 ////////
 
+impl Default for LineReader {
+    fn default() -> LineReader {
+        LineReader {
+            buffer: vec![BufferLine { text: String::new(), width: 0 }],
+            input_start: BufferIndex { ..Default::default() },
+            display_width: 0,
+            display_height: 0,
+            cursor: Cursor { ..Default::default() },
+            first_display_line: 0,
+            first_buffer_line: 0,
+            scroll_needed: 0,
+        }
+    }
+}
 impl LineReader {
     #[must_use]
     pub fn new() -> LineReader {
         LineReader { ..Default::default() }
+    }
+
+    #[must_use]
+    pub(crate) fn builder() -> LineReaderBuilder {
+        LineReaderBuilder::new()
     }
 
     fn reset(
@@ -106,7 +154,7 @@ impl LineReader {
             index: BufferIndex { line: 0, offset: prompt_line.text.len() },
         };
         self.buffer.splice(.., [prompt_line]);
-        self.reflow(..);
+        self.reflow(0);
     }
 
     #[cfg(not(tarpaulin_include))]
@@ -173,7 +221,7 @@ impl LineReader {
             KeyCode::End => self.handle_end(),
             KeyCode::Backspace => self.handle_backspace(),
             KeyCode::Delete => self.handle_delete(),
-            KeyCode::Char(c) => self.handle_char_typed(c),
+            KeyCode::Char(c) => self.handle_char_input(c),
             KeyCode::Up => {
                 todo!("move to next older entry in history");
             }
@@ -184,22 +232,28 @@ impl LineReader {
         }
     }
 
-    fn handle_char_typed(&mut self, c: char) -> ControlFlow<()> {
+    fn handle_char_input(&mut self, c: char) -> ControlFlow<()> {
         let c_width = c.width().unwrap_or(0);
 
-        if c_width > 0 || self.cursor.index != self.input_start {
-            self.buffer[self.cursor.index.line]
-                .text
-                .insert(self.cursor.index.offset, c);
-            let line = &mut self.buffer[self.cursor.index.line];
-            line.text.insert(self.cursor.index.offset, c);
-            line.width += c_width;
-            self.cursor.index.offset += c.len_utf8();
-            self.cursor.column += c_width;
-            if self.cursor.column >= self.display_width {
-                self.reflow(self.cursor.index.line..);
+        if c_width == 0 && self.cursor.index == self.input_start {
+            return ControlFlow::Continue(());
+        }
+
+        if self.cursor.index.line > 0 {
+            let p_line = &mut self.buffer[self.cursor.index.line - 1];
+            if self.display_width - p_line.width <= c_width {
+                p_line.text.push(c);
+                p_line.width += c_width;
+                return ControlFlow::Continue(());
             }
         }
+
+        let line = &mut self.buffer[self.cursor.index.line];
+        line.text.insert(self.cursor.index.offset, c);
+        line.width += c_width;
+        self.cursor.index.offset += c.len_utf8();
+        self.cursor.column += c_width;
+        self.reflow(self.cursor.index.line);
 
         ControlFlow::Continue(())
     }
@@ -229,23 +283,147 @@ impl LineReader {
     }
 
     /// Compute last line of viewport
-    fn viewport_bottom(&self) -> u16 {
-        todo!();
+    fn viewport_bottom(&self) -> usize {
+        if self.cursor.index.line <= self.buffer.len() {
+            self.display_height - 2
+        } else {
+            self.display_height - 1
+        }
     }
 
     /// Compute first line of viewport
-    fn viewport_top(&self) -> u16 {
+    fn viewport_top(&self) -> usize {
         (self.first_display_line > 0).into()
     }
 
     /// Reflow buffer lines to fit `display_width`, and
     /// snap cursor location to within viewport.
     /// Also might result in setting scroll needed.
-    fn reflow<R>(&mut self, span: R)
-    where
-        R: RangeBounds<usize>,
-    {
-        todo!();
+    fn reflow(&mut self, start: usize) {
+        let mut lines = self.buffer.iter_mut().enumerate();
+        let mut this_line = lines.nth(start);
+        let mut next_line = lines.next();
+        let mut residue = None;
+        let mut cols = 0;
+        while let Some((tl_idx, ref mut line)) = this_line {
+            if line.width == self.display_width {
+                cols = line.width;
+                this_line = next_line;
+                next_line = lines.next();
+                continue;
+            }
+            eprintln!("need to find chars that fit");
+
+            let mut cs = line.text.char_indices().peekable();
+
+            while let Some(&(i, c)) = cs.peek() {
+                let c_width = c.width().unwrap_or(0);
+                if self.display_width - cols < c_width {
+                    residue = Some(i);
+                    break;
+                }
+                cols += c_width;
+                cs.next();
+            }
+
+            if let Some((nl_idx, ref mut nl)) = next_line {
+                if let Some(res_idx) = residue.take() {
+                    // this_line too wide
+                    // move residue to next_line start
+                    nl.width += &line.text[res_idx..].width();
+                    nl.text.insert_str(0, line.text.drain(res_idx..).as_str());
+                    if tl_idx == self.cursor.index.line
+                        && self.cursor.index.offset >= res_idx
+                    {
+                        // moved chars at cursor to next_line
+                        // need to adjust cursor
+                        self.cursor.index.line += 1;
+                        self.cursor.index.offset -= res_idx;
+                        self.cursor.line += 1;
+                        self.cursor.column =
+                            nl.text[..self.cursor.index.offset].width();
+                    }
+                } else if cols < self.display_width {
+                    // this_line has room
+                    // try to fill from next_line start
+                    let mut cols_moved = 0;
+                    let i = nl
+                        .text
+                        .chars()
+                        .take_while(|c| {
+                            let c_width = c.width().unwrap_or(0);
+                            if self.display_width - cols < c_width {
+                                false
+                            } else {
+                                cols_moved += c_width;
+                                true
+                            }
+                        })
+                        .count();
+                    if i > 0 {
+                        if nl_idx == self.cursor.index.line {
+                            // moved chars from cursor line
+                            // need to adjust cursor
+                            if self.cursor.index.offset >= i {
+                                // chars at cursor not moved
+                                self.cursor.index.offset -= i;
+                                self.cursor.column -= cols_moved;
+                            } else {
+                                self.cursor.line -= 1;
+                                self.cursor.column = cols;
+                                self.cursor.index = (tl_idx, cols).into();
+                            }
+                        }
+                        line.text.extend(nl.text.drain(..i));
+                        cols += cols_moved;
+                        nl.width -= cols_moved;
+                    }
+                }
+
+                line.width = cols;
+
+                this_line = next_line;
+                next_line = lines.next();
+            } else {
+                line.width = cols;
+                break;
+            }
+        }
+
+        // handle overflow at end of buffer
+        if cols >= self.display_width {
+            let (text, width) = if let Some(res_idx) = residue {
+                let text: String = self
+                    .buffer
+                    .last_mut()
+                    .unwrap()
+                    .text
+                    .drain(res_idx..)
+                    .collect();
+                if self.cursor.index.line == self.buffer.len() - 1
+                    && self.cursor.index.offset >= res_idx
+                {
+                    // chars at cursor moving to new last line
+                    self.cursor.index.line += 1;
+                    self.cursor.index.offset -= res_idx;
+                    self.cursor.line += 1;
+                    self.cursor.column =
+                        text[..self.cursor.index.offset].width();
+                }
+                let width = text.width();
+                (text, width)
+            } else {
+                // no residue; add line & move cursor
+                self.cursor.line += 1;
+                self.cursor.column = 0;
+                self.cursor.index = (self.cursor.index.line + 1, 0).into();
+                (String::new(), 0)
+            };
+            self.buffer.push(BufferLine { text, width });
+            if width > self.display_width {
+                self.reflow(self.buffer.len() - 1);
+            }
+        }
     }
 
     #[cfg(not(tarpaulin_include))]
@@ -328,78 +506,73 @@ where
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::unicode_not_nfc)]
-mod tests {
-    use super::*;
+#[derive(Debug)]
+pub struct LineReaderBuilder {
+    text: Option<Vec<String>>,
+    cursor: Cursor,
+    display_width: usize,
+    display_height: usize,
+    first_display_line: usize,
+    first_buffer_line: usize,
+    input_start: BufferIndex,
+}
 
-    use crossterm::event::KeyModifiers;
-
-    struct LineReaderBuilder {
-        text: Option<Vec<String>>,
-        cursor: Cursor,
-        display_width: usize,
-        display_height: usize,
-        first_display_line: usize,
-        first_buffer_line: usize,
-        input_start: BufferIndex,
+impl LineReaderBuilder {
+    fn new() -> Self {
+        LineReaderBuilder {
+            text: None,
+            display_width: 10,
+            display_height: 5,
+            first_display_line: 0,
+            first_buffer_line: 0,
+            cursor: Cursor { ..Default::default() },
+            input_start: BufferIndex { line: 0, offset: 0 },
+        }
     }
 
-    impl LineReaderBuilder {
-        fn new() -> Self {
-            LineReaderBuilder {
-                text: None,
-                display_width: 10,
-                display_height: 5,
-                first_display_line: 0,
-                first_buffer_line: 0,
-                cursor: Cursor { ..Default::default() },
-                input_start: BufferIndex { line: 0, offset: 0 },
-            }
-        }
+    fn input_start(&mut self, i: BufferIndex) -> &mut Self {
+        self.input_start = i;
+        self
+    }
 
-        fn input_start(&mut self, i: BufferIndex) -> &mut Self {
-            self.input_start = i;
-            self
-        }
+    fn first_buffer_line(&mut self, l: usize) -> &mut Self {
+        self.first_buffer_line = l;
+        self
+    }
 
-        fn first_buffer_line(&mut self, l: usize) -> &mut Self {
-            self.first_buffer_line = l;
-            self
-        }
+    fn first_display_line(&mut self, l: usize) -> &mut Self {
+        self.first_display_line = l;
+        self
+    }
 
-        fn first_display_line(&mut self, l: usize) -> &mut Self {
-            self.first_display_line = l;
-            self
-        }
+    fn display_height(&mut self, h: usize) -> &mut Self {
+        self.display_height = h;
+        self
+    }
 
-        fn display_height(&mut self, h: usize) -> &mut Self {
-            self.display_height = h;
-            self
-        }
+    fn display_width(&mut self, w: usize) -> &mut Self {
+        self.display_width = w;
+        self
+    }
 
-        fn display_width(&mut self, w: usize) -> &mut Self {
-            self.display_width = w;
-            self
-        }
+    fn cursor(&mut self, c: Cursor) -> &mut Self {
+        self.cursor = c;
+        self
+    }
 
-        fn cursor(&mut self, c: Cursor) -> &mut Self {
-            self.cursor = c;
-            self
-        }
+    fn text<S>(&mut self, t: &[S]) -> &mut Self
+    where
+        S: AsRef<str>,
+    {
+        self.text =
+            Some(t.as_ref().iter().map(|s| s.as_ref().to_owned()).collect());
+        self
+    }
 
-        fn text<S>(&mut self, t: &[S]) -> &mut Self
-        where
-            S: AsRef<str>,
-        {
-            self.text = Some(
-                t.as_ref().iter().map(|s| s.as_ref().to_owned()).collect(),
-            );
-            self
-        }
-
-        fn build(&self) -> LineReader {
-            let buffer = self.text.as_ref().map_or_else(Vec::new, |t| {
+    fn build(&self) -> LineReader {
+        let buffer = self.text.as_ref().map_or_else(
+            || vec![BufferLine { text: String::new(), width: 0 }],
+            |t| {
                 t.iter()
                     .cloned()
                     .map(|text| {
@@ -407,51 +580,54 @@ mod tests {
                         BufferLine { text, width }
                     })
                     .collect::<Vec<BufferLine>>()
-            });
-            for l in &buffer {
-                assert!(l.width <= self.display_width,);
-            }
-            if buffer.is_empty() {
-                assert_eq!(
-                    self.input_start,
-                    BufferIndex { line: 0, offset: 0 }
-                );
-                assert_eq!(
-                    self.cursor.index,
-                    BufferIndex { line: 0, offset: 0 }
-                );
-            } else {
-                assert!(
-                    (self.cursor.index.line == buffer.len()
-                        && self.cursor.index.offset == 0)
-                        || (self.cursor.index.line < buffer.len()
-                            && self.cursor.index.offset
-                                <= buffer[self.cursor.index.line].len())
-                );
-                assert!(
-                    (self.input_start.line == buffer.len()
-                        && self.input_start.offset == 0)
-                        || (self.input_start.line < buffer.len()
-                            && self.input_start.offset
-                                <= buffer[self.input_start.line].len())
-                );
-            }
-            assert!(self.cursor.column < self.display_width);
-            assert!(self.cursor.line < self.display_height);
-            assert!(self.first_buffer_line <= buffer.len());
+            },
+        );
 
-            LineReader {
-                buffer,
-                input_start: self.input_start,
-                display_width: self.display_width,
-                display_height: self.display_height,
-                cursor: self.cursor,
-                first_display_line: self.first_display_line,
-                first_buffer_line: self.first_buffer_line,
-                scroll_needed: 0,
-            }
+        for l in &buffer {
+            assert!(l.width <= self.display_width,);
+        }
+        if buffer.is_empty() {
+            assert_eq!(self.input_start, BufferIndex { line: 0, offset: 0 });
+            assert_eq!(self.cursor.index, BufferIndex { line: 0, offset: 0 });
+        } else {
+            assert!(
+                (self.cursor.index.line == buffer.len()
+                    && self.cursor.index.offset == 0)
+                    || (self.cursor.index.line < buffer.len()
+                        && self.cursor.index.offset
+                            <= buffer[self.cursor.index.line].len())
+            );
+            assert!(
+                (self.input_start.line == buffer.len()
+                    && self.input_start.offset == 0)
+                    || (self.input_start.line < buffer.len()
+                        && self.input_start.offset
+                            <= buffer[self.input_start.line].len())
+            );
+        }
+        assert!(self.cursor.column < self.display_width);
+        assert!(self.cursor.line < self.display_height);
+        assert!(self.first_buffer_line <= buffer.len());
+
+        LineReader {
+            buffer,
+            input_start: self.input_start,
+            display_width: self.display_width,
+            display_height: self.display_height,
+            cursor: self.cursor,
+            first_display_line: self.first_display_line,
+            first_buffer_line: self.first_buffer_line,
+            scroll_needed: 0,
         }
     }
+}
+
+#[cfg(test)]
+#[allow(clippy::unicode_not_nfc)]
+mod tests {
+    use super::*;
+
+    use crossterm::event::KeyModifiers;
 
     #[test]
     fn builder_base_case() {
@@ -571,5 +747,182 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, ControlFlow::Break(())));
+    }
+
+    #[test]
+    fn char_input_non_0w_inserts() {
+        let mut b = LineReaderBuilder::new();
+        let mut reader = b.build();
+
+        b.text(&["🎸"]).cursor(Cursor {
+            column: 2,
+            line: 0,
+            index: BufferIndex { line: 0, offset: 4 },
+        });
+        let expected = b.build();
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn char_input_0w_requires_base_char() {
+        let mut b = LineReaderBuilder::new();
+        b.text(&[":"]).input_start(BufferIndex { line: 0, offset: 1 }).cursor(
+            Cursor {
+                line: 0,
+                column: 1,
+                index: BufferIndex { line: 0, offset: 1 },
+            },
+        );
+
+        let mut reader = b.build();
+
+        let expected = b.build();
+
+        let event = Event::Key(KeyEvent::new(
+            KeyCode::Char('\u{0308}'),
+            KeyModifiers::NONE,
+        ));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.text(&[":a"]).input_start(BufferIndex { line: 0, offset: 1 }).cursor(
+            Cursor {
+                line: 0,
+                column: 2,
+                index: BufferIndex { line: 0, offset: 2 },
+            },
+        );
+        let mut reader = b.build();
+
+        b.text(&[":ä"]).input_start(BufferIndex { line: 0, offset: 1 }).cursor(
+            Cursor {
+                line: 0,
+                column: 2,
+                index: BufferIndex { line: 0, offset: 4 },
+            },
+        );
+        let expected = b.build();
+
+        let event = Event::Key(KeyEvent::new(
+            KeyCode::Char('\u{0308}'),
+            KeyModifiers::NONE,
+        ));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn char_input_before_eol_moves_cursor_char_width() {
+        let mut b = LineReader::builder();
+        b.text(&[":e"])
+            .input_start(BufferIndex { line: 0, offset: 1 })
+            .cursor(Cursor { line: 0, column: 2, index: (0, 2).into() });
+        let mut reader = b.build();
+
+        let event = Event::Key(KeyEvent::new(
+            KeyCode::Char('\u{0308}'),
+            KeyModifiers::NONE,
+        ));
+        b.text(&[":ë"]).cursor(Cursor {
+            line: 0,
+            column: 2,
+            index: (0, 4).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
+        b.text(&[":ë🎸"]).cursor(Cursor {
+            line: 0,
+            column: 4,
+            index: (0, 8).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+        b.text(&[":ë🎸o"]).cursor(Cursor {
+            line: 0,
+            column: 5,
+            index: (0, 9).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn char_input_to_eol_wraps_cursor_to_next_line_start() {
+        let mut b = LineReader::builder();
+        b.text(&[":1234567"]).input_start((0, 1).into()).cursor(Cursor {
+            column: 8,
+            line: 0,
+            index: (0, 8).into(),
+        });
+
+        let mut reader = b.build();
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
+        b.text(&[":1234567🎸", ""]).cursor(Cursor {
+            column: 0,
+            line: 1,
+            index: (1, 0).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn char_input_append_to_previous_line_if_fits() {
+        let mut b = LineReader::builder();
+        b.text(&[":12345678", "🎸abc"])
+            .input_start((0, 1).into())
+            .cursor(Cursor { column: 0, line: 4, index: (1, 0).into() })
+            .display_width(10)
+            .display_height(5)
+            .first_display_line(3);
+        let mut reader = b.build();
+
+        b.text(&[":123456789", "🎸abc"]);
+        let expected = b.build();
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn char_input_cursor_follows_character_if_wrapped() {
+        todo!();
+    }
+
+    #[test]
+    fn char_input_past_eol_wraps_input_to_next_line_start() {
+        todo!();
+    }
+
+    #[test]
+    fn char_input_cursor_bound_to_viewport() {
+        todo!();
     }
 }
