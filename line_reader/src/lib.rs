@@ -312,6 +312,22 @@ impl LineReader {
         (self.first_buffer_line > 0).into()
     }
 
+    fn adjust_viewport(&mut self) {
+        if self.cursor.line > self.viewport_bottom() {
+            self.cursor.line -= 1;
+            self.scroll_needed = (self.first_buffer_line == 0).into();
+            if self.first_display_line == 0 {
+                self.first_buffer_line += 1;
+            } else {
+                self.first_display_line =
+                    self.first_display_line.saturating_sub(1);
+            }
+        } else if self.cursor.line < self.viewport_top() {
+            self.cursor.line += 1;
+            self.first_buffer_line -= 1;
+        }
+    }
+
     /// Reflow buffer lines to fit `display_width`, and
     /// snap cursor location to within viewport.
     /// Also might result in setting scroll needed.
@@ -336,25 +352,18 @@ impl LineReader {
             tl_idx += 1;
         }
 
-        if self.cursor.index.line == self.buffer.len() {
-            self.buffer.push(BufferLine::new());
-        } else if self.buffer.last().is_some_and(|l| l.text.is_empty()) {
+        let mut lines = self.buffer.iter();
+        let last = lines.next_back().unwrap();
+        let penultimate = lines.next_back();
+        if last.text.is_empty()
+            && penultimate.is_some_and(|pl| pl.width < self.display_width)
+        {
             self.buffer.pop();
+        } else if last.width == self.display_width {
+            self.buffer.push(BufferLine::new());
         }
 
-        if self.cursor.line > self.viewport_bottom() {
-            self.cursor.line -= 1;
-            self.scroll_needed = (self.first_buffer_line == 0).into();
-            if self.first_display_line == 0 {
-                self.first_buffer_line += 1;
-            } else {
-                self.first_display_line =
-                    self.first_display_line.saturating_sub(1);
-            }
-        } else if self.cursor.line < self.viewport_top() {
-            self.cursor.line += 1;
-            self.first_buffer_line -= 1;
-        }
+        self.adjust_viewport();
     }
 
     fn try_fill_from_next(&mut self, tl_idx: usize) {
@@ -1283,7 +1292,7 @@ mod tests {
         b.cursor(Cursor { column: 2, line: 1, index: (1, 4).into() });
         let mut reader = b.build();
 
-        b.text(&[":123456789"]).cursor(Cursor {
+        b.text(&[":123456789", "",]).cursor(Cursor {
             column: 9,
             line: 0,
             index: (0, 9).into(),
