@@ -68,19 +68,21 @@ struct LineReader {
         c.  Left
             i.      Move cursor buffer offset to first preceding non-zero
                     width character in the buffer
-            ii.     Reflow the buffer from cursor line
+            ii.     Adjust viewport
         d.  Right
             i.      Move cursor forward to next non-zero with character in
                     the buffer.
-            ii.     Reflow the buffer from cursor line
+            ii.     Adjust viewport
         e.  Backspace
             i.      If at input_start, do nothing.
-            ii.     If offset is 0, set cursor_position to one past last
+            ii.     If column is 0, set cursor_position to one past last
                     char on previous buffer line.
             iii.    Remove char before cursor and subtract it's len_utf8
                     from the cursor offset.
             iv.     If removed char had non-zero width, reflow buffer from
-                    cursor line 
+                    cursor line
+            v.      Reflow from earlier of first line or one line before
+                    cursor
         f.  Delete
             i.      If at end of last buffer line, do nothing.
             ii.     Remove character at cursor and any following zero width
@@ -88,20 +90,21 @@ struct LineReader {
             ii.     Reflow buffer from cursor line
         g.  Home
             i.      Move cursor to first input character
-            ii.     Reflow buffer from cursor line
+            ii.     Adjust viewport
         e.  End
             i.      Move cursor to end of buffer
-            ii.     Reflow buffer from cursor line
+            ii.     Adjust viewport
         f.  Return
             i.      Move cursor to end of buffer
-            ii.     Reflow buffer from cursor line
+            ii.     Adjust viewport
+            iii.    Move cursor to beginning of nextg line
     2.  Reflow
         The reflow routine needs to:
-        a.  reflow the buffer, filling lines as full as possible, and
-            wrapping any overflow to following lines
-        b.  maintain the cursor dispalay position with the display
-            position of the buffer location the cursor tracks
-        b.  constrain the cursor to the viewport
+        a.  iterate the buffer lines, filling lines as full as possible,
+            and wrapping any overflow to following lines
+        b.  maintain final buffer line of < display_width
+    3.  Adjusting viewport
+        a.  constrain the cursor to the viewport
             i.  If it's below the viewport, pan the buffer down enough
                 to bring it to the last line of the viewport by adjusting
                 first_buffer_line and, if it wasn't already 0,
@@ -111,7 +114,8 @@ struct LineReader {
             ii. If it's above the viewport, pan the buffer up enough
                 to bring it to the first line of the viewport by adjusting
                 first_buffer_line.
-    3.  Rendering/repaint
+    
+    4.  Rendering/repaint
         a. Compute last buffer line to display
             i.  display_lines =
                     self.display_height - self.display_start.line
