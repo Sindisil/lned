@@ -249,6 +249,30 @@ impl LineReader {
     }
 
     fn handle_backspace(&mut self) -> ControlFlow<()> {
+        if self.cursor.index == self.input_start {
+            return ControlFlow::Continue(());
+        }
+
+        if self.cursor.index.offset == 0 {
+            self.cursor.index.line -= 1;
+            self.cursor.index.offset =
+                self.buffer[self.cursor.index.line].len();
+            self.cursor.line -= 1;
+            self.cursor.column = self.buffer[self.cursor.index.line].width;
+        }
+        if let Some((i, c)) = self.buffer[self.cursor.index.line].text
+            [..self.cursor.index.offset]
+            .char_indices()
+            .next_back()
+        {
+            self.buffer[self.cursor.index.line].text.remove(i);
+            let removed_width = c.width().unwrap_or(0);
+
+            self.buffer[self.cursor.index.line].width -= removed_width;
+            self.cursor.index.offset = i;
+            self.cursor.column -= removed_width;
+        }
+        self.reflow(self.cursor.index.line.saturating_sub(1));
         ControlFlow::Continue(())
     }
 
@@ -305,14 +329,17 @@ impl LineReader {
                         self.cursor.column = 0;
                         self.cursor.index.line += 1;
                         self.cursor.index.offset = 0;
-                        if self.cursor.index.line == self.buffer.len() {
-                            self.buffer.push(BufferLine::new());
-                        }
                     }
                 }
             }
 
             tl_idx += 1;
+        }
+
+        if self.cursor.index.line == self.buffer.len() {
+            self.buffer.push(BufferLine::new());
+        } else if self.buffer.last().is_some_and(|l| l.text.is_empty()) {
+            self.buffer.pop();
         }
 
         if self.cursor.line > self.viewport_bottom() {
@@ -324,6 +351,9 @@ impl LineReader {
                 self.first_display_line =
                     self.first_display_line.saturating_sub(1);
             }
+        } else if self.cursor.line < self.viewport_top() {
+            self.cursor.line += 1;
+            self.first_buffer_line -= 1;
         }
     }
 
@@ -332,6 +362,9 @@ impl LineReader {
         if let (Some(ref mut this_line), Some(ref mut next_line)) =
             (lines.next(), lines.next())
         {
+            if this_line.width >= self.display_width {
+                return;
+            }
             let mut cols_moved = 0;
             let i = next_line
                 .text
@@ -366,6 +399,10 @@ impl LineReader {
                 this_line.text.extend(next_line.text.drain(..i));
                 this_line.width += cols_moved;
                 next_line.width -= cols_moved;
+            }
+            if next_line.text.is_empty() && this_line.width < self.display_width
+            {
+                self.buffer.pop();
             }
         }
     }
@@ -1143,6 +1180,191 @@ mod tests {
         let expected = b.build();
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn backspace_0w() {
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":ë"]).input_start((0, 1).into()).cursor(Cursor {
+            column: 2,
+            line: 0,
+            index: (0, 4).into(),
+        });
+        let mut reader = b.build();
+
+        b.text(&[":e"]).cursor(Cursor {
+            column: 2,
+            line: 0,
+            index: (0, 2).into(),
+        });
+        let expected = b.build();
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn backspace_1w() {
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":e"]).input_start((0, 1).into()).cursor(Cursor {
+            column: 2,
+            line: 0,
+            index: (0, 2).into(),
+        });
+        let mut reader = b.build();
+
+        b.text(&[":"]).cursor(Cursor {
+            column: 1,
+            line: 0,
+            index: (0, 1).into(),
+        });
+        let expected = b.build();
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn backspace_2w() {
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":🎸"]).input_start((0, 1).into()).cursor(Cursor {
+            column: 3,
+            line: 0,
+            index: (0, 5).into(),
+        });
+        let mut reader = b.build();
+
+        b.text(&[":"]).cursor(Cursor {
+            column: 1,
+            line: 0,
+            index: (0, 1).into(),
+        });
+        let expected = b.build();
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn backspace_input_start() {
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":"]).input_start((0, 1).into()).cursor(Cursor {
+            column: 1,
+            line: 0,
+            index: (0, 1).into(),
+        });
+        let mut reader = b.build();
+        let expected = b.build();
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn backspace_to_column_0_wraps_if_room_on_preceding_line() {
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":12345678", "🎸9"]).input_start((0, 1).into());
+        b.cursor(Cursor { column: 2, line: 1, index: (1, 4).into() });
+        let mut reader = b.build();
+
+        b.text(&[":123456789"]).cursor(Cursor {
+            column: 9,
+            line: 0,
+            index: (0, 9).into(),
+        });
+        let expected = b.build();
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn backspace_from_column_0_wraps_if_room_on_receding_line() {
+        let mut b = LineReaderBuilder::new(10, 5);
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        // base case
+        b.text(&[":123456789", ""]).input_start((0, 1).into());
+        b.cursor(Cursor { column: 0, line: 1, index: (1, 0).into() });
+        let mut reader = b.build();
+
+        b.text(&[":12345678"]).cursor(Cursor {
+            column: 9,
+            line: 0,
+            index: (0, 9).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        // zero len char at preceding line end
+        b.text(&[":12345678ä", "eiou"]);
+        b.cursor(Cursor { column: 0, line: 1, index: (1, 0).into() });
+        let mut reader = b.build();
+
+        b.text(&[":12345678a", "eiou"]);
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn backspace_moving_cursor_above_top_pans_buffer() {
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[
+            ":123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123",
+        ])
+        .input_start((0, 1).into());
+        b.first_buffer_line(1).cursor(Cursor {
+            line: 1,
+            column: 0,
+            index: (2, 0).into(),
+        });
+        let mut reader = b.build();
+
+        b.text(&[
+            ":123456789",
+            "0123456780",
+            "1234567890",
+            "1234567890",
+            "1234567890",
+            "123",
+        ]);
+        b.first_buffer_line(0).cursor(Cursor {
+            line: 1,
+            column: 9,
+            index: (1, 9).into(),
+        });
+        let expected = b.build();
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
         assert_eq!(reader, expected);
