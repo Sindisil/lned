@@ -132,10 +132,11 @@ impl LineReader {
         self.first_display_line = first_display_line;
         let prompt_line =
             BufferLine { text: prompt.to_owned(), width: prompt.width() };
+        self.input_start = (0, prompt_line.text.len()).into();
         self.cursor = Cursor {
             column: prompt_line.width,
-            line: 0,
-            index: BufferIndex { line: 0, offset: prompt_line.text.len() },
+            line: self.first_display_line,
+            index: self.input_start,
         };
         self.buffer.splice(.., [prompt_line]);
         self.reflow(0);
