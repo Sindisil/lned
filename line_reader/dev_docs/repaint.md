@@ -231,7 +231,7 @@ VI. Home
     A. Test cases
         1.  Home when cursor is at input_start does nothing.
         2.  Home moves cursor to input_start
-        4.  Home that moves cursor above display top pans buffer down so
+        3.  Home that moves cursor above display top pans buffer down so
             first displayed line is on line 0.
 VII. End
     A. Test cases
