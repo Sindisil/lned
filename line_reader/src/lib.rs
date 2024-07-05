@@ -493,7 +493,8 @@ impl LineReader {
     /// render current buffer to display
     fn repaint(&mut self) -> io::Result<()> {
         let display_lines = self.display_height - self.first_display_line;
-        let buffer_limit = self.buffer.len().min(display_lines);
+        let last_displayed =
+            self.first_buffer_line + self.buffer.len().min(display_lines);
 
         let mut stdout = io::stdout().lock();
 
@@ -505,6 +506,7 @@ impl LineReader {
             stdout.queue(ScrollUp(scroll_needed))?;
             self.scroll_needed = 0;
         }
+
         // convert values to u16 for crossterm
         let first_display_line = u16::try_from(self.first_display_line)
             .expect("first_display_line fits u16");
@@ -517,7 +519,7 @@ impl LineReader {
             .queue(MoveTo(0, first_display_line))?
             .queue(Clear(ClearType::FromCursorDown))?;
 
-        for line in &self.buffer[self.first_buffer_line..buffer_limit] {
+        for line in &self.buffer[self.first_buffer_line..last_displayed] {
             stdout.write_all(line.text.as_bytes())?;
         }
 
