@@ -304,19 +304,28 @@ impl LineReader {
     }
 
     fn handle_right(&mut self) -> ControlFlow<()> {
-        ControlFlow::Continue(())
+        todo!()
     }
 
     fn handle_delete(&mut self) -> ControlFlow<()> {
-        ControlFlow::Continue(())
+        todo!()
     }
 
     fn handle_home(&mut self) -> ControlFlow<()> {
+        if self.cursor.index != self.input_start {
+            self.first_buffer_line = 0;
+            self.cursor.index = self.input_start;
+            self.cursor.line = self.first_display_line + self.cursor.index.line;
+            self.cursor.column = self.buffer[self.cursor.index.line].text
+                [..self.cursor.index.offset]
+                .width();
+            self.adjust_viewport();
+        }
         ControlFlow::Continue(())
     }
 
     fn handle_end(&mut self) -> ControlFlow<()> {
-        ControlFlow::Continue(())
+        todo!()
     }
 
     /// Compute last line of viewport
@@ -1482,6 +1491,54 @@ mod tests {
         b.cursor(Cursor { column: 8, line: 1, index: (2, 8).into() });
         let expected = b.build();
 
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+    #[test]
+    fn home_from_input_start_does_nothing() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":123456789", "0123456789", "012345678", "🎸abcd"])
+            .input_start((0, 1).into());
+        b.cursor(Cursor { column: 1, line: 0, index: (0, 1).into() });
+        let mut reader = b.build();
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn home_moves_cursor_to_input_start() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":123456789", "0123456789", "012345678", "🎸abcd"])
+            .input_start((0, 1).into());
+        b.cursor(Cursor { column: 0, line: 3, index: (3, 0).into() });
+        let mut reader = b.build();
+        b.cursor(Cursor { column: 1, line: 0, index: (0, 1).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn home_moving_cursor_above_top_pans_buffer() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":123456789", "0123456789", "012345678", "🎸abcd"])
+            .input_start((0, 1).into());
+        b.first_buffer_line = 2;
+        b.cursor(Cursor { column: 0, line: 1, index: (3, 0).into() });
+        let mut reader = b.build();
+        b.first_buffer_line = 0;
+        b.cursor(Cursor { column: 1, line: 0, index: (0, 1).into() });
+        let expected = b.build();
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
         assert_eq!(reader, expected);
