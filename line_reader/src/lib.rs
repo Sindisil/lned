@@ -305,7 +305,35 @@ impl LineReader {
     }
 
     fn handle_right(&mut self) -> ControlFlow<()> {
-        todo!()
+        if self.cursor.index
+            == (self.buffer.len() - 1, self.buffer.last().unwrap().text.len())
+                .into()
+        {
+            return ControlFlow::Continue(());
+        }
+
+        if let Some((i, _)) = self.buffer[self.cursor.index.line].text
+            [self.cursor.index.offset..]
+            .char_indices()
+            .skip(1)
+            .find(|(_, c)| c.width().unwrap_or(0) > 0)
+        {
+            let cur_char_width = self.buffer[self.cursor.index.line].text
+                [self.cursor.index.offset..]
+                .chars()
+                .next()
+                .and_then(|c| c.width())
+                .unwrap();
+            self.cursor.column += cur_char_width;
+            self.cursor.index.offset += i;
+        } else {
+            self.cursor.line += 1;
+            self.cursor.column = 0;
+            self.cursor.index.line += 1;
+            self.cursor.index.offset = 0;
+        }
+        self.adjust_viewport();
+        ControlFlow::Continue(())
     }
 
     fn handle_delete(&mut self) -> ControlFlow<()> {
@@ -348,10 +376,10 @@ impl LineReader {
     fn adjust_viewport(&mut self) {
         if self.cursor.line > self.viewport_bottom() {
             self.cursor.line -= 1;
-            self.scroll_needed = (self.first_buffer_line == 0).into();
             if self.first_display_line == 0 {
                 self.first_buffer_line += 1;
             } else {
+                self.scroll_needed = 1;
                 self.first_display_line =
                     self.first_display_line.saturating_sub(1);
             }
@@ -1542,6 +1570,118 @@ mod tests {
         b.first_buffer_line = 0;
         b.cursor(Cursor { column: 1, line: 0, index: (0, 1).into() });
         let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+    #[test]
+    fn right_at_buffer_end_does_nothing() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":123456"]).input_start((0, 1).into());
+        b.cursor(Cursor { column: 7, line: 0, index: (0, 7).into() });
+        let mut reader = b.build();
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn right_moves_cursor_to_next_base_char() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":aë🎸ou"]).input_start((0, 1).into());
+        b.cursor(Cursor { column: 1, line: 0, index: (0, 1).into() });
+        let mut reader = b.build();
+
+        b.cursor(Cursor { column: 2, line: 0, index: (0, 2).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.cursor(Cursor { column: 3, line: 0, index: (0, 5).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.cursor(Cursor { column: 5, line: 0, index: (0, 9).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn right_from_last_base_char_moves_to_next_column_0() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":12345678", "🎸23456789", ""]).input_start((0, 1).into());
+        b.cursor(Cursor { line: 0, column: 8, index: (0, 8).into() });
+        let mut reader = b.build();
+        b.cursor(Cursor { line: 1, column: 0, index: (1, 0).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.cursor(Cursor { line: 1, column: 9, index: (1, 11).into() });
+        let mut reader = b.build();
+        b.cursor(Cursor { line: 2, column: 0, index: (2, 0).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn right_past_display_bottom_small_buffer_scrolls_buffer() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":1234567ö", "🎸23456789", "0123456789", "0123456789", "abc"])
+            .input_start((0, 1).into());
+        b.first_display_line(3);
+        b.cursor(Cursor { line: 3, column: 8, index: (0, 8).into() });
+        let mut reader = b.build();
+
+        b.first_display_line(2);
+        b.cursor(Cursor { line: 3, column: 0, index: (1, 0).into() });
+        b.scroll_needed(1);
+        let expected = b.build();
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn right_past_bottom_of_large_buffer_pans_buffer_up() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[
+            ":1234567ö",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "abc",
+        ])
+        .input_start((0, 1).into());
+        b.cursor(Cursor { line: 3, column: 9, index: (3, 9).into() });
+        let mut reader = b.build();
+
+        b.first_buffer_line(1);
+        b.cursor(Cursor { line: 3, column: 0, index: (4, 0).into() });
+        let expected = b.build();
+
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
         assert_eq!(reader, expected);
