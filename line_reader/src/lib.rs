@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::io::{self, BufRead, Write};
 use std::ops::ControlFlow;
+use std::time::Duration;
 
 use crossterm::cursor::{self, Hide, MoveTo, MoveToNextLine, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
@@ -120,6 +121,7 @@ impl Default for LineReader {
         }
     }
 }
+
 impl LineReader {
     #[must_use]
     pub fn new() -> LineReader {
@@ -170,9 +172,34 @@ impl LineReader {
         self.repaint()?;
         let mut should_continue = true;
         while should_continue {
-            let event = event::read()?;
+            let event = match event::read()? {
+                Event::Resize(mut x, mut y) => {
+                    let c_pos = cursor::position()?;
+                    let mut cursor_line: usize = c_pos.1.into();
+                    while let Ok(true) = event::poll(Duration::from_millis(50))
+                    {
+                        if let Event::Resize(x1, y1) = event::read()? {
+                            (x, y) = (x1, y1);
+                            let c_pos = cursor::position()?;
+                            cursor_line = c_pos.1.into();
+                        }
+                    }
+                    if cursor_line > self.cursor.line {
+                        self.first_display_line +=
+                            cursor_line - self.cursor.line;
+                    } else {
+                        self.first_display_line -=
+                            self.cursor.line - cursor_line;
+                    }
+                    self.cursor.line = cursor_line;
+                    Event::Resize(x, y)
+                }
+                event => event,
+            };
             should_continue = self.handle_event(&event).is_continue();
-            self.repaint()?;
+            if !matches!(event, Event::Resize(..)) {
+                self.repaint()?;
+            }
         }
 
         self.handle_end();
@@ -196,8 +223,27 @@ impl LineReader {
             Event::Key(event) if event.kind == KeyEventKind::Press => {
                 self.handle_key_event(event)
             }
+            Event::Resize(x, y) => self.handle_resize_event(*x, *y),
             _ => ControlFlow::Continue(()),
         }
+    }
+
+    fn handle_resize_event(&mut self, x: u16, y: u16) -> ControlFlow<()> {
+        let old_width = self.display_width;
+        let old_height = self.display_height;
+        self.display_width = x.into();
+        self.display_height = y.into();
+
+        if self.display_width != old_width {
+            self.reflow(0);
+        } else if self.display_height != old_height {
+            self.adjust_viewport();
+        }
+        if self.display_height < old_height {
+            let h_diff = old_height - self.display_height;
+            self.scroll_needed = self.scroll_needed.saturating_sub(h_diff);
+        }
+        ControlFlow::Continue(())
     }
 
     fn handle_key_event(&mut self, event: &KeyEvent) -> ControlFlow<()> {
@@ -225,7 +271,6 @@ impl LineReader {
 
     fn handle_char_input(&mut self, c: char) -> ControlFlow<()> {
         let c_width = c.width().unwrap_or(0);
-
         // if char is zero width, but no previous chars exist to
         //  which it can  be combined, do nothing (i.e., don't accept
         // the input)
@@ -233,21 +278,13 @@ impl LineReader {
             return ControlFlow::Continue(());
         }
 
-        //        if self.cursor.index.line > 0 {
-        //            let p_line = &mut self.buffer[self.cursor.index.line - 1];
-        //            if self.display_width - p_line.width <= c_width {
-        //                p_line.text.push(c);
-        //                p_line.width += c_width;
-        //                return ControlFlow::Continue(());
-        //            }
-        //        }
-        //
         // insert new char at curser and let reflow sort it out
         let line = &mut self.buffer[self.cursor.index.line];
         line.text.insert(self.cursor.index.offset, c);
         line.width += c_width;
         self.cursor.index.offset += c.len_utf8();
         self.cursor.column += c_width;
+
         // reflow from line before cursor, if it exists,
         // catching case where new char fits on previous line
         self.reflow(self.cursor.index.line.saturating_sub(1));
@@ -417,17 +454,35 @@ impl LineReader {
     fn adjust_viewport(&mut self) {
         if self.cursor.line > self.viewport_bottom() {
             let diff = self.cursor.line - self.viewport_bottom();
-            self.cursor.line -= diff;
+            self.cursor.line = self.viewport_bottom();
             if self.first_display_line == 0 {
                 self.first_buffer_line += diff;
             } else {
                 self.scroll_needed = self.first_display_line.min(diff);
                 self.first_display_line =
                     self.first_display_line.saturating_sub(diff);
+                self.first_buffer_line += diff - self.scroll_needed;
             }
         } else if self.cursor.line < self.viewport_top() {
-            self.cursor.line += 1;
-            self.first_buffer_line -= 1;
+            let diff = self.viewport_top() - self.cursor.line;
+            self.cursor.line = self.viewport_top();
+            self.first_buffer_line =
+                self.first_buffer_line.saturating_sub(diff);
+        }
+        if self.buffer.len() <= self.display_height {
+            if self.first_buffer_line != 0 {
+                // lines above display
+                self.cursor.line += self.first_buffer_line;
+                self.first_buffer_line = 0;
+            } else if self.display_height - self.first_display_line
+                < self.buffer.len()
+            {
+                // lines below display
+                self.scroll_needed = self.buffer.len()
+                    - (self.display_height - self.first_display_line);
+                self.cursor.line -= self.scroll_needed;
+                self.first_display_line -= self.scroll_needed;
+            }
         }
     }
 
@@ -438,8 +493,17 @@ impl LineReader {
         let mut tl_idx = start;
         while tl_idx < self.buffer.len() {
             match self.buffer[tl_idx].width.cmp(&self.display_width) {
-                Ordering::Less => self.try_fill_from_next(tl_idx),
-                Ordering::Greater => self.move_overflow_to_next(tl_idx),
+                Ordering::Less => {
+                    if self.try_fill_from_next(tl_idx).is_none()
+                        || self.buffer[tl_idx].width == self.display_width
+                    {
+                        tl_idx += 1;
+                    }
+                }
+                Ordering::Greater => {
+                    self.move_overflow_to_next(tl_idx);
+                    tl_idx += 1;
+                }
                 Ordering::Equal => {
                     if tl_idx == self.cursor.index.line
                         && self.cursor.column >= self.display_width
@@ -448,11 +512,13 @@ impl LineReader {
                         self.cursor.column = 0;
                         self.cursor.index.line += 1;
                         self.cursor.index.offset = 0;
+                        if self.cursor.index.line == self.buffer.len() {
+                            self.buffer.push(BufferLine::new());
+                        }
                     }
+                    tl_idx += 1;
                 }
             }
-
-            tl_idx += 1;
         }
 
         if self.buffer.last().unwrap().width == self.display_width {
@@ -462,53 +528,69 @@ impl LineReader {
         self.adjust_viewport();
     }
 
-    fn try_fill_from_next(&mut self, tl_idx: usize) {
-        let mut lines = self.buffer[tl_idx..].iter_mut();
-        if let (Some(ref mut this_line), Some(ref mut next_line)) =
-            (lines.next(), lines.next())
-        {
-            if this_line.width >= self.display_width {
-                return;
-            }
-            let mut cols_moved = 0;
-            let i = next_line
-                .text
-                .chars()
-                .take_while(|c| {
-                    let c_width = c.width().unwrap_or(0);
-                    if self.display_width
-                        >= (this_line.width + cols_moved + c_width)
-                    {
-                        cols_moved += c_width;
-                        true
-                    } else {
-                        false
-                    }
-                })
-                .count();
-            if i > 0 {
-                if self.cursor.index.line == tl_idx + 1 {
-                    // moved chars from cursor line
-                    // need to adjust cursor
-                    if self.cursor.index.offset >= i {
-                        // chars at cursor not moved
-                        self.cursor.index.offset -= i;
-                        self.cursor.column -= cols_moved;
-                    } else {
-                        self.cursor.line -= 1;
-                        self.cursor.column = this_line.width;
-                        self.cursor.index = (tl_idx, this_line.width).into();
-                    }
-                }
+    // attempt to fill this line, up to but not beyond,
+    // display_width.
+    // returns Some(prev_line_len) (i.e., idx of first
+    // moved char), or None if no chars moved
+    fn try_fill_from_next(&mut self, tl_idx: usize) -> Option<(usize, usize)> {
+        if tl_idx == self.buffer.len() - 1 {
+            return None;
+        }
 
-                this_line.text.extend(next_line.text.drain(..i));
-                this_line.width += cols_moved;
-                next_line.width -= cols_moved;
+        let tl_width = self.buffer[tl_idx].width;
+        let nl_idx = tl_idx + 1;
+        let moved = self.buffer[nl_idx].text.char_indices().try_fold(
+            (0, 0),
+            |(res_idx, cols_moved), (i, c)| {
+                let c_width = c.width().unwrap_or(0);
+                if self.display_width >= (tl_width + cols_moved + c_width) {
+                    ControlFlow::Continue((i + 1, cols_moved + c_width))
+                } else {
+                    ControlFlow::Break((res_idx, cols_moved))
+                }
+            },
+        );
+        let (res_idx, cols_moved) = match moved {
+            ControlFlow::Continue(result) | ControlFlow::Break(result) => {
+                result
             }
-            if next_line.text.is_empty() && this_line.width < self.display_width
-            {
-                self.buffer.pop();
+        };
+        if res_idx > 0 {
+            if self.cursor.index.line == nl_idx {
+                if self.cursor.index.offset < res_idx
+                    || res_idx == self.buffer[nl_idx].text.len()
+                {
+                    self.cursor.line -= 1;
+                    self.cursor.column += tl_width;
+                    self.cursor.index.line -= 1;
+                    self.cursor.index.offset += self.buffer[tl_idx].len();
+                } else {
+                    self.cursor.index.offset -= res_idx;
+                    self.cursor.column -= cols_moved;
+                }
             }
+
+            let (this_part, next_part) = self.buffer.split_at_mut(nl_idx);
+            let this_line = &mut this_part[tl_idx];
+            let next_line = &mut next_part[0];
+            this_line.text.extend(next_line.text.drain(..res_idx));
+            this_line.width += cols_moved;
+            next_line.width -= cols_moved;
+        }
+
+        if self.buffer[nl_idx].text.is_empty()
+            && self.buffer[tl_idx].width < self.display_width
+        {
+            self.buffer.remove(nl_idx);
+            if self.cursor.index.line > tl_idx {
+                self.cursor.index.line -= 1;
+                self.cursor.line -= 1;
+            }
+        }
+
+        match res_idx {
+            0 => None,
+            _ => Some((res_idx, cols_moved)),
         }
     }
 
@@ -537,6 +619,7 @@ impl LineReader {
             })
             .unwrap();
         let cols_moved = this.width - cols;
+        let bytes_moved = this.len() - res_idx;
         this.width = cols;
         next.width += cols_moved;
         next.text.insert_str(0, this.text.drain(res_idx..).as_str());
@@ -549,6 +632,10 @@ impl LineReader {
             self.cursor.column -= this.width;
             self.cursor.index.line += 1;
             self.cursor.index.offset -= res_idx;
+        } else if self.cursor.index.line == tl_idx + 1 {
+            // if next line was cursor line, adjust cursor column
+            self.cursor.column += cols_moved;
+            self.cursor.index.offset += bytes_moved;
         }
     }
 
@@ -563,13 +650,6 @@ impl LineReader {
 
         stdout.queue(Hide)?;
 
-        if self.scroll_needed > 0 {
-            let scroll_needed = u16::try_from(self.scroll_needed)
-                .expect("scroll needed fits in u16");
-            stdout.queue(ScrollUp(scroll_needed))?;
-            self.scroll_needed = 0;
-        }
-
         // convert values to u16 for crossterm
         let first_display_line = u16::try_from(self.first_display_line)
             .expect("first_display_line fits u16");
@@ -581,6 +661,13 @@ impl LineReader {
         stdout
             .queue(MoveTo(0, first_display_line))?
             .queue(Clear(ClearType::FromCursorDown))?;
+
+        if self.scroll_needed > 0 {
+            let scroll_needed = u16::try_from(self.scroll_needed)
+                .expect("scroll needed fits in u16");
+            stdout.queue(ScrollUp(scroll_needed - 1))?;
+            self.scroll_needed = 0;
+        }
 
         for line in &self.buffer[self.first_buffer_line..last_displayed] {
             stdout.write_all(line.text.as_bytes())?;
@@ -1425,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn backspace_from_column_0_wraps_if_room_on_receding_line() {
+    fn backspace_from_column_0_wraps_if_room_on_preceding_line() {
         let mut b = LineReaderBuilder::new(10, 5);
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
@@ -1564,20 +1651,28 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         let mut b = LineReaderBuilder::new(10, 5);
-        b.text(&[":123456789", "0123456789", "012345678", "🎸abc"])
-            .input_start((0, 1).into());
-        b.first_buffer_line(2);
-        b.cursor(Cursor { column: 0, line: 1, index: (3, 0).into() });
+        b.text(&[
+            ":123456789",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "012345678",
+            "🎸abc",
+        ])
+        .input_start((0, 1).into());
+        b.first_buffer_line(1);
+        b.cursor(Cursor { column: 0, line: 1, index: (2, 0).into() });
         let mut reader = b.build();
 
-        b.first_buffer_line(1);
-        b.cursor(Cursor { column: 8, line: 1, index: (2, 8).into() });
+        b.first_buffer_line(0);
+        b.cursor(Cursor { column: 8, line: 1, index: (1, 8).into() });
         let expected = b.build();
 
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
         assert_eq!(reader, expected);
     }
+
     #[test]
     fn home_from_input_start_does_nothing() {
         let event =
@@ -1686,27 +1781,6 @@ mod tests {
         let mut reader = b.build();
         b.cursor(Cursor { line: 2, column: 0, index: (2, 0).into() });
         let expected = b.build();
-        let res = reader.handle_event(&event);
-        assert!(res.is_continue());
-        assert_eq!(reader, expected);
-    }
-
-    #[test]
-    fn right_past_display_bottom_small_buffer_scrolls_buffer() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let mut b = LineReaderBuilder::new(10, 5);
-        b.text(&[":1234567ö", "🎸23456789", "0123456789", "0123456789", "abc"])
-            .input_start((0, 1).into());
-        b.first_display_line(3);
-        b.cursor(Cursor { line: 3, column: 8, index: (0, 8).into() });
-        let mut reader = b.build();
-
-        b.first_display_line(2);
-        b.cursor(Cursor { line: 3, column: 0, index: (1, 0).into() });
-        b.scroll_needed(1);
-        let expected = b.build();
-
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
         assert_eq!(reader, expected);
@@ -1912,6 +1986,283 @@ mod tests {
         b.cursor(Cursor { column: 9, line: 0, index: (0, 9).into() });
         let expected = b.build();
         let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_height_smaller_cursor_at_end() {
+        let mut b = LineReaderBuilder::new(10, 10);
+        b.text(&[
+            ":123456789",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbc",
+        ])
+        .input_start((0, 1).into())
+        .first_display_line(3)
+        .cursor(Cursor { column: 3, line: 9, index: (6, 5).into() });
+        let mut reader = b.build();
+
+        b.display_height(8).first_display_line(1).cursor(Cursor {
+            column: 3,
+            line: 7,
+            index: (6, 5).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Resize(10, 8));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.display_height(7).first_display_line(0).cursor(Cursor {
+            column: 3,
+            line: 6,
+            index: (6, 5).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Resize(10, 7));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.display_height(5)
+            .first_buffer_line(2)
+            .cursor(Cursor { column: 3, line: 4, index: (6, 5).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Resize(10, 5));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_height_smaller_cursor_at_start() {
+        let mut b = LineReaderBuilder::new(10, 10);
+        b.text(&[
+            ":123456789",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbc",
+        ])
+        .input_start((0, 1).into())
+        .first_display_line(3)
+        .cursor(Cursor { column: 1, line: 3, index: (0, 1).into() });
+        let mut reader = b.build();
+
+        b.display_height(8).first_display_line(1).cursor(Cursor {
+            column: 1,
+            line: 1,
+            index: (0, 1).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Resize(10, 8));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.display_height(7).first_display_line(0).cursor(Cursor {
+            column: 1,
+            line: 0,
+            index: (0, 1).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Resize(10, 7));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.display_height(5).cursor(Cursor {
+            column: 1,
+            line: 0,
+            index: (0, 1).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Resize(10, 5));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_width_smaller_cursor_at_start() {
+        let mut b = LineReaderBuilder::new(10, 10);
+        b.text(&[
+            ":123456789",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbcdefgh",
+        ])
+        .input_start((0, 1).into())
+        .first_display_line(3)
+        .cursor(Cursor { column: 1, line: 3, index: (0, 1).into() });
+        let mut reader = b.build();
+
+        b.text(&[
+            ":12345", "678901", "234567", "8🎸234", "567890", "123456",
+            "789012", "345678", "901234", "56789ä", "bcdefg", "h",
+        ])
+        .display_width(6);
+        let expected = b.build();
+
+        let res = reader.handle_event(&Event::Resize(6, 10));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_width_smaller_cursor_at_end() {
+        let mut b = LineReaderBuilder::new(10, 10);
+        b.text(&[
+            ":123456789",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbcdefgh",
+        ])
+        .input_start((0, 1).into())
+        .first_display_line(3)
+        .cursor(Cursor { column: 8, line: 9, index: (6, 10).into() });
+        let mut reader = b.build();
+
+        b.text(&[
+            ":12345", "678901", "234567", "8🎸234", "567890", "123456",
+            "789012", "345678", "901234", "56789ä", "bcdefg", "h",
+        ])
+        .cursor(Cursor { column: 1, line: 9, index: (11, 1).into() })
+        .first_display_line(0)
+        .scroll_needed(3)
+        .first_buffer_line(2)
+        .display_width(6);
+        let expected = b.build();
+
+        let res = reader.handle_event(&Event::Resize(6, 10));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_height_larger_cursor_at_end() {
+        let mut b = LineReaderBuilder::new(10, 6);
+        b.text(&[
+            ":123456789",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbcdefgh",
+        ])
+        .input_start((0, 1).into())
+        .first_buffer_line(3)
+        .cursor(Cursor { column: 8, line: 5, index: (8, 10).into() });
+        let mut reader = b.build();
+
+        let event = Event::Resize(10, 10);
+        b.first_display_line(0).first_buffer_line(0).display_height(10);
+        b.cursor(Cursor { column: 8, line: 8, index: (8, 10).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_height_larger_cursor_at_start() {
+        let mut b = LineReaderBuilder::new(10, 6);
+        b.text(&[
+            ":123456789",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbcdefgh",
+        ])
+        .input_start((0, 1).into())
+        .cursor(Cursor { column: 1, line: 0, index: (0, 1).into() });
+        let mut reader = b.build();
+
+        let event = Event::Resize(10, 10);
+        b.display_height(10);
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_width_larger_cursor_at_start() {
+        let mut b = LineReaderBuilder::new(6, 10);
+        b.text(&[
+            ":12345", "678901", "234567", "8🎸234", "567890", "123456",
+            "789012", "345678", "901234", "56789ä", "bcdefg", "h",
+        ])
+        .input_start((0, 1).into());
+        b.first_display_line(0).cursor(Cursor {
+            column: 1,
+            line: 0,
+            index: (0, 1).into(),
+        });
+        let mut reader = b.build();
+
+        b.text(&[
+            ":123456789",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbcdefgh",
+        ])
+        .display_width(10);
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Resize(10, 10));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_width_larger_cursor_at_end() {
+        let mut b = LineReaderBuilder::new(6, 10);
+        b.text(&[
+            ":12345", "678901", "234567", "8🎸234", "567890", "123456",
+            "789012", "345678", "901234", "56789ä", "bcdefg", "hi",
+        ])
+        .input_start((0, 1).into());
+        b.first_buffer_line(2).cursor(Cursor {
+            column: 2,
+            line: 9,
+            index: (11, 2).into(),
+        });
+        let mut reader = b.build();
+
+        b.text(&[
+            ":123456789",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbcdefghi",
+        ])
+        .display_width(10);
+        b.first_buffer_line(0).cursor(Cursor {
+            column: 9,
+            line: 6,
+            index: (6, 11).into(),
+        });
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Resize(10, 10));
         assert!(res.is_continue());
         assert_eq!(reader, expected);
     }

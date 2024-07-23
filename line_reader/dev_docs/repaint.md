@@ -51,7 +51,10 @@ struct LineReader {
 }
 
 ##  B.  Update and Rendering
-
+    The buffer is maintained such that lines exist for every line a cursor
+    could occupy, which implies that, if the last buffer line with text is
+    full, an empty buffer line should be appended.
+    
     1.  In event handlers, make associated upates to buffer model.        
         a.  Resize
             i.      Update display columns & lines
