@@ -14,5 +14,6 @@ line_reader = { path = "../line_reader" }
 [lints.rust]
 elided_lifetimes_in_paths = "deny"
 
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 [lints.clippy]
 pedantic = "warn"

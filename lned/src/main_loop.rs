@@ -95,7 +95,7 @@ impl fmt::Display for Error {
 /// Handles prompting, command input, command dispatch, and error display.
 pub fn run(
     mut input: impl LineRead,
-    mut stdout: impl Write,
+    mut output: impl Write,
     args: &cli::CmdArgs,
 ) -> Result<(), Error> {
     let mut buffer = EditBuffer::new();
@@ -104,8 +104,8 @@ pub fn run(
     let mut previous_pattern: Option<regex::Regex> = None;
 
     if let Some(file) = &args.file {
-        edit_cmd(&mut buffer, &mut stdout, Some(file), &previous_cmd)
-            .or_else(|e| writeln!(stdout, "{e}"))
+        edit_cmd(&mut buffer, &mut output, Some(file), &previous_cmd)
+            .or_else(|e| writeln!(output, "{e}"))
             .unwrap();
     }
 
@@ -126,20 +126,20 @@ pub fn run(
                     }
                     Cmd::Edit(filename) => edit_cmd(
                         &mut buffer,
-                        &mut stdout,
+                        &mut output,
                         filename.as_deref(),
                         &previous_cmd,
                     ),
                     Cmd::Enumerate(address) => {
-                        enumerate_cmd(&mut buffer, &mut stdout, *address)
+                        enumerate_cmd(&mut buffer, &mut output, *address)
                     }
                     Cmd::File(filename) => {
-                        file_cmd(&mut buffer, &mut stdout, filename.as_deref());
+                        file_cmd(&mut buffer, &mut output, filename.as_deref());
                         Ok(())
                     }
                     Cmd::Global(address, pattern, commands) => global_cmd(
                         &mut buffer,
-                        &mut stdout,
+                        &mut output,
                         *address,
                         pattern,
                         commands,
@@ -149,17 +149,17 @@ pub fn run(
                         insert_cmd(&mut buffer, &mut input, *address)
                     }
                     Cmd::Null(address) => {
-                        null_cmd(&mut buffer, &mut stdout, *address)
+                        null_cmd(&mut buffer, &mut output, *address)
                     }
                     Cmd::Print(address) => {
-                        print_cmd(&mut buffer, &mut stdout, *address)
+                        print_cmd(&mut buffer, &mut output, *address)
                     }
                     Cmd::Quit => {
                         quit_cmd(&buffer, &previous_cmd).map(|()| done = true)
                     }
                     Cmd::Write(address, filename) => write_cmd(
                         &mut buffer,
-                        &mut stdout,
+                        &mut output,
                         *address,
                         filename.as_deref(),
                     ),
@@ -176,8 +176,8 @@ pub fn run(
                 res
             })
             .or_else(|e| {
-                writeln!(stdout, "{e}").unwrap();
-                stdout.flush().unwrap();
+                writeln!(output, "{e}").unwrap();
+                output.flush().unwrap();
                 Ok(())
             })?;
     }
@@ -232,7 +232,7 @@ fn delete_cmd(
 
 fn edit_cmd(
     buffer: &mut EditBuffer,
-    stdout: &mut impl Write,
+    output: &mut impl Write,
     filename: Option<&Path>,
     previous_cmd: &Option<Cmd>,
 ) -> Result<(), Error> {
@@ -263,19 +263,19 @@ fn edit_cmd(
 
     let mut lines = Vec::new();
     let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
-    writeln!(stdout, "{lines_read} lines ({bytes_read} bytes) read").unwrap();
+    writeln!(output, "{lines_read} lines ({bytes_read} bytes) read").unwrap();
 
     buffer.clear_text();
     if buffer.append(0, lines) {
-        stdout.flush().unwrap();
-        writeln!(stdout, "missing line terminator appended").unwrap();
+        output.flush().unwrap();
+        writeln!(output, "missing line terminator appended").unwrap();
     }
     Ok(())
 }
 
 fn enumerate_cmd(
     buffer: &mut EditBuffer,
-    stdout: &mut impl Write,
+    output: &mut impl Write,
     address: Option<Address>,
 ) -> Result<(), Error> {
     let span = if let Some(Address(b, e)) = address {
@@ -300,17 +300,17 @@ fn enumerate_cmd(
     buffer.set_current_line(*span.end());
 
     for (i, l) in buffer[span].iter().enumerate() {
-        stdout
+        output
             .write_all(format!("{:>width$}  {l}", start + i).as_bytes())
             .unwrap();
     }
-    stdout.flush().unwrap();
+    output.flush().unwrap();
     Ok(())
 }
 
 fn file_cmd(
     buffer: &mut EditBuffer,
-    stdout: &mut impl Write,
+    output: &mut impl Write,
     filename: Option<&Path>,
 ) {
     if let Some(filename) = filename {
@@ -318,15 +318,15 @@ fn file_cmd(
     }
 
     match buffer.filename() {
-        None => writeln!(stdout, "no current filename").unwrap(),
-        Some(f) => writeln!(stdout, "{}", f.display()).unwrap(),
+        None => writeln!(output, "no current filename").unwrap(),
+        Some(f) => writeln!(output, "{}", f.display()).unwrap(),
     }
-    stdout.flush().unwrap();
+    output.flush().unwrap();
 }
 
 fn global_cmd(
     buffer: &mut EditBuffer,
-    stdout: &mut impl Write,
+    output: &mut impl Write,
     address: Option<Address>,
     pattern: &Regex,
     commands: &str,
@@ -349,10 +349,10 @@ fn global_cmd(
         let cmd = Cmd::read(&mut input, buffer, previous_pattern)
             .map_err(|_| Error::ReadGlobalCmd)?;
         match cmd {
-            Cmd::Enumerate(address) => enumerate_cmd(buffer, stdout, address)?,
+            Cmd::Enumerate(address) => enumerate_cmd(buffer, output, address)?,
             Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
             Cmd::Null(address) | Cmd::Print(address) => {
-                print_cmd(buffer, stdout, address)?;
+                print_cmd(buffer, output, address)?;
             }
             _ => return Err(Error::UnsupportedGlobalCmd),
         }
@@ -378,7 +378,7 @@ fn insert_cmd(
 
 fn null_cmd(
     buffer: &mut EditBuffer,
-    stdout: &mut impl Write,
+    output: &mut impl Write,
     address: Option<Address>,
 ) -> Result<(), Error> {
     match address {
@@ -388,20 +388,20 @@ fn null_cmd(
             }
             print_cmd(
                 buffer,
-                stdout,
+                output,
                 Some(Address(
                     buffer.current_line() + 1,
                     buffer.current_line() + 1,
                 )),
             )
         }
-        _ => print_cmd(buffer, stdout, address),
+        _ => print_cmd(buffer, output, address),
     }
 }
 
 fn print_cmd(
     buffer: &mut EditBuffer,
-    stdout: &mut impl Write,
+    output: &mut impl Write,
     address: Option<Address>,
 ) -> Result<(), Error> {
     let span = if let Some(Address(b, e)) = address {
@@ -423,9 +423,9 @@ fn print_cmd(
 
     buffer.set_current_line(*span.end());
     for l in &buffer[span] {
-        stdout.write_all(l.as_bytes()).unwrap();
+        output.write_all(l.as_bytes()).unwrap();
     }
-    stdout.flush().unwrap();
+    output.flush().unwrap();
     Ok(())
 }
 
@@ -470,7 +470,7 @@ fn read_lines(
 
 fn write_cmd(
     buffer: &mut EditBuffer,
-    stdout: &mut impl Write,
+    output: &mut impl Write,
     address: Option<Address>,
     filename: Option<&Path>,
 ) -> Result<(), Error> {
@@ -489,9 +489,9 @@ fn write_cmd(
 
     let (bytes_written, lines_written) =
         write_lines(&mut destination, buffer, address)?;
-    writeln!(stdout, "{bytes_written} bytes written ({lines_written} lines)")
+    writeln!(output, "{bytes_written} bytes written ({lines_written} lines)")
         .unwrap();
-    stdout.flush().unwrap();
+    output.flush().unwrap();
     Ok(())
 }
 
