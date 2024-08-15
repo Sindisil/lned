@@ -285,11 +285,20 @@ impl LineReader {
     }
 
     fn handle_esc(&mut self) -> ControlFlow<bool> {
-        todo!("handle escape");
+        self.history_idx = None;
+        if let Some(edited) = &self.edited_history {
+            todo!("init buffer from edited_history");
+        } else if let Some(edited) = &self.edited_input {
+            todo!("init buffer from edited_input");
+        }
+        ControlFlow::Continue(())
     }
 
     fn handle_down(&mut self) -> ControlFlow<bool> {
-        todo!("handle down");
+        if let Some(history_idx) = self.history_idx {
+            todo!("move to newer history item");
+        }
+        ControlFlow::Continue(())
     }
 
     fn handle_up(&mut self) -> ControlFlow<bool> {
@@ -2469,7 +2478,7 @@ mod tests {
         let mut reader = b.build();
         let expected = b.build();
         let res = reader.handle_event(&Event::Key(KeyEvent::new(
-            KeyCode::Esc,
+            KeyCode::Down,
             KeyModifiers::NONE,
         )));
         assert!(res.is_continue());
