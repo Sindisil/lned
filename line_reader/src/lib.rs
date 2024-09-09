@@ -340,7 +340,13 @@ impl LineReader {
         }
         let mut i = *self.history_idx.get_or_insert_with(|| {
             if self.edited_input.is_some() {
-                todo!("save buffer to edited_history");
+                self.edited_history = Some(
+                    self.buffer
+                        .iter()
+                        .flat_map(|l| l.text.chars())
+                        .skip(self.prompt_char_count)
+                        .collect(),
+                );
             } else {
                 self.edited_input = Some(
                     self.buffer
@@ -2574,7 +2580,23 @@ mod tests {
 
     #[test]
     fn up_editing_history_saves_edited_and_views_most_recent_history() {
-        todo!();
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":fo"])
+            .input_start((0, 1).into())
+            .prompt_char_count(1)
+            .cursor(Cursor { column: 3, line: 0, index: (0, 3).into() })
+            .history(&["foo", "bar", "baz"])
+            .edited_input(Some("123456789abc"));
+        let mut reader = b.build();
+        b.history_idx(Some(2))
+            .text(&[":baz"])
+            .cursor(Cursor { column: 4, line: 0, index: (0, 4).into() })
+            .edited_history(Some("fo"));
+        let expected = b.build();
+        let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
     }
 
     #[test]
