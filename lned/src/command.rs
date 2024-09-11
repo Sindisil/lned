@@ -494,6 +494,8 @@ fn parse_global_cmd<'a>(
 mod tests {
     use super::*;
 
+    use similar_asserts::assert_eq;
+
     #[test]
     fn parse_valid_lone_cmd() {
         let res = parse_no_address(None, Cmd::Quit).unwrap();

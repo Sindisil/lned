@@ -380,6 +380,8 @@ mod tests {
 
     use std::io::{self, Read, Write};
 
+    use similar_asserts::assert_eq;
+
     struct BadReader {}
 
     impl Read for BadReader {

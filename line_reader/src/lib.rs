@@ -728,6 +728,8 @@ mod tests {
 
     use crossterm::event::KeyModifiers;
 
+    use similar_asserts::assert_eq;
+
     #[derive(Debug)]
     pub struct LineReaderBuilder {
         display_width: usize,

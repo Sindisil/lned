@@ -50,6 +50,8 @@ where
 mod tests {
     use super::*;
 
+    use similar_asserts::assert_eq;
+
     #[test]
     fn peeking_take_while() {
         let s = "12345abcde";

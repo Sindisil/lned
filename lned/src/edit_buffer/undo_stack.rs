@@ -141,6 +141,8 @@ impl UndoStack {
 mod tests {
     use super::*;
 
+    use similar_asserts::assert_eq;
+
     #[test]
     fn create_new_undo_stack() {
         let s = UndoStack::new();

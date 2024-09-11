@@ -17,6 +17,7 @@ impl NumUtils for usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use similar_asserts::assert_eq;
 
     #[test]
     fn decimal_digits() {

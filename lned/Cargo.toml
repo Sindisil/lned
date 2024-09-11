@@ -17,3 +17,6 @@ elided_lifetimes_in_paths = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 [lints.clippy]
 pedantic = "warn"
+
+[dev-dependencies]
+similar-asserts = "1.6.0"

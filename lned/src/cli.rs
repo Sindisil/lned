@@ -99,6 +99,8 @@ mod tests {
 
     use std::path::Path;
 
+    use similar_asserts::assert_eq;
+
     #[test]
     fn help_options_output_help_message() {
         let expected = format!(

@@ -536,6 +536,8 @@ mod tests {
     use std::path::PathBuf;
     use std::str;
 
+    use similar_asserts::assert_eq;
+
     struct BadWriter {}
 
     impl Write for BadWriter {
