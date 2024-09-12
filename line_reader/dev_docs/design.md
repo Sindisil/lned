@@ -332,80 +332,91 @@ Right =>
     buffer.after_gap.drain(..nxt);
     render_ctx.before_gap_remainder += w;
 
+##  InputHistory
 
-## Edit states
+When instantiated, LineReader has empty history. As input lines are
+accepted, non-empty lines are pushed to the history. The history stack can
+be navigated on later calls, via [Up] and [Down]. Two edited buffers are
+potentially maintaind: edited_input is saved when history is accessed,
+and edited_history is separately saved when edits are made after viewing
+a history line, but the user navigates away.
 
-LineReader has several ReaderStates:
+### States and transitions
 
-    EditInput
-    ViewHistory
-    EditHistory
-    Accept
+To manage the various history actions, LineReader may be in one of several
+states. These states may or may not need to be explicitly tracked, since
+the current state may be inferrable from history_iter, edited_history, and
+edited_input.
 
-When history search is added, it will probably result in another
-ReaderState (e.g., SearchHistory).
+* EditInput     - Making changes to a new input line
+* ViewHistory   - Viewing one of the previously accepted input lines
+* EditHistory   - Making changes to the content of a previously accepted
+                  input line. Doesn't modify actual history, nor discard
+                  edited input line.  
+* Accept        - Accepting input
 
-### EditInput
+Certain KeyEvents trigger transitions between these states.
 
-LineReader starts in this state. The input_buffer is displayed and
-manipulated in this state. Transitions out of this state are:
+[Up] -> NOP, or to ViewHistory
+    if history.is_empty() { NOP }
+    if history_idx.is_none() {
+        if Some(edited_input) { save buffer to edited_history }
+        else { save buffer to edited_input }
+        init history_idx to history.len()
+    }
+    if history_idx > 0 {
+        history_idx -= 1;
+        init buffer with history[history_idx]
+    } else {
+        history_idx = None
+    }
 
-#### EditInput
+[Down] -> NOP, or to ViewHistory, EditHistory, or EditInput
+    if Some(history_idx) {
+        history_idx += 1
+        if history_idx < history.len() {
+            init buffer with history line
+        } else {
+            history_idx = None
+            if Some(edited_history) { init buffer with edited_history }
+            else { init buffer with edited_input }
+        }
+    }
 
-In this state, the input_buffer is displayed and manipulated.
+[Esc] -> NOP, or to EditHistory or EditInput
+    history_idx = None
+    if Some(edited_history) {
+        init buffer from edited_history
+        edited_history = None
+    } else if Some(edited_input) {
+        init buffer from edited_input
+        edited_input = None
+    }
 
-[Enter] => Accept
-[Up] => ViewHistory
-[Esc] if previous state was EditHistory => EditHistory
-_ => EditInput
+[Delete], [Backspace], [Char(c)] -> NOP or to EditHistory, then handle evt.
+    history_idx = None
+    handle event
 
-#### ViewHistory
+[Enter] -> Accept
+    if !buffer.is_empty() {
+        push buffer content to history
+        copy buffer content to output buffer
+    }
 
-In this state, a line from the line_history list is displayed. When
-transitioning into this state, the most recent (i.e., last) line of
-line_history is displayed.
+### Test cases
 
-[Up] => ViewHistory (moves to next older line of history)
-[Down] if at end of line_history => EditInput
-[Down] => ViewHistory (move to next most recent line of history)
-[Esc] if previous state was EditInput => EditInput
-[Esc] if previous state was EditHistory => EditHistory
-[Enter] => Accept
-_ => EditHistory
+ 1. [Up], [Down], and [Esc] do nothing if history is empty.
+ 2. [Down] does nothing if not viewing history.
+ 3. [Enter] Accepts the input line, copying it to output buffer, and, if
+    non-empty, adding it to history.
+ 4. [Up] when editing input saves edited input and begins viewing history
+ 5. [Up] when editing history saves edited history and begins viewing
+    history
+ 6. [Up] when viewing history iterates backwards through history, doing
+    nothing once oldest line has been reached.
+ 7. [Delete], [Backspace], or [Char(c)] when viewing history edits history
+ 8. [Esc] when editing history returns to editing input
+ 9. [Esc] when editing input does nothing
+10. [Esc] when viewing history returns first of editing history or editing
+    input that is_some()
 
-#### EditHistory
-
-When entering this state from ViewHistory, history_buffer is initialized
-from the currently displayed line in line_history. The contents and state
-persist until accepted or replaced by a subsequent transition from
-ViewHistory.
-
-[Up] => ViewHistory
-[Esc] => EditInput
-[Enter] => Accept
-_ => EditHistory
-
-#### Accept
-
-If non-empty, the currently displayed line (whether input_buffer,
-history_buffer, or an item in line_history) is pushed onto end of
-line_history and copied into output buffer. In future, might shrink
-one or both of the buffers if they're beyond some limit, as well, to
-optimize memory consumption.
-
-
-### Input rendering - "buffer zone"
-One UX design question is whether or not LineInput should attempt
-to keep a one line "buffer zone" ("buffer" in text editor development
-seems to be as overloaded as "level" in RPGs) visible (i.e., the
-cursor should only be on the top or bottom line of the terminal
-if it is in the first or last line of buffer text, respectively).
-
-It would be simpler to not worry about it, but being able to see
-what text would be affected by a delete in the last position, or
-a BS in the first position, would be desirable, I think. Also,
-seeing more text would allow for more efficient navigation. Of
-course, in the common case, the input would be a handfull of
-lines at most, and often only a single line, so the whole bufer
-would most often be on screen at all times. Still an edge case
-possibly worth handling.
