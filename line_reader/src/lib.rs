@@ -3,7 +3,7 @@ use std::io::{self, BufRead, Write};
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use crossterm::cursor::{self, Hide, MoveTo, MoveToNextLine, Show};
+use crossterm::cursor::{self, Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::terminal::{self, Clear, ClearType, ScrollUp};
 use crossterm::{ExecutableCommand, QueueableCommand};
@@ -138,7 +138,7 @@ impl LineReader {
         LineReader { ..Default::default() }
     }
 
-#[must_use]
+    #[must_use]
     pub fn prompt(&self) -> String {
         self.buffer
             .iter()
@@ -254,7 +254,7 @@ impl LineReader {
         self.handle_end();
         self.repaint()?;
         let mut stdout = io::stdout().lock();
-        stdout.queue(MoveToNextLine(1))?;
+        stdout.write_all(b"\r\n")?;
         stdout.flush()?;
 
         let prev_bytes = output_buffer.len();
