@@ -138,6 +138,7 @@ impl LineReader {
         LineReader { ..Default::default() }
     }
 
+#[must_use]
     pub fn prompt(&self) -> String {
         self.buffer
             .iter()
@@ -166,6 +167,35 @@ impl LineReader {
             index: self.input_start,
         };
         self.buffer.splice(.., [prompt_line]);
+        self.reflow(0);
+    }
+
+    fn set_buffer(&mut self, line: impl AsRef<str>) {
+        let mut text = self.prompt();
+        self.input_start = (0, text.len()).into();
+        text.push_str(line.as_ref());
+        let width = text.width();
+        let cursor = Cursor {
+            column: width,
+            line: self.first_display_line,
+            index: (0, text.len()).into(),
+        };
+        self.buffer.splice(.., [BufferLine { text, width }]);
+        self.cursor = cursor;
+        self.reflow(0);
+    }
+
+    fn set_buffer_from_history(&mut self, line: usize) {
+        let mut text = self.prompt();
+        text.push_str(&self.history[line]);
+        let width = text.width();
+        let cursor = Cursor {
+            column: width,
+            line: self.first_display_line,
+            index: (0, text.len()).into(),
+        };
+        self.buffer.splice(.., [BufferLine { text, width }]);
+        self.cursor = cursor;
         self.reflow(0);
     }
 
@@ -294,10 +324,10 @@ impl LineReader {
 
     fn handle_esc(&mut self) -> ControlFlow<bool> {
         self.history_idx = None;
-        if let Some(edited) = &self.edited_history {
-            todo!("init buffer from edited_history");
-        } else if let Some(edited) = &self.edited_input {
-            todo!("init buffer from edited_input");
+        if let Some(edited) =
+            self.edited_history.take().or_else(|| self.edited_input.take())
+        {
+            self.set_buffer(&edited);
         }
         ControlFlow::Continue(())
     }
@@ -307,30 +337,20 @@ impl LineReader {
             return ControlFlow::Continue(());
         };
         i += 1;
-        let line = if i < self.history.len() {
+        if i < self.history.len() {
             self.history_idx = Some(i);
-            Some(self.history[i].clone())
+            self.set_buffer_from_history(i);
         } else {
             self.history_idx = None;
-            if self.edited_history.is_some() {
+            let line = if self.edited_history.is_some() {
                 self.edited_history.take()
             } else {
                 self.edited_input.take()
-            }
-        };
-        if let Some(line) = line {
-            let mut text = self.prompt();
-            text.push_str(&line);
-            let width = text.width();
-            let cursor = Cursor {
-                column: width,
-                line: self.first_display_line,
-                index: (0, text.len()).into(),
             };
-            self.buffer.splice(.., [BufferLine { text, width }]);
-            self.cursor = cursor;
-            self.reflow(0);
-        }
+            if let Some(line) = line {
+                self.set_buffer(&line);
+            };
+        };
         ControlFlow::Continue(())
     }
 
@@ -361,17 +381,7 @@ impl LineReader {
         if i > 0 {
             i -= 1;
             self.history_idx = Some(i);
-            let mut text = self.prompt();
-            text.push_str(&self.history[i]);
-            let width = text.width();
-            let cursor = Cursor {
-                column: width,
-                line: self.first_display_line,
-                index: (0, text.len()).into(),
-            };
-            self.buffer.splice(.., [BufferLine { text, width }]);
-            self.cursor = cursor;
-            self.reflow(0);
+            self.set_buffer_from_history(i);
         }
         ControlFlow::Continue(())
     }
@@ -1006,7 +1016,7 @@ mod tests {
                 buffer,
                 prompt_char_count: self.prompt_char_count,
                 history: self.history.clone(),
-                history_idx: self.history_idx.clone(),
+                history_idx: self.history_idx,
                 edited_input: self.edited_input.clone(),
                 edited_history: self.edited_history.clone(),
                 input_start: self.input_start,
@@ -2704,23 +2714,25 @@ mod tests {
     }
 
     #[test]
-    fn delete_char_viewing_history_edits_history() {
-        todo!();
-    }
-
-    #[test]
-    fn backspace_char_viewing_history_edits_history() {
-        todo!();
-    }
-
-    #[test]
-    fn insert_char_viewing_history_edits_history() {
-        todo!();
-    }
-
-    #[test]
     fn esc_editing_history_edits_input() {
-        todo!();
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.history(&["foo", "bar", "baz"])
+            .edited_input(Some("123456789abc"))
+            .text(&[":fo"])
+            .input_start((0, 1).into())
+            .prompt_char_count(1)
+            .cursor(Cursor { column: 3, line: 0, index: (0, 3).into() });
+        let mut reader = b.build();
+        b.edited_input::<&str>(None)
+            .text(&[":123456789", "abc"])
+            .cursor(Cursor { column: 3, line: 1, index: (1, 3).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
     }
 
     #[test]
@@ -2743,11 +2755,47 @@ mod tests {
 
     #[test]
     fn esc_viewing_history_after_editing_history_edits_history() {
-        todo!();
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.history(&["foo", "bar", "baz"])
+            .edited_input(Some("123456789abc"))
+            .edited_history(Some("bat"))
+            .text(&[":foo"])
+            .history_idx(Some(0))
+            .input_start((0, 1).into())
+            .prompt_char_count(1)
+            .cursor(Cursor { column: 4, line: 0, index: (0, 4).into() });
+        let mut reader = b.build();
+        b.edited_history::<&str>(None).text(&[":bat"]).history_idx(None);
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
     }
 
     #[test]
     fn esc_viewing_history_after_editing_input_edits_input() {
-        todo!();
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.history(&["foo", "bar", "baz"])
+            .edited_input(Some("123456789abc"))
+            .text(&[":foo"])
+            .history_idx(Some(0))
+            .input_start((0, 1).into())
+            .prompt_char_count(1)
+            .cursor(Cursor { column: 4, line: 0, index: (0, 4).into() });
+        let mut reader = b.build();
+        b.edited_input::<&str>(None)
+            .text(&[":123456789", "abc"])
+            .history_idx(None)
+            .cursor(Cursor { column: 3, line: 1, index: (1, 3).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
     }
 }
