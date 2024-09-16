@@ -28,6 +28,7 @@ pub enum Error {
     QuitUnwrittenChanges,
     EditUnwrittenChanges,
     EditFileNotFound(String),
+    DestinationIntersectsSource,
 }
 
 impl std::error::Error for Error {
@@ -41,6 +42,7 @@ impl std::error::Error for Error {
             | Error::NestedGlobalCmd
             | Error::UnsupportedGlobalCmd
             | Error::ReadGlobalCmd
+            | Error::DestinationIntersectsSource
             | Error::NoFilename => None,
             Error::EditFileOpen { ref source }
             | Error::WriteFileOpen { ref source }
@@ -85,6 +87,9 @@ impl fmt::Display for Error {
             }
             Error::EditFileNotFound(filename) => {
                 write!(f, "{filename} not found")
+            }
+            Error::DestinationIntersectsSource => {
+                write!(f, "destination intersects source")
             }
         }
     }
@@ -157,20 +162,23 @@ pub fn run(
                     Cmd::Quit => {
                         quit_cmd(&buffer, &previous_cmd).map(|()| done = true)
                     }
+                    Cmd::Redo => {
+                        buffer.do_redo();
+                        Ok(())
+                    }
+                    Cmd::Transfer(address, destination) => {
+                        transfer_cmd(&mut buffer, *address, *destination)
+                    }
+                    Cmd::Undo => {
+                        buffer.do_undo();
+                        Ok(())
+                    }
                     Cmd::Write(address, filename) => write_cmd(
                         &mut buffer,
                         &mut output,
                         *address,
                         filename.as_deref(),
                     ),
-                    Cmd::Undo => {
-                        buffer.do_undo();
-                        Ok(())
-                    }
-                    Cmd::Redo => {
-                        buffer.do_redo();
-                        Ok(())
-                    }
                 };
                 previous_cmd = Some(cmd);
                 res
@@ -439,6 +447,20 @@ fn quit_cmd(
         _ if !buffer.is_dirty() => Ok(()),
         _ => Err(Error::QuitUnwrittenChanges),
     }
+}
+
+fn transfer_cmd(
+    buffer: &mut EditBuffer,
+    address: Option<Address>,
+    destination: Address,
+) -> Result<(), Error> {
+    if !destination.is_disjoint(
+        address.unwrap_or_else(|| Address::line(buffer.current_line())),
+    ) {
+        return Err(Error::DestinationIntersectsSource);
+    }
+    buffer.do_transfer(address, destination);
+    Ok(())
 }
 
 fn read_lines(
@@ -1121,6 +1143,25 @@ mod tests {
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("invalid address"));
         assert!(output.contains("unwritten changes"));
+    }
+
+    #[test]
+    fn transfer_cmd_dispatch() {
+        let input = b"a\n3\n4\n5\n1\n2\n.\n4,5t0\n1,3p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("1\n2\n3\n"));
+    }
+
+    #[test]
+    fn transfer_cmd_destination_intersects_source_give_error() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let source = Address::span(3, 5).unwrap();
+        let destination = Address::line(5);
+        let res = transfer_cmd(&mut buffer, Some(source), destination)
+            .expect_err("should fail");
+        assert!(matches!(res, Error::DestinationIntersectsSource));
     }
 
     #[test]

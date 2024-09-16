@@ -28,6 +28,7 @@ pub enum Cmd {
     Print(Option<Address>),
     Quit,
     Redo,
+    Transfer(Option<Address>, Address),
     Undo,
     Write(Option<Address>, Option<PathBuf>),
 }
@@ -50,6 +51,7 @@ pub enum Error {
     InvalidFilename,
     ReadCommand { source: io::Error },
     MissingEol,
+    MissingDestination,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -75,6 +77,7 @@ impl std::error::Error for Error {
             | Error::InvalidPatternDelimiter
             | Error::InvalidCmdSuffix
             | Error::InvalidFilename
+            | Error::MissingDestination
             | Error::MissingEol => None,
             Error::ReadCommand { ref source } => Some(source),
         }
@@ -107,6 +110,7 @@ impl Display for Error {
                 write!(f, "error reading command input")
             }
             Error::MissingEol => write!(f, "missing line terminator"),
+            Error::MissingDestination => write!(f, "missing destination"),
             Error::NumberParse => write!(f, "invalid numeric string"),
         }
     }
@@ -131,6 +135,14 @@ impl Address {
 
     pub fn end(&self) -> usize {
         self.end
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.end - self.start + 1
+    }
+
+    pub fn is_disjoint(&self, other: Address) -> bool {
+        self.start > other.end || other.start > self.end
     }
 
     fn eval<'a>(
@@ -282,6 +294,12 @@ impl Cmd {
             Some("p") => parse_no_args(&mut graphemes, Cmd::Print(address)),
             Some("q") => parse_no_address(address, Cmd::Quit)
                 .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
+            Some("t") => parse_transfer_cmd(
+                &mut graphemes,
+                buffer,
+                previous_pattern,
+                address,
+            ),
             Some("u") => parse_no_address(address, Cmd::Undo)
                 .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
             Some("U") => parse_no_address(address, Cmd::Redo)
@@ -336,6 +354,20 @@ fn parse_edit_cmd<'a>(
             }
         }
         _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_transfer_cmd<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+    buffer: &mut EditBuffer,
+    previous_pattern: &mut Option<Regex>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    let destination = Address::eval(graphemes, buffer, previous_pattern)?;
+    if let Some(destination) = destination {
+        Ok(Cmd::Transfer(address, destination))
+    } else {
+        Err(Error::MissingDestination)
     }
 }
 
@@ -1071,6 +1103,20 @@ mod tests {
     }
 
     #[test]
+    fn test_overlapping_addresses() {
+        let s1 = Address::span(1, 10).unwrap();
+        let s2 = Address::span(20, 30).unwrap();
+        let s3 = Address::span(8, 24).unwrap();
+        assert!(s1.is_disjoint(s2));
+        assert!(s2.is_disjoint(s1));
+        assert!(s2.is_disjoint(Address::line(5)));
+        assert!(s2.is_disjoint(Address::line(32)));
+        assert!(!s1.is_disjoint(s3));
+        assert!(!s2.is_disjoint(s3));
+        assert!(!s2.is_disjoint(Address::line(30)));
+    }
+
+    #[test]
     fn parse_append_cmd_no_addr() {
         let mut input = "a\r\n".as_bytes();
         let res =
@@ -1283,6 +1329,46 @@ mod tests {
         .unwrap();
         assert!(matches!(res,
             Cmd::Global(a, p, c) if a.is_none() && p.as_str() == "pat" && c == "n\r\nd\r\n"));
+    }
+
+    #[test]
+    fn parse_transfer_cmd_with_destination() {
+        let mut cmd_line = " 13\n".graphemes(true).peekable();
+        let addr = Address::span(1, 2).unwrap();
+let dest = Address::line(13);
+        let res = parse_transfer_cmd(
+            &mut cmd_line,
+            &mut EditBuffer::new(),
+            &mut None,
+            Some(addr),
+        )
+        .unwrap();
+assert!(matches!(res, Cmd::Transfer(Some(a), t) if a == addr && t == dest));
+    }
+
+    #[test]
+    fn parse_transfer_cmd_no_addr() {
+        let mut input = "t42\n".as_bytes();
+        let res =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
+        assert!(matches!(
+            res,
+            Cmd::Transfer(None, Address { start: 42, end: 42 })
+        ));
+    }
+
+    #[test]
+    fn parse_transfer_cmd_no_destination() {
+        let mut cmd_line = "\n".graphemes(true).peekable();
+        let addr = Address::span(13, 42).unwrap();
+        let res = parse_transfer_cmd(
+            &mut cmd_line,
+            &mut EditBuffer::new(),
+            &mut None,
+            Some(addr),
+        )
+        .expect_err("shoudl fail");
+        assert!(matches!(res, Error::MissingDestination));
     }
 
     #[test]
