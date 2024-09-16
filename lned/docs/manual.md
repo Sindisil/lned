@@ -302,6 +302,23 @@ The addressed lines are written to stdout. The last line written becomes
 the current line.
 
 
+'U' (redo)
+
+#### Syntax
+
+U
+
+#### Behavior
+
+Reverts the most recently undone command.
+The most recent item is popped from the undo stack and executed.
+
+As with direct commands, the redone command is then pushed to the
+undo stack.
+
+For more details about the undo/redo system, see the 'u' (undo) command.
+
+
 'u' (undo)
 
 #### Syntax
@@ -322,6 +339,15 @@ executed.
 
 All commands executed as part of a 'g' command are reverted as one
 action.
+
+Undone actions are themselves remembered on a redo stack, so that
+they can be redone (effectively "undoing the undo").
+
+If the redo stack was non-empty when a direct command is saved to the
+undo stack, those commands are moved back to the undo stack, first in
+reverse order, then in forward order but with inverted effect (i.e.,
+deletes become inserts, transfers become deletes, etc.). This is so
+that no history of edit actions are lost, including 'undo' commands.
 
 'w' (write)
 
