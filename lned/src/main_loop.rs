@@ -153,6 +153,9 @@ pub fn run(
                     Cmd::Insert(address) => {
                         insert_cmd(&mut buffer, &mut input, *address)
                     }
+                    Cmd::Move(address, destination) => {
+                        move_cmd(&mut buffer, *address, *destination)
+                    }
                     Cmd::Null(address) => {
                         null_cmd(&mut buffer, &mut output, *address)
                     }
@@ -381,6 +384,19 @@ fn insert_cmd(
     Cmd::read_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
     buffer.do_insert(address, lines);
+    Ok(())
+}
+fn move_cmd(
+    buffer: &mut EditBuffer,
+    address: Option<Address>,
+    destination: Address,
+) -> Result<(), Error> {
+    if !destination.is_disjoint(
+        address.unwrap_or_else(|| Address::line(buffer.current_line())),
+    ) {
+        return Err(Error::DestinationIntersectsSource);
+    }
+    buffer.do_move(address, destination);
     Ok(())
 }
 
@@ -1092,6 +1108,15 @@ mod tests {
     }
 
     #[test]
+    fn move_cmd_dispatch() {
+        let input = b"a\n3\n4\n5\n1\n2\n.\n3,4m0\n1,$p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("5\n1\n3\n4\n2\n"));
+    }
+
+    #[test]
     fn null_cmd_dispatch() {
         let input = b"a\r\none\r\ntwo\r\nthree\r\n.\r\n1\r\n\r\nq\r\nq\r\n";
         let mut output = Vec::new();
@@ -1147,11 +1172,11 @@ mod tests {
 
     #[test]
     fn transfer_cmd_dispatch() {
-        let input = b"a\n3\n4\n5\n1\n2\n.\n4,5t0\n1,3p\nq\nq\n";
+        let input = b"a\n3\n4\n5\n1\n2\n.\n4,5t0\n1,$p\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("1\n2\n3\n"));
+        assert!(output.contains("1\n2\n3\n4\n5\n1\n2\n"));
     }
 
     #[test]
@@ -1396,5 +1421,15 @@ mod tests {
         )
         .expect_err("illegal address");
         assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn move_cmd_destination_intersects_source_give_error() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let source = Address::span(3, 5).unwrap();
+        let destination = Address::line(5);
+        let res = move_cmd(&mut buffer, Some(source), destination)
+            .expect_err("should fail");
+        assert!(matches!(res, Error::DestinationIntersectsSource));
     }
 }

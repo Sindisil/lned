@@ -310,6 +310,26 @@ impl EditBuffer {
         self.undo_stack.push_undo(change);
     }
 
+    pub fn do_move(&mut self, address: Option<Address>, destination: Address) {
+        let address =
+            address.unwrap_or_else(|| Address::line(self.current_line));
+        let lines: Vec<String> =
+            self.text.drain(address.start() - 1..address.end()).collect();
+        let destination = if destination.end() > address.end() {
+            destination.end() - address.line_count()
+        } else {
+            destination.end()
+        };
+
+        let mut change = ChangeSet::new();
+        change.current_line_before = self.current_line;
+        change.push_add(destination, lines.clone());
+        self.text.splice(destination..destination, lines);
+        self.current_line = destination + address.line_count();
+        change.current_line_after = self.current_line;
+        self.undo_stack.push_undo(change);
+    }
+
     pub fn do_undo(&mut self) {
         if let Some(undo) = self.undo_stack.pop_undo() {
             self.current_line = undo.current_line_before;
@@ -1201,5 +1221,54 @@ mod tests {
         assert_eq!(2, buffer.current_line);
         assert_eq!(3, buffer.len());
         assert_eq!(buffer[..], expected[..]);
+    }
+
+    #[test]
+    fn do_move_one_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::from(vec!["1\n", "2", "3", "5", "4", "6"]);
+        buffer.do_move(Some(Address::line(5)), Address::line(3));
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), 4);
+    }
+
+    #[test]
+    fn do_move_span() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::from(vec!["1\n", "2", "3", "5", "6", "4"]);
+        buffer.do_move(Some(Address::span(5, 6).unwrap()), Address::line(3));
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), 5);
+    }
+
+    #[test]
+    fn do_move_no_addr() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::from(vec!["2\n", "3", "1", "4", "5", "6"]);
+        buffer.set_current_line(1);
+        buffer.do_move(None, Address::line(3));
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), 3);
+    }
+
+    #[test]
+    fn do_move_to_line_0() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::from(vec!["4\n", "5", "1", "2", "3", "6"]);
+        buffer.do_move(Some(Address::span(4, 5).unwrap()), Address::line(0));
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), 2);
+    }
+
+    #[test]
+    fn do_move_destination_is_span() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::from(vec!["1\n", "2", "4", "5", "3", "6"]);
+        buffer.do_move(
+            Some(Address::span(4, 5).unwrap()),
+            Address::span(1, 2).unwrap(),
+        );
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), 4);
     }
 }

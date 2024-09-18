@@ -24,6 +24,7 @@ pub enum Cmd {
     File(Option<PathBuf>),
     Global(Option<Address>, Regex, String),
     Insert(Option<Address>),
+    Move(Option<Address>, Address),
     Null(Option<Address>),
     Print(Option<Address>),
     Quit,
@@ -289,6 +290,12 @@ impl Cmd {
                 input,
             ),
             Some("i") => parse_no_args(&mut graphemes, Cmd::Insert(address)),
+            Some("m") => parse_move_cmd(
+                &mut graphemes,
+                buffer,
+                previous_pattern,
+                address,
+            ),
             Some("n") => parse_no_args(&mut graphemes, Cmd::Enumerate(address)),
             None | Some("\n" | "\r\n") => Ok(Cmd::Null(address)),
             Some("p") => parse_no_args(&mut graphemes, Cmd::Print(address)),
@@ -354,6 +361,20 @@ fn parse_edit_cmd<'a>(
             }
         }
         _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_move_cmd<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+    buffer: &mut EditBuffer,
+    previous_pattern: &mut Option<Regex>,
+    address: Option<Address>,
+) -> Result<Cmd, Error> {
+    let destination = Address::eval(graphemes, buffer, previous_pattern)?;
+    if let Some(destination) = destination {
+        Ok(Cmd::Move(address, destination))
+    } else {
+        Err(Error::MissingDestination)
     }
 }
 
@@ -1335,7 +1356,7 @@ mod tests {
     fn parse_transfer_cmd_with_destination() {
         let mut cmd_line = " 13\n".graphemes(true).peekable();
         let addr = Address::span(1, 2).unwrap();
-let dest = Address::line(13);
+        let dest = Address::line(13);
         let res = parse_transfer_cmd(
             &mut cmd_line,
             &mut EditBuffer::new(),
@@ -1343,7 +1364,9 @@ let dest = Address::line(13);
             Some(addr),
         )
         .unwrap();
-assert!(matches!(res, Cmd::Transfer(Some(a), t) if a == addr && t == dest));
+        assert!(
+            matches!(res, Cmd::Transfer(Some(a), t) if a == addr && t == dest)
+        );
     }
 
     #[test]
@@ -1362,6 +1385,43 @@ assert!(matches!(res, Cmd::Transfer(Some(a), t) if a == addr && t == dest));
         let mut cmd_line = "\n".graphemes(true).peekable();
         let addr = Address::span(13, 42).unwrap();
         let res = parse_transfer_cmd(
+            &mut cmd_line,
+            &mut EditBuffer::new(),
+            &mut None,
+            Some(addr),
+        )
+        .expect_err("shoudl fail");
+        assert!(matches!(res, Error::MissingDestination));
+    }
+
+    #[test]
+    fn parse_move_cmd_with_destination() {
+        let mut cmd_line = " 13\n".graphemes(true).peekable();
+        let addr = Address::span(1, 2).unwrap();
+        let dest = Address::line(13);
+        let res = parse_move_cmd(
+            &mut cmd_line,
+            &mut EditBuffer::new(),
+            &mut None,
+            Some(addr),
+        )
+        .unwrap();
+        assert!(matches!(res, Cmd::Move(Some(a), t) if a == addr && t == dest));
+    }
+
+    #[test]
+    fn parse_move_cmd_no_addr() {
+        let mut input = "m42\n".as_bytes();
+        let res =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
+        assert!(matches!(res, Cmd::Move(None, Address { start: 42, end: 42 })));
+    }
+
+    #[test]
+    fn parse_move_cmd_no_destination() {
+        let mut cmd_line = "\n".graphemes(true).peekable();
+        let addr = Address::span(13, 42).unwrap();
+        let res = parse_move_cmd(
             &mut cmd_line,
             &mut EditBuffer::new(),
             &mut None,

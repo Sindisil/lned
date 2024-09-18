@@ -275,6 +275,24 @@ addressed line, becomes the current line. A line address of '0' is valid
 for the insert command; the input text will then be placed at the
 beginning of the buffer.
 
+### 'm' (move)
+
+#### Syntax
+
+(.,.)m\<destination\>
+
+#### Behavior
+
+Move the addressed lines to just after the last line specified by
+<destination>.
+
+If '0' is specified as the destination, the addressed lines are moved to the
+beginning of the buffer. The destination may not fall within the span of moved
+lines.
+
+The current line number will be set to the resulting address of the last line
+moved.
+
 ### 'n' (enumerate)
 
 #### Syntax
