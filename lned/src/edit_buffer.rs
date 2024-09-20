@@ -445,29 +445,7 @@ fn compute_default_eol(
 mod tests {
     use super::*;
 
-    use std::io::{self, Read, Write};
-
     use similar_asserts::assert_eq;
-
-    struct BadReader {}
-
-    impl Read for BadReader {
-        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-            Err(io::Error::from(io::ErrorKind::Other))
-        }
-    }
-
-    struct BadWriter {}
-
-    impl Write for BadWriter {
-        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
-            Err(io::Error::from(io::ErrorKind::Other))
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Err(io::Error::from(io::ErrorKind::Other))
-        }
-    }
 
     /////
     // EditBuffer creation tests
