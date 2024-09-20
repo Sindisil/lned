@@ -153,6 +153,7 @@ pub fn run(
                     Cmd::Insert(address) => {
                         insert_cmd(&mut buffer, &mut input, *address)
                     }
+                    Cmd::Join(address) => join_cmd(&mut buffer, *address),
                     Cmd::Move(address, destination) => {
                         move_cmd(&mut buffer, *address, *destination)
                     }
@@ -386,6 +387,26 @@ fn insert_cmd(
     buffer.do_insert(address, lines);
     Ok(())
 }
+
+fn join_cmd(
+    buffer: &mut EditBuffer,
+    address: Option<Address>,
+) -> Result<(), Error> {
+    if buffer.is_empty() {
+        return Err(Error::InvalidAddress);
+    }
+    match address {
+        None if buffer.current_line() == buffer.len() => {
+            Err(Error::InvalidAddress)
+        }
+        Some(a) if a.line_count() == 1 => Ok(()),
+        _ => {
+            buffer.do_join(address);
+            Ok(())
+        }
+    }
+}
+
 fn move_cmd(
     buffer: &mut EditBuffer,
     address: Option<Address>,
@@ -1108,6 +1129,15 @@ mod tests {
     }
 
     #[test]
+    fn join_cmd_dispatch() {
+        let input = b"a\n1\n2\n3\n4\n.\n1,2j\n1,$p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("12\n3\n4\n"));
+    }
+
+    #[test]
     fn move_cmd_dispatch() {
         let input = b"a\n3\n4\n5\n1\n2\n.\n3,4m0\n1,$p\nq\nq\n";
         let mut output = Vec::new();
@@ -1420,6 +1450,28 @@ mod tests {
             Some(Address::span(2, 4).unwrap()),
         )
         .expect_err("illegal address");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn join_cmd_empty_buffer() {
+        let mut buffer = EditBuffer::new();
+        let res = join_cmd(&mut buffer, None).expect_err("should fail");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn join_cmd_single_line_addr() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let expected = buffer.clone();
+        join_cmd(&mut buffer, Some(Address::line(2))).unwrap();
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn join_cmd_default_on_last_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let res = join_cmd(&mut buffer, None).expect_err("should fail");
         assert!(matches!(res, Error::InvalidAddress));
     }
 

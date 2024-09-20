@@ -24,6 +24,7 @@ pub enum Cmd {
     File(Option<PathBuf>),
     Global(Option<Address>, Regex, String),
     Insert(Option<Address>),
+    Join(Option<Address>),
     Move(Option<Address>, Address),
     Null(Option<Address>),
     Print(Option<Address>),
@@ -290,6 +291,7 @@ impl Cmd {
                 input,
             ),
             Some("i") => parse_no_args(&mut graphemes, Cmd::Insert(address)),
+            Some("j") => parse_no_args(&mut graphemes, Cmd::Join(address)),
             Some("m") => parse_move_cmd(
                 &mut graphemes,
                 buffer,
@@ -1392,6 +1394,14 @@ mod tests {
         )
         .expect_err("shoudl fail");
         assert!(matches!(res, Error::MissingDestination));
+    }
+
+    #[test]
+    fn parse_join_cmd_no_addr() {
+        let mut input = "j\r\n".as_bytes();
+        let res =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
+        assert!(matches!(res, Cmd::Join(None)));
     }
 
     #[test]
