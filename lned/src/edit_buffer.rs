@@ -100,6 +100,12 @@ impl Index<RangeFull> for EditBuffer {
     }
 }
 
+impl PartialEq for EditBuffer {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.current_line == other.current_line
+    }
+}
+
 impl EditBuffer {
     /// Creates a new empty `EditBuffer`.
     ///
@@ -298,14 +304,33 @@ impl EditBuffer {
         if lines.is_empty() {
             self.current_line = location;
         } else {
-            //            // set default_eol if neccessary
-            //            self.default_eol
-            //                .get_or_insert_with(|| compute_default_eol(&lines));
-            //            self.text.splice(location..location, lines.iter().cloned());
             self.append(location, lines.clone());
             self.current_line = location + lines.len();
             change.push_add(location, lines);
         }
+        change.current_line_after = self.current_line;
+        self.undo_stack.push_undo(change);
+    }
+
+    pub fn do_join(&mut self, address: Option<Address>) {
+        let address = address.unwrap_or_else(|| {
+            Address::span(self.current_line, self.current_line + 1).unwrap()
+        });
+        let mut change = ChangeSet::new();
+        change.current_line_before = self.current_line;
+
+        let mut joined = vec![String::new()];
+        for l in &self[address.start()..address.end()] {
+            joined[0].extend(l.lines());
+        }
+        joined[0].push_str(&self[address.end()]);
+        let replaced: Vec<_> = self
+            .text
+            .splice(address.start() - 1..address.end(), joined.clone())
+            .collect();
+        self.current_line = address.start();
+        change.push_remove(address.start(), replaced);
+        change.push_add(address.start() - 1, joined);
         change.current_line_after = self.current_line;
         self.undo_stack.push_undo(change);
     }
@@ -1221,6 +1246,51 @@ mod tests {
         assert_eq!(2, buffer.current_line);
         assert_eq!(3, buffer.len());
         assert_eq!(buffer[..], expected[..]);
+    }
+
+    #[test]
+    fn do_join_default_addr() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.current_line = 2;
+        let mut expected = EditBuffer::from(vec!["1\n", "23", "4", "5", "6"]);
+        expected.current_line = 2;
+        buffer.do_join(None);
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn do_join_two_lines() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.current_line = 2;
+        let mut expected = EditBuffer::from(vec!["1\n", "2", "34", "5", "6"]);
+        expected.set_current_line(3);
+        buffer.do_join(Some(Address::span(3, 4).unwrap()));
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn do_join_several_lines() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.current_line = 2;
+        let mut expected = EditBuffer::from(vec!["1\n", "2", "345", "6"]);
+        expected.set_current_line(3);
+        buffer.do_join(Some(Address::span(3, 5).unwrap()));
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn do_join_undo_redo() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.current_line = 2;
+        let expected_original = buffer.clone();
+        let mut expected = EditBuffer::from(vec!["1\n", "2", "345", "6"]);
+        expected.set_current_line(3);
+        buffer.do_join(Some(Address::span(3, 5).unwrap()));
+        assert_eq!(buffer, expected);
+        buffer.do_undo();
+        assert_eq!(buffer, expected_original);
+        buffer.do_redo();
+        assert_eq!(buffer, expected);
     }
 
     #[test]

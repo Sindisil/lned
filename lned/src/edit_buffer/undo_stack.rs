@@ -11,13 +11,13 @@ use std::mem;
 /// history).
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UndoStack {
     undo: Vec<ChangeSet>,
     redo: Vec<ChangeSet>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChangeSet {
     id: Option<u64>,
     pub current_line_before: usize,
@@ -26,7 +26,7 @@ pub struct ChangeSet {
 }
 
 //#[derive(Debug, Clone)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Diff {
     Add(usize, Vec<String>),    // Add/Insert of lines
     Remove(usize, Vec<String>), // Removal of lines

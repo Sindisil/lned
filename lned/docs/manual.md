@@ -275,6 +275,23 @@ addressed line, becomes the current line. A line address of '0' is valid
 for the insert command; the input text will then be placed at the
 beginning of the buffer.
 
+### 'j' (join)
+
+#### Syntax
+
+(.,.+1)j
+
+#### Behavior
+
+Join addressed contiguous lines by removing the intervening line
+terminators.
+
+If exactly one address is given, no action will be taken.
+
+If any lines are joined, the current line will be set tot he address of
+the resulting joined line, otherwise the current line number will not
+be set.
+
 ### 'm' (move)
 
 #### Syntax
