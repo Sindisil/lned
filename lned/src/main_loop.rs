@@ -540,6 +540,7 @@ fn write_cmd(
     let mut destination = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(true)
         .open(buffer.filename().as_ref().unwrap())
         .map_err(|source| Error::WriteFileOpen { source })?;
 

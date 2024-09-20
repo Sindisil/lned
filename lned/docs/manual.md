@@ -135,7 +135,7 @@ line displayed becomes the current line. ### 'i' (insert)
 #### Syntax
 
 (.)a
-<input text>
+\<input text\>
 .
 
 #### Behavior
@@ -151,7 +151,7 @@ buffer.
 #### Syntax
 
 (.,.)c
-<input text>
+\<input text\>
 .
 
 #### Behavior
@@ -264,7 +264,7 @@ command were given.
 
 #### Syntax
 (.)i
-<input text>
+\<input text\>
 .
 
 #### Behavior
@@ -301,7 +301,7 @@ be set.
 #### Behavior
 
 Move the addressed lines to just after the last line specified by
-<destination>.
+\<destination\>.
 
 If '0' is specified as the destination, the addressed lines are moved to the
 beginning of the buffer. The destination may not fall within the span of moved
@@ -325,7 +325,7 @@ the line content by two spaces.
 
 The last line written becomes the current line.
 
-'p' (print)
+### 'p' (print)
 
 #### Syntax
 
@@ -337,7 +337,7 @@ The addressed lines are written to stdout. The last line written becomes
 the current line.
 
 
-'U' (redo)
+### 'U' (redo)
 
 #### Syntax
 
@@ -354,7 +354,7 @@ undo stack.
 For more details about the undo/redo system, see the 'u' (undo) command.
 
 
-'t' (transfer, or copy)
+### 't' (transfer, or copy)
 
 #### Syntax
 
@@ -372,7 +372,7 @@ destination may not fall within the span of copied lines.
 The current line number will be set to the resulting address of the
 last line copied.
 
-'u' (undo)
+### 'u' (undo)
 
 #### Syntax
 
@@ -402,7 +402,7 @@ reverse order, then in forward order but with inverted effect (i.e.,
 deletes become inserts, transfers become deletes, etc.). This is so
 that no history of edit actions are lost, including 'undo' commands.
 
-'w' (write)
+### 'w' (write)
 
 #### Syntax
 
