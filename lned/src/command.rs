@@ -12,7 +12,6 @@ use line_reader::LineRead;
 
 use crate::edit_buffer::EditBuffer;
 use crate::iter_utils::Peeking;
-use crate::str_utils::StrUtils;
 
 #[derive(Debug)]
 pub enum Cmd {
@@ -225,10 +224,12 @@ impl Address {
                         .ok_or(Error::NoMatchingLine)?;
                     right = Some(eval_line_number(graphemes, line)?);
                 }
-                Some(s) if s.is_blank() => {
+                Some(&" " | &"\t") => {
                     graphemes.next();
                 }
-                Some(s) if s.is_ascii_digit() => {
+                Some(s)
+                    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) =>
+                {
                     let num = parse_number(graphemes)?;
                     right = Some(eval_line_number(graphemes, num)?);
                 }
@@ -333,7 +334,7 @@ fn parse_write_cmd<'a>(
 ) -> Result<Cmd, Error> {
     match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(Cmd::Write(address, None)),
-        Some(s) if s.is_blank() => {
+        Some(" " | "\t") => {
             let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
                 .collect::<String>()
@@ -358,7 +359,7 @@ fn parse_edit_cmd<'a>(
     }
     match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(Cmd::Edit(None)),
-        Some(s) if s.is_blank() => {
+        Some(" " | "\t") => {
             let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
                 .collect::<String>()
@@ -458,10 +459,10 @@ fn compute_line_offset<'a>(
     let mut total_offset = 0isize;
     while let Some(s) = graphemes.peek() {
         match *s {
-            s if s.is_blank() => {
+            " " | "\t" => {
                 graphemes.next();
             }
-            s if s.is_ascii_digit() => {
+            s if s.chars().next().is_some_and(|c| c.is_ascii_digit()) => {
                 total_offset = parse_number(graphemes)
                     .and_then(|o| {
                         o.try_into().map_err(|_| Error::OffsetTooLarge)
@@ -542,7 +543,7 @@ fn parse_file_cmd<'a>(
     }
     match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(Cmd::File(None)),
-        Some(s) if s.is_blank() => {
+        Some(" " | "\t") => {
             let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
                 .collect::<String>()

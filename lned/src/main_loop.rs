@@ -9,7 +9,6 @@ use regex::Regex;
 use crate::cli;
 use crate::command::{self, Address, Cmd};
 use crate::edit_buffer::EditBuffer;
-use crate::num_utils::NumUtils;
 
 use line_reader::LineRead;
 
@@ -315,7 +314,7 @@ fn enumerate_cmd(
         return Err(Error::InvalidAddress);
     }
 
-    let width = buffer.len().decimal_digits();
+    let width = 1 + buffer.len().checked_ilog10().unwrap_or_default() as usize;
     let start = *span.start();
     buffer.set_current_line(*span.end());
 
