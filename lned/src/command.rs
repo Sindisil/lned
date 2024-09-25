@@ -29,16 +29,17 @@ pub enum Cmd {
     Print(Option<Address>),
     Quit,
     Redo,
-    Substitute(Option<Address>, Regex, String, Option<SubstituteFlag>),
+    Substitute(Option<Address>, Regex, String, SubstitutionScope),
     Transfer(Option<Address>, Address),
     Undo,
     Write(Option<Address>, Option<PathBuf>),
 }
 
 #[derive(Debug)]
-pub enum SubstituteFlag {
+pub enum SubstitutionScope {
+    First,
     Global,
-    Index(usize),
+    Indexed(usize),
 }
 
 #[derive(Debug)]
@@ -60,7 +61,7 @@ pub enum Error {
     ReadCommand { source: io::Error },
     MissingEol,
     MissingDestination,
-    InvalidSubstituteFlag,
+    RepeatedSubstitutionScope,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -87,7 +88,7 @@ impl std::error::Error for Error {
             | Error::InvalidCmdSuffix
             | Error::InvalidFilename
             | Error::MissingDestination
-            | Error::InvalidSubstituteFlag
+            | Error::RepeatedSubstitutionScope
             | Error::MissingEol => None,
             Error::ReadCommand { ref source } => Some(source),
         }
@@ -122,7 +123,9 @@ impl Display for Error {
             Error::MissingEol => write!(f, "missing line terminator"),
             Error::MissingDestination => write!(f, "missing destination"),
             Error::NumberParse => write!(f, "invalid numeric string"),
-            Error::InvalidSubstituteFlag => write!(f, "invalid flag"),
+            Error::RepeatedSubstitutionScope => {
+                write!(f, "only one substitution scope specifier allowed")
+            }
         }
     }
 }
@@ -389,14 +392,50 @@ fn parse_move_cmd<'a>(
     }
 }
 
-fn parse_substitute_cmd<'a>(
-    _graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
-    _address: Option<Address>,
-    _previous_pattern: &mut Option<Regex>,
-    _replacement: &mut String,
-    _flag: &mut Option<SubstituteFlag>,
-) -> Result<Cmd, Error> {
-    todo!("implement parsing of substitute cmd");
+fn parse_substitute_cmd<'a, I>(
+    graphemes: &mut Peekable<I>,
+    address: Option<Address>,
+    previous_pattern: &mut Option<Regex>,
+) -> Result<Cmd, Error>
+where
+    I: Clone,
+    I: Iterator<Item = &'a str>,
+{
+    let delimiter = parse_pattern_delimiter(graphemes)?;
+    let pattern = parse_delimited_text(graphemes, &delimiter)?;
+    if !(pattern.is_empty()) {
+        *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
+    }
+    let pattern = previous_pattern.clone().ok_or(Error::NoPreviousPattern)?;
+
+    let replacement = parse_delimited_text(graphemes, &delimiter)?;
+
+    // parse flags
+    let scope = {
+        let mut s: Option<SubstitutionScope> = None;
+        while let Some(&gr) = graphemes.peek() {
+            let is_digit =
+                gr.chars().next().is_some_and(|c| c.is_ascii_digit());
+            if s.is_some() && (is_digit || gr == "g") {
+                return Err(Error::RepeatedSubstitutionScope);
+            }
+            if is_digit {
+                s = Some(match parse_number(graphemes)? {
+                    1 => SubstitutionScope::First,
+                    n => SubstitutionScope::Indexed(n),
+                });
+            } else if gr == "g" {
+                s = Some(SubstitutionScope::Global);
+                graphemes.next();
+            } else if gr == "\n" || gr == "\r\n" {
+                break;
+            } else {
+                return Err(Error::InvalidCmdSuffix);
+            }
+        }
+        s.unwrap_or(SubstitutionScope::First)
+    };
+    Ok(Cmd::Substitute(address, pattern, replacement, scope))
 }
 
 fn parse_transfer_cmd<'a>(
@@ -427,7 +466,7 @@ fn parse_pattern_delimiter<'a>(
     graphemes
         .next_if(|gr| *gr != "\n" && *gr != "\r\n" && *gr != " ")
         .ok_or(Error::InvalidPatternDelimiter)
-        .map(|d| d.to_owned())
+        .map(ToOwned::to_owned)
 }
 
 fn parse_delimited_text<'a>(
@@ -1380,23 +1419,15 @@ mod tests {
         let mut cmd_line = "/[^01]*/./\r\n".graphemes(true).peekable();
         let address = Some(Address::span(1, 10).unwrap());
         let mut prev_pattern = None;
-        let mut replacement = String::new();
-        let mut flag = None;
-        let res = parse_substitute_cmd(
-            &mut cmd_line,
-            address,
-            &mut prev_pattern,
-            &mut replacement,
-            &mut flag,
-        )
-        .unwrap();
-        assert!(matches!(res,
-                  Cmd::Substitute(a, p, r, f) if a == address
-
-                          && p.as_str() == "/[^01]*"
-                          && r == "."
-                          && f.is_none()
-        ));
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .unwrap();
+        let Cmd::Substitute(a, p, r, SubstitutionScope::First) = res else {
+            panic!("not First!");
+        };
+        assert_eq!(a, address);
+        assert_eq!(p.as_str(), "[^01]*");
+        assert_eq!(r, ".");
     }
 
     #[test]
@@ -1404,23 +1435,15 @@ mod tests {
         let mut cmd_line = "/[^01]*/./g\r\n".graphemes(true).peekable();
         let address = Some(Address::span(1, 10).unwrap());
         let mut prev_pattern = None;
-        let mut replacement = String::new();
-        let mut flag = None;
-        let res = parse_substitute_cmd(
-            &mut cmd_line,
-            address,
-            &mut prev_pattern,
-            &mut replacement,
-            &mut flag,
-        )
-        .unwrap();
-        assert!(matches!(res,
-                  Cmd::Substitute(a, p, r, f) if a == address
-
-                          && p.as_str() == "/[^01]*"
-                          && r == "."
-                          && matches!(f, Some(SubstituteFlag::Global))
-        ));
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .unwrap();
+        let Cmd::Substitute(a, p, r, SubstitutionScope::Global) = res else {
+            panic!("Not Global!");
+        };
+        assert_eq!(a, address);
+        assert_eq!(p.as_str(), "[^01]*");
+        assert_eq!(r, ".");
     }
 
     #[test]
@@ -1428,23 +1451,33 @@ mod tests {
         let mut cmd_line = "/[^01]*/./3\r\n".graphemes(true).peekable();
         let address = Some(Address::span(1, 10).unwrap());
         let mut prev_pattern = None;
-        let mut replacement = String::new();
-        let mut flag = None;
-        let res = parse_substitute_cmd(
-            &mut cmd_line,
-            address,
-            &mut prev_pattern,
-            &mut replacement,
-            &mut flag,
-        )
-        .unwrap();
-        assert!(matches!(res,
-                  Cmd::Substitute(a, p, r, f) if a == address
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .unwrap();
+        let Cmd::Substitute(a, p, r, SubstitutionScope::Indexed(3)) = res
+        else {
+            panic!("not Indexed(3)!");
+        };
+        assert_eq!(a, address);
+        assert_eq!(p.as_str(), "[^01]*");
+        assert_eq!(r, ".");
+    }
 
-                          && p.as_str() == "/[^01]*"
-                          && r == "."
-                          && matches!(f, Some(SubstituteFlag::Index(3)))
-        ));
+    #[test]
+    fn parse_indexed_first_substitute() {
+        let mut cmd_line = "/[^01]*/./1\r\n".graphemes(true).peekable();
+        let address = Some(Address::span(1, 10).unwrap());
+        let mut prev_pattern = None;
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .unwrap();
+        let Cmd::Substitute(a, p, r, SubstitutionScope::First) = res
+        else {
+            panic!("not First (from Indexed(2))!");
+        };
+        assert_eq!(a, address);
+        assert_eq!(p.as_str(), "[^01]*");
+        assert_eq!(r, ".");
     }
 
     #[test]
@@ -1452,28 +1485,16 @@ mod tests {
         let mut cmd_line = "/[^01]*/./g1\r\n".graphemes(true).peekable();
         let address = Some(Address::span(1, 10).unwrap());
         let mut prev_pattern = None;
-        let mut replacement = String::new();
-        let mut flag = None;
-        let res = parse_substitute_cmd(
-            &mut cmd_line,
-            address,
-            &mut prev_pattern,
-            &mut replacement,
-            &mut flag,
-        )
-        .expect_err("should fail");
-        assert!(matches!(res, Error::InvalidSubstituteFlag));
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .expect_err("should fail");
+        assert!(matches!(res, Error::RepeatedSubstitutionScope));
 
         cmd_line = "/[^01]*/./4g\n".graphemes(true).peekable();
-        let res = parse_substitute_cmd(
-            &mut cmd_line,
-            address,
-            &mut prev_pattern,
-            &mut replacement,
-            &mut flag,
-        )
-        .expect_err("should fail");
-        assert!(matches!(res, Error::InvalidSubstituteFlag));
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .expect_err("should fail");
+        assert!(matches!(res, Error::RepeatedSubstitutionScope));
     }
 
     #[test]
@@ -1481,28 +1502,16 @@ mod tests {
         let mut cmd_line = "/[^01]*/./q\r\n".graphemes(true).peekable();
         let address = Some(Address::span(1, 10).unwrap());
         let mut prev_pattern = None;
-        let mut replacement = String::new();
-        let mut flag = None;
-        let res = parse_substitute_cmd(
-            &mut cmd_line,
-            address,
-            &mut prev_pattern,
-            &mut replacement,
-            &mut flag,
-        )
-        .expect_err("should fail");
-        assert!(matches!(res, Error::InvalidSubstituteFlag));
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .expect_err("should fail");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
 
         cmd_line = "/[^01]*/./gq\n".graphemes(true).peekable();
-        let res = parse_substitute_cmd(
-            &mut cmd_line,
-            address,
-            &mut prev_pattern,
-            &mut replacement,
-            &mut flag,
-        )
-        .expect_err("should fail");
-        assert!(matches!(res, Error::InvalidSubstituteFlag));
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .expect_err("should fail");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
