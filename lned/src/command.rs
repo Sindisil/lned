@@ -1471,8 +1471,7 @@ mod tests {
         let res =
             parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
                 .unwrap();
-        let Cmd::Substitute(a, p, r, SubstitutionScope::First) = res
-        else {
+        let Cmd::Substitute(a, p, r, SubstitutionScope::First) = res else {
             panic!("not First (from Indexed(2))!");
         };
         assert_eq!(a, address);

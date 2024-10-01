@@ -215,7 +215,7 @@ fn append_cmd(
     Cmd::read_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
     //    let location = address.map_or(buffer.current_line(), |addr| addr.1);
-    buffer.do_append(address, lines);
+    buffer.do_append(address, lines, None);
     Ok(())
 }
 
@@ -231,7 +231,7 @@ fn change_cmd(
     let mut lines = Vec::new();
     Cmd::read_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
-    buffer.do_change(address, lines);
+    buffer.do_change(address, lines, None);
     Ok(())
 }
 
@@ -243,7 +243,7 @@ fn delete_cmd(
         Some(addr) if addr.start() == 0 => Err(Error::InvalidAddress),
         None if buffer.current_line() == 0 => Err(Error::InvalidAddress),
         _ => {
-            buffer.do_delete(address);
+            buffer.do_delete(address, None);
             Ok(())
         }
     }
@@ -391,7 +391,7 @@ fn insert_cmd(
     let mut lines = Vec::new();
     Cmd::read_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
-    buffer.do_insert(address, lines);
+    buffer.do_insert(address, lines, None);
     Ok(())
 }
 
@@ -408,7 +408,7 @@ fn join_cmd(
         }
         Some(a) if a.line_count() == 1 => Ok(()),
         _ => {
-            buffer.do_join(address);
+            buffer.do_join(address, None);
             Ok(())
         }
     }
@@ -424,7 +424,7 @@ fn move_cmd(
     if destination.end() >= source.start() && destination.end() < source.end() {
         return Err(Error::DestinationIntersectsSource);
     }
-    buffer.do_move(address, destination);
+    buffer.do_move(address, destination, None);
     Ok(())
 }
 
@@ -503,7 +503,7 @@ fn transfer_cmd(
     if destination.end() >= source.start() && destination.end() < source.end() {
         return Err(Error::DestinationIntersectsSource);
     }
-    buffer.do_transfer(address, destination);
+    buffer.do_transfer(address, destination, None);
     Ok(())
 }
 
