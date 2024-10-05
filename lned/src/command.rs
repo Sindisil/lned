@@ -37,9 +37,8 @@ pub enum Cmd {
 
 #[derive(Debug)]
 pub enum SubstitutionScope {
-    First,
+    Single(usize),
     Global,
-    Indexed(usize),
 }
 
 #[derive(Debug)]
@@ -420,10 +419,7 @@ where
                 return Err(Error::RepeatedSubstitutionScope);
             }
             if is_digit {
-                s = Some(match parse_number(graphemes)? {
-                    1 => SubstitutionScope::First,
-                    n => SubstitutionScope::Indexed(n),
-                });
+s = Some(SubstitutionScope::Single(parse_number(graphemes)?));
             } else if gr == "g" {
                 s = Some(SubstitutionScope::Global);
                 graphemes.next();
@@ -433,7 +429,7 @@ where
                 return Err(Error::InvalidCmdSuffix);
             }
         }
-        s.unwrap_or(SubstitutionScope::First)
+        s.unwrap_or(SubstitutionScope::Single(1))
     };
     Ok(Cmd::Substitute(address, pattern, replacement, scope))
 }
@@ -1422,8 +1418,8 @@ mod tests {
         let res =
             parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
                 .unwrap();
-        let Cmd::Substitute(a, p, r, SubstitutionScope::First) = res else {
-            panic!("not First!");
+        let Cmd::Substitute(a, p, r, SubstitutionScope::Single(1)) = res else {
+            panic!("not Single(1)!");
         };
         assert_eq!(a, address);
         assert_eq!(p.as_str(), "[^01]*");
@@ -1454,25 +1450,9 @@ mod tests {
         let res =
             parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
                 .unwrap();
-        let Cmd::Substitute(a, p, r, SubstitutionScope::Indexed(3)) = res
+        let Cmd::Substitute(a, p, r, SubstitutionScope::Single(3)) = res
         else {
-            panic!("not Indexed(3)!");
-        };
-        assert_eq!(a, address);
-        assert_eq!(p.as_str(), "[^01]*");
-        assert_eq!(r, ".");
-    }
-
-    #[test]
-    fn parse_indexed_first_substitute() {
-        let mut cmd_line = "/[^01]*/./1\r\n".graphemes(true).peekable();
-        let address = Some(Address::span(1, 10).unwrap());
-        let mut prev_pattern = None;
-        let res =
-            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
-                .unwrap();
-        let Cmd::Substitute(a, p, r, SubstitutionScope::First) = res else {
-            panic!("not First (from Indexed(2))!");
+            panic!("not Single(3)!");
         };
         assert_eq!(a, address);
         assert_eq!(p.as_str(), "[^01]*");
