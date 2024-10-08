@@ -130,12 +130,8 @@ impl Display for Error {
 }
 
 impl Address {
-    pub fn span(start: usize, end: usize) -> Result<Address, Error> {
-        if start > end {
-            Err(Error::InvalidAddress)
-        } else {
-            Ok(Address { start, end })
-        }
+    pub fn span(start: usize, end: usize) -> Address {
+        Address { start, end }
     }
 
     pub fn line(line: usize) -> Address {
@@ -243,8 +239,13 @@ impl Address {
             }
         }
 
-        if let Some(r) = right {
-            Ok(Some(Address::span(left.map_or(r, |l| l), r)?))
+        if let Some(right) = right {
+            let left = left.map_or(right, |l| l);
+            if left > right {
+                Err(Error::InvalidAddress)
+            } else {
+                Ok(Some(Address::span(left, right)))
+            }
         } else {
             Ok(None)
         }
@@ -419,7 +420,7 @@ where
                 return Err(Error::RepeatedSubstitutionScope);
             }
             if is_digit {
-s = Some(SubstitutionScope::Single(parse_number(graphemes)?));
+                s = Some(SubstitutionScope::Single(parse_number(graphemes)?));
             } else if gr == "g" {
                 s = Some(SubstitutionScope::Global);
                 graphemes.next();
@@ -1041,7 +1042,7 @@ mod tests {
         let mut input = "1,2p\n".graphemes(true).peekable();
         let res = Address::eval(&mut input, &mut EditBuffer::new(), &mut None)
             .unwrap();
-        assert_eq!(res, Some(Address::span(1, 2).unwrap()));
+        assert_eq!(res, Some(Address::span(1, 2)));
         assert_eq!(input.next(), Some("p"));
     }
 
@@ -1051,7 +1052,7 @@ mod tests {
         let res = Address::eval(&mut input, &mut EditBuffer::new(), &mut None)
             .unwrap();
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address::span(1, 4).unwrap()));
+        assert_eq!(res, Some(Address::span(1, 4)));
     }
 
     #[test]
@@ -1069,7 +1070,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address::span(1, 6).unwrap()));
+        assert_eq!(res, Some(Address::span(1, 6)));
     }
 
     #[test]
@@ -1096,7 +1097,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!(buffer.current_line(), 6);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(res, Some(Address::span(1, 2).unwrap()));
+        assert_eq!(res, Some(Address::span(1, 2)));
         assert_eq!(buffer.current_line(), 1);
         assert_eq!(input.next(), Some("p"));
     }
@@ -1108,7 +1109,7 @@ mod tests {
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address::span(3, 5).unwrap()));
+        assert_eq!(res, Some(Address::span(3, 5)));
         assert_eq!(buffer.current_line(), 3);
     }
 
@@ -1130,7 +1131,7 @@ mod tests {
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address::span(3, 6).unwrap()));
+        assert_eq!(res, Some(Address::span(3, 6)));
         assert_eq!(buffer.current_line(), 3);
     }
 
@@ -1413,7 +1414,7 @@ mod tests {
     #[test]
     fn parse_single_substitute() {
         let mut cmd_line = "/[^01]*/./\r\n".graphemes(true).peekable();
-        let address = Some(Address::span(1, 10).unwrap());
+        let address = Some(Address::span(1, 10));
         let mut prev_pattern = None;
         let res =
             parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
@@ -1429,7 +1430,7 @@ mod tests {
     #[test]
     fn parse_global_substitute() {
         let mut cmd_line = "/[^01]*/./g\r\n".graphemes(true).peekable();
-        let address = Some(Address::span(1, 10).unwrap());
+        let address = Some(Address::span(1, 10));
         let mut prev_pattern = None;
         let res =
             parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
@@ -1445,13 +1446,12 @@ mod tests {
     #[test]
     fn parse_indexed_substitute() {
         let mut cmd_line = "/[^01]*/./3\r\n".graphemes(true).peekable();
-        let address = Some(Address::span(1, 10).unwrap());
+        let address = Some(Address::span(1, 10));
         let mut prev_pattern = None;
         let res =
             parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
                 .unwrap();
-        let Cmd::Substitute(a, p, r, SubstitutionScope::Single(3)) = res
-        else {
+        let Cmd::Substitute(a, p, r, SubstitutionScope::Single(3)) = res else {
             panic!("not Single(3)!");
         };
         assert_eq!(a, address);
@@ -1462,7 +1462,7 @@ mod tests {
     #[test]
     fn parse_substitute_conflicting_flags() {
         let mut cmd_line = "/[^01]*/./g1\r\n".graphemes(true).peekable();
-        let address = Some(Address::span(1, 10).unwrap());
+        let address = Some(Address::span(1, 10));
         let mut prev_pattern = None;
         let res =
             parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
@@ -1479,7 +1479,7 @@ mod tests {
     #[test]
     fn parse_substitute_invalid_flag() {
         let mut cmd_line = "/[^01]*/./q\r\n".graphemes(true).peekable();
-        let address = Some(Address::span(1, 10).unwrap());
+        let address = Some(Address::span(1, 10));
         let mut prev_pattern = None;
         let res =
             parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
@@ -1496,7 +1496,7 @@ mod tests {
     #[test]
     fn parse_transfer_cmd_with_destination() {
         let mut cmd_line = " 13\n".graphemes(true).peekable();
-        let addr = Address::span(1, 2).unwrap();
+        let addr = Address::span(1, 2);
         let dest = Address::line(13);
         let res = parse_transfer_cmd(
             &mut cmd_line,
@@ -1524,7 +1524,7 @@ mod tests {
     #[test]
     fn parse_transfer_cmd_no_destination() {
         let mut cmd_line = "\n".graphemes(true).peekable();
-        let addr = Address::span(13, 42).unwrap();
+        let addr = Address::span(13, 42);
         let res = parse_transfer_cmd(
             &mut cmd_line,
             &mut EditBuffer::new(),
@@ -1546,7 +1546,7 @@ mod tests {
     #[test]
     fn parse_move_cmd_with_destination() {
         let mut cmd_line = " 13\n".graphemes(true).peekable();
-        let addr = Address::span(1, 2).unwrap();
+        let addr = Address::span(1, 2);
         let dest = Address::line(13);
         let res = parse_move_cmd(
             &mut cmd_line,
@@ -1569,7 +1569,7 @@ mod tests {
     #[test]
     fn parse_move_cmd_no_destination() {
         let mut cmd_line = "\n".graphemes(true).peekable();
-        let addr = Address::span(13, 42).unwrap();
+        let addr = Address::span(13, 42);
         let res = parse_move_cmd(
             &mut cmd_line,
             &mut EditBuffer::new(),
@@ -1583,7 +1583,7 @@ mod tests {
     #[test]
     fn parse_write_cmd_with_address() {
         let mut cmd_line = " filename.rs".graphemes(true);
-        let addr = Address::span(1, 10).unwrap();
+        let addr = Address::span(1, 10);
         let res = parse_write_cmd(&mut cmd_line, Some(addr)).unwrap();
         assert!(
             matches!(res, Cmd::Write(Some(a), Some(f)) if a == addr && f.to_str().unwrap() == "filename.rs")
@@ -1593,7 +1593,7 @@ mod tests {
     #[test]
     fn parse_write_cmd_no_filename() {
         let mut cmd_line = "\n".graphemes(true);
-        let addr = Address::span(1, 10).unwrap();
+        let addr = Address::span(1, 10);
         let res = parse_write_cmd(&mut cmd_line, Some(addr)).unwrap();
         assert!(matches!(res, Cmd::Write(Some(a), None) if a == addr));
     }
