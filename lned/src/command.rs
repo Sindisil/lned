@@ -12,9 +12,8 @@ use line_reader::LineRead;
 
 use crate::edit_buffer::EditBuffer;
 use crate::iter_utils::Peeking;
-use crate::str_utils::StrUtils;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Cmd {
     Append(Option<Address>),
     Change(Option<Address>),
@@ -30,9 +29,16 @@ pub enum Cmd {
     Print(Option<Address>),
     Quit,
     Redo,
+    Substitute(Option<Address>, Regex, String, SubstitutionScope),
     Transfer(Option<Address>, Address),
     Undo,
     Write(Option<Address>, Option<PathBuf>),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum SubstitutionScope {
+    Single(usize),
+    Global,
 }
 
 #[derive(Debug)]
@@ -54,6 +60,7 @@ pub enum Error {
     ReadCommand { source: io::Error },
     MissingEol,
     MissingDestination,
+    RepeatedSubstitutionScope,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -80,6 +87,7 @@ impl std::error::Error for Error {
             | Error::InvalidCmdSuffix
             | Error::InvalidFilename
             | Error::MissingDestination
+            | Error::RepeatedSubstitutionScope
             | Error::MissingEol => None,
             Error::ReadCommand { ref source } => Some(source),
         }
@@ -114,17 +122,16 @@ impl Display for Error {
             Error::MissingEol => write!(f, "missing line terminator"),
             Error::MissingDestination => write!(f, "missing destination"),
             Error::NumberParse => write!(f, "invalid numeric string"),
+            Error::RepeatedSubstitutionScope => {
+                write!(f, "only one substitution scope specifier allowed")
+            }
         }
     }
 }
 
 impl Address {
-    pub fn span(start: usize, end: usize) -> Result<Address, Error> {
-        if start > end {
-            Err(Error::InvalidAddress)
-        } else {
-            Ok(Address { start, end })
-        }
+    pub fn span(start: usize, end: usize) -> Address {
+        Address { start, end }
     }
 
     pub fn line(line: usize) -> Address {
@@ -187,7 +194,8 @@ impl Address {
                     right = Some(eval_line_number(graphemes, buffer.len())?);
                 }
                 Some(&"/") => {
-                    let pattern = parse_pattern(graphemes)?;
+                    graphemes.next();
+                    let pattern = parse_delimited_text(graphemes, "/")?;
                     if !pattern.is_empty() {
                         *previous_pattern =
                             Some(Regex::new(&pattern).map_err(Error::Regex)?);
@@ -200,7 +208,8 @@ impl Address {
                     right = Some(eval_line_number(graphemes, line)?);
                 }
                 Some(&"?") => {
-                    let pattern = parse_pattern(graphemes)?;
+                    graphemes.next();
+                    let pattern = parse_delimited_text(graphemes, "?")?;
                     if !pattern.is_empty() {
                         *previous_pattern =
                             Some(Regex::new(&pattern).map_err(Error::Regex)?);
@@ -213,10 +222,12 @@ impl Address {
                         .ok_or(Error::NoMatchingLine)?;
                     right = Some(eval_line_number(graphemes, line)?);
                 }
-                Some(s) if s.is_blank() => {
+                Some(&" " | &"\t") => {
                     graphemes.next();
                 }
-                Some(s) if s.is_ascii_digit() => {
+                Some(s)
+                    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) =>
+                {
                     let num = parse_number(graphemes)?;
                     right = Some(eval_line_number(graphemes, num)?);
                 }
@@ -228,8 +239,13 @@ impl Address {
             }
         }
 
-        if let Some(r) = right {
-            Ok(Some(Address::span(left.map_or(r, |l| l), r)?))
+        if let Some(right) = right {
+            let left = left.map_or(right, |l| l);
+            if left > right {
+                Err(Error::InvalidAddress)
+            } else {
+                Ok(Some(Address::span(left, right)))
+            }
         } else {
             Ok(None)
         }
@@ -299,6 +315,9 @@ impl Cmd {
             Some("p") => parse_no_args(&mut graphemes, Cmd::Print(address)),
             Some("q") => parse_no_address(address, Cmd::Quit)
                 .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
+            Some("s") => {
+                parse_substitute_cmd(&mut graphemes, address, previous_pattern)
+            }
             Some("t") => parse_transfer_cmd(
                 &mut graphemes,
                 buffer,
@@ -321,7 +340,7 @@ fn parse_write_cmd<'a>(
 ) -> Result<Cmd, Error> {
     match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(Cmd::Write(address, None)),
-        Some(s) if s.is_blank() => {
+        Some(" " | "\t") => {
             let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
                 .collect::<String>()
@@ -346,7 +365,7 @@ fn parse_edit_cmd<'a>(
     }
     match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(Cmd::Edit(None)),
-        Some(s) if s.is_blank() => {
+        Some(" " | "\t") => {
             let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
                 .collect::<String>()
@@ -376,6 +395,49 @@ fn parse_move_cmd<'a>(
     }
 }
 
+fn parse_substitute_cmd<'a, I>(
+    graphemes: &mut Peekable<I>,
+    address: Option<Address>,
+    previous_pattern: &mut Option<Regex>,
+) -> Result<Cmd, Error>
+where
+    I: Clone,
+    I: Iterator<Item = &'a str>,
+{
+    let delimiter = parse_pattern_delimiter(graphemes)?;
+    let pattern = parse_delimited_text(graphemes, &delimiter)?;
+    if !(pattern.is_empty()) {
+        *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
+    }
+    let pattern = previous_pattern.clone().ok_or(Error::NoPreviousPattern)?;
+
+    let replacement = parse_delimited_text(graphemes, &delimiter)?;
+
+    // parse flags
+    let scope = {
+        let mut s: Option<SubstitutionScope> = None;
+        while let Some(&gr) = graphemes.peek() {
+            let is_digit =
+                gr.chars().next().is_some_and(|c| c.is_ascii_digit());
+            if s.is_some() && (is_digit || gr == "g") {
+                return Err(Error::RepeatedSubstitutionScope);
+            }
+            if is_digit {
+                s = Some(SubstitutionScope::Single(parse_number(graphemes)?));
+            } else if gr == "g" {
+                s = Some(SubstitutionScope::Global);
+                graphemes.next();
+            } else if gr == "\n" || gr == "\r\n" {
+                break;
+            } else {
+                return Err(Error::InvalidCmdSuffix);
+            }
+        }
+        s.unwrap_or(SubstitutionScope::Single(1))
+    };
+    Ok(Cmd::Substitute(address, pattern, replacement, scope))
+}
+
 fn parse_transfer_cmd<'a>(
     graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
     buffer: &mut EditBuffer,
@@ -398,29 +460,36 @@ fn eval_line_number<'a>(
     line.checked_add_signed(offset).ok_or(Error::OffsetOverflow)
 }
 
-fn parse_pattern<'a>(
+fn parse_pattern_delimiter<'a>(
     graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
 ) -> Result<String, Error> {
-    let delimiter = graphemes
+    graphemes
         .next_if(|gr| *gr != "\n" && *gr != "\r\n" && *gr != " ")
-        .ok_or(Error::InvalidPatternDelimiter)?;
-    let mut pattern = String::new();
+        .ok_or(Error::InvalidPatternDelimiter)
+        .map(ToOwned::to_owned)
+}
+
+fn parse_delimited_text<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+    delimiter: &str,
+) -> Result<String, Error> {
+    let mut text = String::new();
     while let Some(gr) = graphemes.next_if(|gr| *gr != "\n" && *gr != "\r\n") {
         if gr == delimiter {
             break;
         } else if gr != "\\" {
-            pattern.push_str(gr);
+            text.push_str(gr);
         } else {
             let escaped_gr = graphemes
                 .next_if(|gr| *gr != "\n" && *gr != "\r\n")
                 .ok_or(Error::TrailingBackslash)?;
             if escaped_gr != delimiter {
-                pattern.push('\\');
+                text.push('\\');
             }
-            pattern.push_str(escaped_gr);
+            text.push_str(escaped_gr);
         }
     }
-    Ok(pattern)
+    Ok(text)
 }
 
 fn compute_line_offset<'a>(
@@ -429,10 +498,10 @@ fn compute_line_offset<'a>(
     let mut total_offset = 0isize;
     while let Some(s) = graphemes.peek() {
         match *s {
-            s if s.is_blank() => {
+            " " | "\t" => {
                 graphemes.next();
             }
-            s if s.is_ascii_digit() => {
+            s if s.chars().next().is_some_and(|c| c.is_ascii_digit()) => {
                 total_offset = parse_number(graphemes)
                     .and_then(|o| {
                         o.try_into().map_err(|_| Error::OffsetTooLarge)
@@ -513,7 +582,7 @@ fn parse_file_cmd<'a>(
     }
     match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(Cmd::File(None)),
-        Some(s) if s.is_blank() => {
+        Some(" " | "\t") => {
             let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
                 .collect::<String>()
@@ -530,12 +599,13 @@ fn parse_file_cmd<'a>(
 }
 
 fn parse_global_cmd<'a>(
-    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+    graphemes: &'a mut Peekable<impl Iterator<Item = &'a str>>,
     address: Option<Address>,
     previous_pattern: &mut Option<Regex>,
     input: &mut impl LineRead,
 ) -> Result<Cmd, Error> {
-    let pattern = parse_pattern(graphemes)?;
+    let delimiter = parse_pattern_delimiter(graphemes)?;
+    let pattern = parse_delimited_text(graphemes, &delimiter)?;
     if !(pattern.is_empty()) {
         *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
     }
@@ -710,33 +780,39 @@ mod tests {
     }
 
     #[test]
-    fn parse_pattern_invalid_delimiter() {
+    fn parse_pattern_delimiter_invalid() {
         let mut input = " stuff + other_stuff. \n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input);
+        let res = parse_pattern_delimiter(&mut input);
         assert!(matches!(res, Err(Error::InvalidPatternDelimiter)));
     }
 
     #[test]
     fn parse_pattern_trailing_backslash() {
         let mut input = "/stuff + other_stuff.\\\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).expect_err("trailing backslash");
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_delimited_text(&mut input, &delimiter)
+            .expect_err("trailing backslash");
         assert!(matches!(res, Error::TrailingBackslash));
         let mut input = "/stuff + other_stuff.\\".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).expect_err("trailing backslash");
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_delimited_text(&mut input, &delimiter)
+            .expect_err("trailing backslash");
         assert!(matches!(res, Error::TrailingBackslash));
     }
 
     #[test]
     fn parse_pattern_no_terminating_delimiter() {
         let mut input = "/stuff\\/other_stuff.\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).unwrap();
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_delimited_text(&mut input, &delimiter).unwrap();
         assert_eq!("stuff/other_stuff.".to_owned(), res);
     }
 
     #[test]
     fn parse_pattern_escaped_terminator() {
         let mut input = "/stuff\\/other_stuff./\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).unwrap();
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_delimited_text(&mut input, &delimiter).unwrap();
         assert_eq!("stuff/other_stuff.".to_owned(), res);
     }
 
@@ -744,14 +820,16 @@ mod tests {
     fn parse_pattern_escaped_chars() {
         let mut input =
             "?stuff \\+ other_stuff\\.?\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).unwrap();
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_delimited_text(&mut input, &delimiter).unwrap();
         assert_eq!("stuff \\+ other_stuff\\.".to_owned(), res);
     }
 
     #[test]
     fn parse_pattern_no_escaped_chars() {
         let mut input = "/stuff + other_stuff./\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).unwrap();
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_delimited_text(&mut input, &delimiter).unwrap();
         assert_eq!("stuff + other_stuff.".to_owned(), res);
     }
 
@@ -967,7 +1045,7 @@ mod tests {
         let mut input = "1,2p\n".graphemes(true).peekable();
         let res = Address::eval(&mut input, &mut EditBuffer::new(), &mut None)
             .unwrap();
-        assert_eq!(res, Some(Address::span(1, 2).unwrap()));
+        assert_eq!(res, Some(Address::span(1, 2)));
         assert_eq!(input.next(), Some("p"));
     }
 
@@ -977,7 +1055,7 @@ mod tests {
         let res = Address::eval(&mut input, &mut EditBuffer::new(), &mut None)
             .unwrap();
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address::span(1, 4).unwrap()));
+        assert_eq!(res, Some(Address::span(1, 4)));
     }
 
     #[test]
@@ -995,7 +1073,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address::span(1, 6).unwrap()));
+        assert_eq!(res, Some(Address::span(1, 6)));
     }
 
     #[test]
@@ -1022,7 +1100,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!(buffer.current_line(), 6);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(res, Some(Address::span(1, 2).unwrap()));
+        assert_eq!(res, Some(Address::span(1, 2)));
         assert_eq!(buffer.current_line(), 1);
         assert_eq!(input.next(), Some("p"));
     }
@@ -1034,7 +1112,7 @@ mod tests {
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address::span(3, 5).unwrap()));
+        assert_eq!(res, Some(Address::span(3, 5)));
         assert_eq!(buffer.current_line(), 3);
     }
 
@@ -1056,7 +1134,7 @@ mod tests {
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address::span(3, 6).unwrap()));
+        assert_eq!(res, Some(Address::span(3, 6)));
         assert_eq!(buffer.current_line(), 3);
     }
 
@@ -1337,9 +1415,91 @@ mod tests {
     }
 
     #[test]
+    fn parse_single_substitute() {
+        let mut cmd_line = "/[^01]*/./\r\n".graphemes(true).peekable();
+        let address = Some(Address::span(1, 10));
+        let mut prev_pattern = None;
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .unwrap();
+        let Cmd::Substitute(a, p, r, SubstitutionScope::Single(1)) = res else {
+            panic!("not Single(1)!");
+        };
+        assert_eq!(a, address);
+        assert_eq!(p.as_str(), "[^01]*");
+        assert_eq!(r, ".");
+    }
+
+    #[test]
+    fn parse_global_substitute() {
+        let mut cmd_line = "/[^01]*/./g\r\n".graphemes(true).peekable();
+        let address = Some(Address::span(1, 10));
+        let mut prev_pattern = None;
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .unwrap();
+        let Cmd::Substitute(a, p, r, SubstitutionScope::Global) = res else {
+            panic!("Not Global!");
+        };
+        assert_eq!(a, address);
+        assert_eq!(p.as_str(), "[^01]*");
+        assert_eq!(r, ".");
+    }
+
+    #[test]
+    fn parse_indexed_substitute() {
+        let mut cmd_line = "/[^01]*/./3\r\n".graphemes(true).peekable();
+        let address = Some(Address::span(1, 10));
+        let mut prev_pattern = None;
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .unwrap();
+        let Cmd::Substitute(a, p, r, SubstitutionScope::Single(3)) = res else {
+            panic!("not Single(3)!");
+        };
+        assert_eq!(a, address);
+        assert_eq!(p.as_str(), "[^01]*");
+        assert_eq!(r, ".");
+    }
+
+    #[test]
+    fn parse_substitute_conflicting_flags() {
+        let mut cmd_line = "/[^01]*/./g1\r\n".graphemes(true).peekable();
+        let address = Some(Address::span(1, 10));
+        let mut prev_pattern = None;
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .expect_err("should fail");
+        assert!(matches!(res, Error::RepeatedSubstitutionScope));
+
+        cmd_line = "/[^01]*/./4g\n".graphemes(true).peekable();
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .expect_err("should fail");
+        assert!(matches!(res, Error::RepeatedSubstitutionScope));
+    }
+
+    #[test]
+    fn parse_substitute_invalid_flag() {
+        let mut cmd_line = "/[^01]*/./q\r\n".graphemes(true).peekable();
+        let address = Some(Address::span(1, 10));
+        let mut prev_pattern = None;
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .expect_err("should fail");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
+
+        cmd_line = "/[^01]*/./gq\n".graphemes(true).peekable();
+        let res =
+            parse_substitute_cmd(&mut cmd_line, address, &mut prev_pattern)
+                .expect_err("should fail");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
+    }
+
+    #[test]
     fn parse_transfer_cmd_with_destination() {
         let mut cmd_line = " 13\n".graphemes(true).peekable();
-        let addr = Address::span(1, 2).unwrap();
+        let addr = Address::span(1, 2);
         let dest = Address::line(13);
         let res = parse_transfer_cmd(
             &mut cmd_line,
@@ -1367,7 +1527,7 @@ mod tests {
     #[test]
     fn parse_transfer_cmd_no_destination() {
         let mut cmd_line = "\n".graphemes(true).peekable();
-        let addr = Address::span(13, 42).unwrap();
+        let addr = Address::span(13, 42);
         let res = parse_transfer_cmd(
             &mut cmd_line,
             &mut EditBuffer::new(),
@@ -1389,7 +1549,7 @@ mod tests {
     #[test]
     fn parse_move_cmd_with_destination() {
         let mut cmd_line = " 13\n".graphemes(true).peekable();
-        let addr = Address::span(1, 2).unwrap();
+        let addr = Address::span(1, 2);
         let dest = Address::line(13);
         let res = parse_move_cmd(
             &mut cmd_line,
@@ -1412,7 +1572,7 @@ mod tests {
     #[test]
     fn parse_move_cmd_no_destination() {
         let mut cmd_line = "\n".graphemes(true).peekable();
-        let addr = Address::span(13, 42).unwrap();
+        let addr = Address::span(13, 42);
         let res = parse_move_cmd(
             &mut cmd_line,
             &mut EditBuffer::new(),
@@ -1426,7 +1586,7 @@ mod tests {
     #[test]
     fn parse_write_cmd_with_address() {
         let mut cmd_line = " filename.rs".graphemes(true);
-        let addr = Address::span(1, 10).unwrap();
+        let addr = Address::span(1, 10);
         let res = parse_write_cmd(&mut cmd_line, Some(addr)).unwrap();
         assert!(
             matches!(res, Cmd::Write(Some(a), Some(f)) if a == addr && f.to_str().unwrap() == "filename.rs")
@@ -1436,7 +1596,7 @@ mod tests {
     #[test]
     fn parse_write_cmd_no_filename() {
         let mut cmd_line = "\n".graphemes(true);
-        let addr = Address::span(1, 10).unwrap();
+        let addr = Address::span(1, 10);
         let res = parse_write_cmd(&mut cmd_line, Some(addr)).unwrap();
         assert!(matches!(res, Cmd::Write(Some(a), None) if a == addr));
     }

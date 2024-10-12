@@ -4,8 +4,6 @@ mod command;
 mod edit_buffer;
 mod iter_utils;
 mod main_loop;
-mod num_utils;
-mod str_utils;
 
 use std::error::Error;
 use std::io;

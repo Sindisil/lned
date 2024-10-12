@@ -39,13 +39,17 @@ fn next_id() -> u64 {
 }
 
 impl ChangeSet {
-    pub fn new() -> Self {
+    pub fn new(current_line: usize) -> Self {
         ChangeSet {
             id: None,
-            current_line_before: 0,
+            current_line_before: current_line,
             current_line_after: 0,
             diffs: Vec::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.diffs.is_empty()
     }
 
     pub fn push_add(&mut self, position: usize, lines_added: Vec<String>) {
@@ -159,10 +163,10 @@ mod tests {
     #[test]
     fn undo_stack_non_empty_fingerprint() {
         let mut s = UndoStack::new();
-        s.push_undo(ChangeSet::new());
+        s.push_undo(ChangeSet::new(1));
         let fp1 = s.fingerprint();
         assert!(fp1.is_some());
-        s.push_undo(ChangeSet::new());
+        s.push_undo(ChangeSet::new(1));
         let fp2 = s.fingerprint();
         assert!(fp2.is_some() && fp1 != fp2);
         assert!(!s.undo.is_empty());
@@ -175,8 +179,7 @@ mod tests {
 
     #[test]
     fn invert_swaps_add_and_remove() {
-        let mut orig = ChangeSet::new();
-        orig.current_line_before = 13;
+        let mut orig = ChangeSet::new(13);
         orig.current_line_after = 42;
         orig.push_add(2, vec!["added\n".to_owned()]);
         orig.push_remove(1, vec!["removed\n".to_owned()]);
