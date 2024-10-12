@@ -409,12 +409,12 @@ fn join_cmd(
 
 fn move_cmd(
     buffer: &mut EditBuffer,
-    address: Option<Address>,
+    mut address: Option<Address>,
     destination: Address,
 ) -> Result<(), Error> {
-    if !destination.is_disjoint(
-        address.unwrap_or_else(|| Address::line(buffer.current_line())),
-    ) {
+    let source =
+        address.get_or_insert_with(|| Address::line(buffer.current_line()));
+    if destination.end() >= source.start() && destination.end() < source.end() {
         return Err(Error::DestinationIntersectsSource);
     }
     buffer.do_move(address, destination);
@@ -488,12 +488,12 @@ fn quit_cmd(
 
 fn transfer_cmd(
     buffer: &mut EditBuffer,
-    address: Option<Address>,
+    mut address: Option<Address>,
     destination: Address,
 ) -> Result<(), Error> {
-    if !destination.is_disjoint(
-        address.unwrap_or_else(|| Address::line(buffer.current_line())),
-    ) {
+    let source =
+        address.get_or_insert_with(|| Address::line(buffer.current_line()));
+    if destination.end() >= source.start() && destination.end() < source.end() {
         return Err(Error::DestinationIntersectsSource);
     }
     buffer.do_transfer(address, destination);
@@ -1215,6 +1215,12 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let source = Address::span(3, 5).unwrap();
         let destination = Address::line(5);
+        transfer_cmd(&mut buffer, Some(source), destination).unwrap();
+        assert_eq!(
+            &buffer[..],
+            &["1\n", "2\n", "3\n", "4\n", "5\n", "3\n", "4\n", "5\n", "6\n"]
+        );
+        let destination = Address::line(4);
         let res = transfer_cmd(&mut buffer, Some(source), destination)
             .expect_err("should fail");
         assert!(matches!(res, Error::DestinationIntersectsSource));
@@ -1480,9 +1486,10 @@ mod tests {
     fn move_cmd_destination_intersects_source_give_error() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let source = Address::span(3, 5).unwrap();
-        let destination = Address::line(5);
-        let res = move_cmd(&mut buffer, Some(source), destination)
+        let res = move_cmd(&mut buffer, Some(source), Address::line(4))
             .expect_err("should fail");
         assert!(matches!(res, Error::DestinationIntersectsSource));
+        move_cmd(&mut buffer, Some(source), Address::line(5))
+            .expect("shouldn't fail");
     }
 }
