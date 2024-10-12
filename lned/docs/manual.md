@@ -354,6 +354,41 @@ undo stack.
 For more details about the undo/redo system, see the 'u' (undo) command.
 
 
+### 's' (substitute, or search and replace)
+
+#### Syntax
+
+(.,.)s/regex/replacement/flags
+
+#### Behavior
+
+Matches each line in the addressed range witht he specified regular
+expression pattern, replacing one or all (depending upon flags)
+non-overlapping occurances with the specified replacement pattern.
+An error will be reported if no matches are found.
+
+Any character other than ' ' (space) or '\n' (new line) may be used
+instead of '/' (slash) to delimit the regex, and within the regex
+the delimiter may be used as a literal character if escaped by a
+'\' (backslash) character.
+
+The current line will be set to the line on which the last replacement
+was made.
+
+The regex syntax is that supported by the Rust regex crate, and
+the replacement pattern syntax is that supported by that crate's
+replace() method.
+
+See the regex crate's documentation for more details:
+
+[regex](https://docs.rs/regex/1.11.0/regex/index.html#syntax).
+[replace()](https://docs.rs/regex/1.11.0/regex/struct.Regex.html#method.replace) method.
+
+Flags may be either (but not both) of:
+
+* 'g'    Globaly replace all non-overlapping of regex with replacement
+* _number_    Replace the _number_th occurrance of regex with replacement
+
 ### 't' (transfer, or copy)
 
 #### Syntax
