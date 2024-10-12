@@ -340,7 +340,7 @@ impl EditBuffer {
             address.unwrap_or_else(|| Address::line(self.current_line));
         let lines: Vec<String> =
             self.text.drain(address.start() - 1..address.end()).collect();
-        let destination = if destination.end() > address.end() {
+        let destination = if destination.end() >= address.end() {
             destination.end() - address.line_count()
         } else {
             destination.end()

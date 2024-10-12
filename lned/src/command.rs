@@ -143,10 +143,6 @@ impl Address {
         self.end - self.start + 1
     }
 
-    pub fn is_disjoint(&self, other: Address) -> bool {
-        self.start > other.end || other.start > self.end
-    }
-
     fn eval<'a>(
         graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
         buffer: &mut EditBuffer,
@@ -1123,20 +1119,6 @@ mod tests {
         let res = Address::eval(&mut input, &mut buffer, &mut None)
             .expect_err("offset overflow");
         assert!(matches!(res, Error::OffsetOverflow));
-    }
-
-    #[test]
-    fn test_overlapping_addresses() {
-        let s1 = Address::span(1, 10).unwrap();
-        let s2 = Address::span(20, 30).unwrap();
-        let s3 = Address::span(8, 24).unwrap();
-        assert!(s1.is_disjoint(s2));
-        assert!(s2.is_disjoint(s1));
-        assert!(s2.is_disjoint(Address::line(5)));
-        assert!(s2.is_disjoint(Address::line(32)));
-        assert!(!s1.is_disjoint(s3));
-        assert!(!s2.is_disjoint(s3));
-        assert!(!s2.is_disjoint(Address::line(30)));
     }
 
     #[test]
