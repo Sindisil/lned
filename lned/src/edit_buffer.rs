@@ -221,11 +221,13 @@ impl EditBuffer {
         lines: Vec<String>,
         changes: Option<&mut ChangeSet>,
     ) {
-        let mut my_change =
-            if changes.is_none() { Some(ChangeSet::new()) } else { None };
+        let mut my_change = if changes.is_none() {
+            Some(ChangeSet::new(self.current_line))
+        } else {
+            None
+        };
         let change = changes.or(my_change.as_mut()).unwrap();
         let location = address.map_or(self.current_line, |addr| addr.end());
-        let current_line_before = self.current_line;
         if lines.is_empty() {
             self.current_line = location;
         } else {
@@ -234,7 +236,6 @@ impl EditBuffer {
             change.push_add(location, lines);
         }
         if let Some(mut change) = my_change {
-            change.current_line_before = current_line_before;
             change.current_line_after = self.current_line;
             self.undo_stack.push_undo(change);
         }
@@ -263,10 +264,12 @@ impl EditBuffer {
         lines: Vec<String>,
         changes: Option<&mut ChangeSet>,
     ) {
-        let mut my_change =
-            if changes.is_none() { Some(ChangeSet::new()) } else { None };
+        let mut my_change = if changes.is_none() {
+            Some(ChangeSet::new(self.current_line))
+        } else {
+            None
+        };
         let change = changes.or(my_change.as_mut()).unwrap();
-        let current_line_before = self.current_line;
 
         // handle deletion of addressed lines
         let b =
@@ -292,7 +295,6 @@ impl EditBuffer {
             change.push_remove(b - 1, removed);
         }
         if let Some(mut change) = my_change {
-            change.current_line_before = current_line_before;
             change.current_line_after = self.current_line;
             self.undo_stack.push_undo(change);
         }
@@ -310,15 +312,16 @@ impl EditBuffer {
 
         let removed: Vec<String> = self.text.splice(b - 1..e, None).collect();
 
-        let mut my_change =
-            if changes.is_none() { Some(ChangeSet::new()) } else { None };
+        let mut my_change = if changes.is_none() {
+            Some(ChangeSet::new(self.current_line))
+        } else {
+            None
+        };
         let change = changes.or(my_change.as_mut()).unwrap();
-        let current_line_before = self.current_line;
         self.current_line = usize::min(self.text.len(), b);
         change.push_remove(b - 1, removed);
         if let Some(mut change) = my_change {
             change.current_line_after = self.current_line;
-            change.current_line_before = current_line_before;
             self.undo_stack.push_undo(change);
         }
     }
@@ -337,10 +340,12 @@ impl EditBuffer {
                 .map_or(self.current_line, |addr| addr.end())
                 .saturating_sub(1)
         };
-        let mut my_change =
-            if changes.is_none() { Some(ChangeSet::new()) } else { None };
+        let mut my_change = if changes.is_none() {
+            Some(ChangeSet::new(self.current_line))
+        } else {
+            None
+        };
         let change = changes.or(my_change.as_mut()).unwrap();
-        let current_line_before = self.current_line;
         if lines.is_empty() {
             self.current_line = location;
         } else {
@@ -350,7 +355,6 @@ impl EditBuffer {
         }
         if let Some(mut change) = my_change {
             change.current_line_after = self.current_line;
-            change.current_line_before = current_line_before;
             self.undo_stack.push_undo(change);
         }
     }
@@ -363,10 +367,12 @@ impl EditBuffer {
         let address = address.unwrap_or_else(|| {
             Address::span(self.current_line, self.current_line + 1)
         });
-        let mut my_change =
-            if changes.is_none() { Some(ChangeSet::new()) } else { None };
+        let mut my_change = if changes.is_none() {
+            Some(ChangeSet::new(self.current_line))
+        } else {
+            None
+        };
         let change = changes.or(my_change.as_mut()).unwrap();
-        let current_line_before = self.current_line;
 
         let mut joined = vec![String::new()];
         for l in &self[address.start()..address.end()] {
@@ -382,7 +388,6 @@ impl EditBuffer {
         change.push_add(address.start() - 1, joined);
         if let Some(mut change) = my_change {
             change.current_line_after = self.current_line;
-            change.current_line_before = current_line_before;
             self.undo_stack.push_undo(change);
         }
     }
@@ -403,16 +408,17 @@ impl EditBuffer {
             destination.end()
         };
 
-        let mut my_change =
-            if changes.is_none() { Some(ChangeSet::new()) } else { None };
+        let mut my_change = if changes.is_none() {
+            Some(ChangeSet::new(self.current_line))
+        } else {
+            None
+        };
         let change = changes.or(my_change.as_mut()).unwrap();
-        let current_line_before = self.current_line;
         change.push_add(destination, lines.clone());
         self.text.splice(destination..destination, lines);
         self.current_line = destination + address.line_count();
         if let Some(mut change) = my_change {
             change.current_line_after = self.current_line;
-            change.current_line_before = current_line_before;
             self.undo_stack.push_undo(change);
         }
     }
@@ -466,10 +472,12 @@ impl EditBuffer {
         let source = self.text[address.start() - 1..address.end()].to_vec();
         let destination = destination.end();
 
-        let mut my_change =
-            if changes.is_none() { Some(ChangeSet::new()) } else { None };
+        let mut my_change = if changes.is_none() {
+            Some(ChangeSet::new(self.current_line))
+        } else {
+            None
+        };
         let change = changes.or(my_change.as_mut()).unwrap();
-        change.current_line_before = self.current_line;
         change.push_add(destination, source.clone());
         self.text.splice(destination..destination, source);
         self.current_line = destination + address.line_count();
