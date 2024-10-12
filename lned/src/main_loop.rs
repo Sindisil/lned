@@ -642,7 +642,7 @@ fn write_cmd(
 
     let (bytes_written, lines_written) =
         write_lines(&mut destination, buffer, address)?;
-    writeln!(output, "{bytes_written} bytes written ({lines_written} lines)")
+    writeln!(output, "{lines_written} lines ({bytes_written} bytes) written")
         .unwrap();
     output.flush().unwrap();
     Ok(())
