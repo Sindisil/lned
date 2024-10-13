@@ -481,7 +481,7 @@ fn parse_delimited_text<'a>(
     while let Some(gr) = graphemes.next_if(|gr| *gr != "\n" && *gr != "\r\n") {
         match gr {
             gr if gr == delimiter => break,
-            gr if gr == "\\" => {
+            "\\" => {
                 let escaped_gr = graphemes
                     .next_if(|gr| *gr != "\n" && *gr != "\r\n")
                     .ok_or(Error::TrailingBackslash)?;
