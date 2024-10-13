@@ -479,18 +479,18 @@ fn parse_delimited_text<'a>(
 ) -> Result<String, Error> {
     let mut text = String::new();
     while let Some(gr) = graphemes.next_if(|gr| *gr != "\n" && *gr != "\r\n") {
-        if gr == delimiter {
-            break;
-        } else if gr != "\\" {
-            text.push_str(gr);
-        } else {
-            let escaped_gr = graphemes
-                .next_if(|gr| *gr != "\n" && *gr != "\r\n")
-                .ok_or(Error::TrailingBackslash)?;
-            if escaped_gr != delimiter {
-                text.push('\\');
+        match gr {
+            gr if gr == delimiter => break,
+            gr if gr == "\\" => {
+                let escaped_gr = graphemes
+                    .next_if(|gr| *gr != "\n" && *gr != "\r\n")
+                    .ok_or(Error::TrailingBackslash)?;
+                if escaped_gr != delimiter {
+                    text.push('\\');
+                }
+                text.push_str(escaped_gr);
             }
-            text.push_str(escaped_gr);
+            gr => text.push_str(gr),
         }
     }
     Ok(text)
