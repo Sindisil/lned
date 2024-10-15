@@ -128,7 +128,7 @@ addr;   : addr;addr
 
 An address alone on a line will display the addressed line. A newline
 alone on a line will display the next line (i.e., equivalent to +1p). The
-line displayed becomes the current line. ### 'i' (insert)
+line displayed becomes the current line.
 
 ### 'a' (append)
 
