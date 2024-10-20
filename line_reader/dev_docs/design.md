@@ -420,3 +420,111 @@ Certain KeyEvents trigger transitions between these states.
 10. [Esc] when viewing history returns first of editing history or editing
     input that is_some()
 
+
+new history design
+
+The current history design is unnecessarily complex and because of this
+has several annoying and somewhat intractable bugs. I propose a new
+design that is simpler, and therefore straightforward to implement,
+but still should retain the desired functionality.
+
+Data model:
+
+history: stack of accepted, temporally uniqe, accepted input
+history_idx: current point in history stack navigation
+edited_input: user modified input, saved when navigating history
+
+buffer: current actual buffer state
+
+
+Initial state:
+
+history is empty
+history_idx is 0
+edited_input is empty String
+
+Reset state:
+
+history contains lines accepted so far (modulo deduplication
+        and w/o blank lines)
+history_idx is history.len() (i.e., one past end of history)
+edited_input is empty String
+
+Alternatively edited_input could be Option<String>, None if no
+edited input is saved, and Some(String) if there is one. Not sure
+which would make for cleaner implementation.
+
+Actions:
+
+UpArrow:
+
+If there is no history, or we're already at top of history stack,
+do nothing.
+
+Otherwise, if we weren't already viewing history, or if we've edited
+the history line we're viewing, save buffer contents.
+
+Finally, copy the next previous history line to the buffer.
+
+In pseudocode:
+
+if history_idx == 0 || history.is_empty() {
+    return
+}
+  
+if history_idx == history.len() || buffer != history[history_idx] {
+    copy buffer to edited_input
+}
+history_idx -= 1
+copy history[history_idx] to buffer
+
+DownArrow:
+
+Down traverses to more recent history lines until the most recent one
+has been displayed, then finally to the saved input line.
+
+In pseudocode:
+
+if history_idx == history.len()
+    return
+}
+
+if buffer != history[history_idx] {
+    copy buffer to edited_input
+}
+history_idx += 1
+if history_idx == history.len() {
+    drain edited_input to buffer
+} else {
+    copy history[history_idx] to buffer
+}
+
+Escape:
+
+If viewing history, Escape returns to previously saved edited input.
+Otherwise, it's a NOP.
+
+In pseudocode:
+
+if history_idx != history.len() {
+    history_idx = history.len()
+    drain edited_input to buffer
+}
+
+Enter:
+
+Enter causes current buffer text to be saved to history if it is not
+empty (blank) and different from the most recent line in history. Then
+it ends the text input loop so that the input (terminated with
+native_eol) can be copied into the output buffer and control returned
+to the caller.
+
+In pseudocode:
+
+collect buffer text into buffer_text
+if !buffer_text.is_empty()
+        && history.last().is_some_and(|last| *last != buffer_text {
+    push clone of buffer_text to history
+}
+return Break(buffer_text)
+
