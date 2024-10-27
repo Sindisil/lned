@@ -421,7 +421,7 @@ Certain KeyEvents trigger transitions between these states.
     input that is_some()
 
 
-new history design
+New history design
 
 The current history design is unnecessarily complex and because of this
 has several annoying and somewhat intractable bugs. I propose a new
@@ -430,101 +430,177 @@ but still should retain the desired functionality.
 
 Data model:
 
-history: stack of accepted, temporally uniqe, accepted input
-history_idx: current point in history stack navigation
-edited_input: user modified input, saved when navigating history
+Split LineReader data out into three pieces, both for orgaining
+behavior and to make handling borrowck easier.
 
-buffer: current actual buffer state
+struct LineReader {
+    buffer: EditBuffer,
+    history: HistoryStack
+}
+
+impl LineReader {
+    fn accept_line(
+        &mut self,
+        prompt: &str,
+        output_buffer: &mut String,
+    ) -> io::Result<usize>
+}
+
+// Active draft text input.
+struct EditBuffer {
+    lines: Vec<BufferLine>,     // text split to fit on display lines
+    prompt_char_count: usize,   // length of prompt string in chars
+    input_start: BufferIndex,   // BufferIndex of first non-prompt char
+}
+
+impl EditBuffer {
+    reset(&mut self, prompt: &str)
+}
+
+struct HistoryStack {
+    lines: Vec<String>, // Previously accepted input lines
+    index: usize,       // Current history line (navigating history)
+}
+
+impl HistoryStack {
+    // If the supplied text is not empty and not identical to the newest
+    // history item, it will be cloned and pushed to the history stack.
+    fn push<'a>(&mut self, Cow<&'a str> text);
+    
+    // Return next newer entry in history, or None if at top of stack.
+    fn newer(&mut self) -> Option<&str>
+
+    // Return next older entry in history, or None if at bottom of stack.
+    fn older(&mut self) -> Option<&str>
+
+    // Reset index to top of stack, so that older() will return most
+    // recent entry.
+    fn reset(&mut self)
+}
+
+// Transient data related to displaying draft input until accepted.
+// Instantiated each time accept_line() is called. Also ensures
+// that terminal is returned to cooked mode with visible cursor
+// in case of error exit.
+struct RenderContext {
+    display_width: usize,
+    display_height: usize,
+    cursor: Cursor,             // display and buffer position of cursor
+    first_display_line: usize,  // first display line used to display buffer
+    first_buffer_line: usize,   // first buffer line displayed
+    scroll_needed: usize,       // number of lines display must be scrolled
+                                // to ensure cursor is in viewport
+}
+
+Functions:
+
+Free or LineReader inherent
+-----------------------------
+88	pub fn native_eol() -> &'static str {
+227	    fn handle_event(&mut self, event: &Event) -> ControlFlow<bool> {
+237	    fn handle_resize_event(&mut self, x: u16, y: u16) -> ControlFlow<bool> {
+255	    fn handle_key_event(&mut self, event: &KeyEvent) -> ControlFlow<bool> {
+284	    fn handle_esc(&mut self) -> ControlFlow<bool> {
+294	    fn handle_down(&mut self) -> ControlFlow<bool> {
+316	    fn handle_up(&mut self) -> ControlFlow<bool> {
+348	    fn handle_char_input(&mut self, c: char) -> ControlFlow<bool> {
+371	    fn handle_backspace(&mut self) -> ControlFlow<bool> {
+399	    fn handle_left(&mut self) -> ControlFlow<bool> {
+426	    fn handle_right(&mut self) -> ControlFlow<bool> {
+458	    fn handle_delete(&mut self) -> ControlFlow<bool> {
+480	    fn handle_home(&mut self) -> ControlFlow<bool> {
+493	    fn handle_end(&mut self) -> ControlFlow<bool> {
+
+BufferLine or for BufferLine
+101	    pub(crate) fn len(&self) -> usize {
+105	    pub(crate) fn new() -> BufferLine {
+111	    fn from(value: &str) -> BufferLine {
+
+BufferIndex or for BufferIndex
+118	    fn from((line, offset): (usize, usize)) -> BufferIndex {
+124	    fn from(i: BufferIndex) -> (usize, usize) {
+
+LineReader or for LineReader
+133	    fn default() -> LineReader {
+162	    pub fn new() -> LineReader {
+167	    fn accept_line(
+
+EditBuffer or for EditBuffer
+820	  fn new() -> EditBuffer {
+827	    pub fn prompt(&self) -> String {
+143	    fn set_prompt(
+505	    fn buffer_end(&self) -> BufferIndex {
+835	    fn set_buffer(&mut self, line: impl AsRef<str>) {
+850	    fn set_buffer_from_history(&mut self, line: usize) {
+533	    fn reflow(&mut self, start: usize) {
+576	    fn try_fill_from_next(&mut self, tl_idx: usize) -> Option<(usize, usize)> {
+655	    fn move_overflow_to_next(&mut self, tl_idx: usize) {
+
+RenderContext or for RenderContext
+729	    fn new(display_width: usize, display_height: usize, first_display_line: usize) -> RenderContext {
+514	    pub(crate) fn viewport_bottom(&self) -> usize {
+526	    pub(crate) fn viewport_top(&self) -> usize {
+775	    fn adjust_viewport(&mut self) {
+813	    fn drop(&mut self) {
+740	    fn repaint(&mut self) -> io::Result<()> {
+
+HistoryStack or for HistoryStack
+866	  fn new() -> HistoryStack {
 
 
-Initial state:
-
-history is empty
-history_idx is 0
-edited_input is empty String
-
-Reset state:
-
-history contains lines accepted so far (modulo deduplication
-        and w/o blank lines)
-history_idx is history.len() (i.e., one past end of history)
-edited_input is empty String
-
-Alternatively edited_input could be Option<String>, None if no
-edited input is saved, and Some(String) if there is one. Not sure
-which would make for cleaner implementation.
+    
 
 Actions:
 
 UpArrow:
 
-If there is no history, or we're already at top of history stack,
-do nothing.
+UpArrow traverses to older history lines until the oldest saved line
+has been viewed.
 
-Otherwise, if we weren't already viewing history, or if we've edited
-the history line we're viewing, save buffer contents.
+This could be implemented by:
 
-Finally, copy the next previous history line to the buffer.
+Fetch next older history entry.
 
-In pseudocode:
-
-if history_idx == 0 || history.is_empty() {
-    return
-}
-  
-if history_idx == history.len() || buffer != history[history_idx] {
-    copy buffer to edited_input
-}
-history_idx -= 1
-copy history[history_idx] to buffer
+If there was an older history entry, save buffer text as a draft, set
+buffer text to the value of the history entry, and request repaint.
 
 DownArrow:
 
 Down traverses to more recent history lines until the most recent one
 has been displayed, then finally to the saved input line.
 
-In pseudocode:
+This could be implemented by:
 
-if history_idx == history.len()
-    return
-}
+Fetch next newer history entry.
 
-if buffer != history[history_idx] {
-    copy buffer to edited_input
-}
-history_idx += 1
-if history_idx == history.len() {
-    drain edited_input to buffer
-} else {
-    copy history[history_idx] to buffer
-}
+If there was a newer history entry, save buffer text as a draft, set the
+buffer text to the value of the history entry, and request repaint.
+
+If not, take the saved draft, and if it's not None, set buffer text to
+the draft's taken value, and request repaint.
 
 Escape:
 
 If viewing history, Escape returns to previously saved edited input.
 Otherwise, it's a NOP.
 
-In pseudocode:
+This could be implemented by:
 
-if history_idx != history.len() {
-    history_idx = history.len()
-    drain edited_input to buffer
-}
+Reset the history stack, then take the value from the saved draft, and if
+it's not none, set buffer text to the draft's taken value and request
+repaint.
 
 Enter:
 
 Enter causes current buffer text to be saved to history if it is not
-empty (blank) and different from the most recent line in history. Then
+empty and is different from the most recent line in history. Then
 it ends the text input loop so that the input (terminated with
 native_eol) can be copied into the output buffer and control returned
 to the caller.
 
-In pseudocode:
+This could be implemented by:
 
-collect buffer text into buffer_text
-if !buffer_text.is_empty()
-        && history.last().is_some_and(|last| *last != buffer_text {
-    push clone of buffer_text to history
-}
+collect buffer text
+push it to history
+reset the buffer
 return Break(buffer_text)
-
