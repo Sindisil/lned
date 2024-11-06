@@ -421,186 +421,61 @@ Certain KeyEvents trigger transitions between these states.
     input that is_some()
 
 
-New history design
+# New history design
 
 The current history design is unnecessarily complex and because of this
 has several annoying and somewhat intractable bugs. I propose a new
 design that is simpler, and therefore straightforward to implement,
 but still should retain the desired functionality.
 
-Data model:
+## Data model:
 
-Split LineReader data out into three pieces, both for orgaining
-behavior and to make handling borrowck easier.
-
-struct LineReader {
-    buffer: EditBuffer,
-    history: HistoryStack
-}
-
-impl LineReader {
-    fn accept_line(
-        &mut self,
-        prompt: &str,
-        output_buffer: &mut String,
-    ) -> io::Result<usize>
-}
-
-// Active draft text input.
 struct EditBuffer {
     lines: Vec<BufferLine>,     // text split to fit on display lines
     prompt_char_count: usize,   // length of prompt string in chars
     input_start: BufferIndex,   // BufferIndex of first non-prompt char
+    draft: Option<String>,      // Input line before viewing/editing
+                                // history.
 }
 
-impl EditBuffer {
-    reset(&mut self, prompt: &str)
+)struct HistoryStack {
+    lines: Vec<String>,          // accepted input lines
+    edited: Vec<Option<String>>, // edited copy of accepted lines
+    index: usize,
 }
 
-struct HistoryStack {
-    lines: Vec<String>, // Previously accepted input lines
-    index: usize,       // Current history line (navigating history)
-}
+## Actions:
 
-impl HistoryStack {
-    // If the supplied text is not empty and not identical to the newest
-    // history item, it will be cloned and pushed to the history stack.
-    fn push<'a>(&mut self, Cow<&'a str> text);
-    
-    // Return next newer entry in history, or None if at top of stack.
-    fn newer(&mut self) -> Option<&str>
+### [Up]:
 
-    // Return next older entry in history, or None if at bottom of stack.
-    fn older(&mut self) -> Option<&str>
-
-    // Reset index to top of stack, so that older() will return most
-    // recent entry.
-    fn reset(&mut self)
-}
-
-// Transient data related to displaying draft input until accepted.
-// Instantiated each time accept_line() is called. Also ensures
-// that terminal is returned to cooked mode with visible cursor
-// in case of error exit.
-struct RenderContext {
-    display_width: usize,
-    display_height: usize,
-    cursor: Cursor,             // display and buffer position of cursor
-    first_display_line: usize,  // first display line used to display buffer
-    first_buffer_line: usize,   // first buffer line displayed
-    scroll_needed: usize,       // number of lines display must be scrolled
-                                // to ensure cursor is in viewport
-}
-
-Functions:
-
-Free or LineReader inherent
------------------------------
-88	pub fn native_eol() -> &'static str {
-227	    fn handle_event(&mut self, event: &Event) -> ControlFlow<bool> {
-237	    fn handle_resize_event(&mut self, x: u16, y: u16) -> ControlFlow<bool> {
-255	    fn handle_key_event(&mut self, event: &KeyEvent) -> ControlFlow<bool> {
-284	    fn handle_esc(&mut self) -> ControlFlow<bool> {
-294	    fn handle_down(&mut self) -> ControlFlow<bool> {
-316	    fn handle_up(&mut self) -> ControlFlow<bool> {
-348	    fn handle_char_input(&mut self, c: char) -> ControlFlow<bool> {
-371	    fn handle_backspace(&mut self) -> ControlFlow<bool> {
-399	    fn handle_left(&mut self) -> ControlFlow<bool> {
-426	    fn handle_right(&mut self) -> ControlFlow<bool> {
-458	    fn handle_delete(&mut self) -> ControlFlow<bool> {
-480	    fn handle_home(&mut self) -> ControlFlow<bool> {
-493	    fn handle_end(&mut self) -> ControlFlow<bool> {
-
-BufferLine or for BufferLine
-101	    pub(crate) fn len(&self) -> usize {
-105	    pub(crate) fn new() -> BufferLine {
-111	    fn from(value: &str) -> BufferLine {
-
-BufferIndex or for BufferIndex
-118	    fn from((line, offset): (usize, usize)) -> BufferIndex {
-124	    fn from(i: BufferIndex) -> (usize, usize) {
-
-LineReader or for LineReader
-133	    fn default() -> LineReader {
-162	    pub fn new() -> LineReader {
-167	    fn accept_line(
-
-EditBuffer or for EditBuffer
-820	  fn new() -> EditBuffer {
-827	    pub fn prompt(&self) -> String {
-143	    fn set_prompt(
-505	    fn buffer_end(&self) -> BufferIndex {
-835	    fn set_buffer(&mut self, line: impl AsRef<str>) {
-850	    fn set_buffer_from_history(&mut self, line: usize) {
-533	    fn reflow(&mut self, start: usize) {
-576	    fn try_fill_from_next(&mut self, tl_idx: usize) -> Option<(usize, usize)> {
-655	    fn move_overflow_to_next(&mut self, tl_idx: usize) {
-
-RenderContext or for RenderContext
-729	    fn new(display_width: usize, display_height: usize, first_display_line: usize) -> RenderContext {
-514	    pub(crate) fn viewport_bottom(&self) -> usize {
-526	    pub(crate) fn viewport_top(&self) -> usize {
-775	    fn adjust_viewport(&mut self) {
-813	    fn drop(&mut self) {
-740	    fn repaint(&mut self) -> io::Result<()> {
-
-HistoryStack or for HistoryStack
-866	  fn new() -> HistoryStack {
-
-
-    
-
-Actions:
-
-UpArrow:
-
-UpArrow traverses to older history lines until the oldest saved line
+[Up] traverses to older history lines until the oldest saved line
 has been viewed.
+If no older history to view, this is a NOP.
+If not viewing history, save buffer to draft, otherwise if buffer
+differs from current edited history, if some, or current history, if
+not, save buffer to current edited history.
+Advance to next oldest history and load buffer from edited, if it
+exists, otherwise accepted.
 
-This could be implemented by:
+### [Down]:
 
-Fetch next older history entry.
+[Down] traverses to more recent history lines until the most recent one
+has been displayed, then finally to the draft input line.
+If not viewing history (i.e., history at end) this is a NOP.
+If buffer differs from current edited history, if there is one, or else current accepted history, save it to current edited history.
+Advance to next newer history.
+If at end, take draft to load buffer.
+Otherwise load buffer from current edited hstory, if there is one, or
+else from current accepted.
 
-If there was an older history entry, save buffer text as a draft, set
-buffer text to the value of the history entry, and request repaint.
+### [Esc]:
 
-DownArrow:
+Load buffer from draft, clear draft, and reset history to end, clearing any edited history.
 
-Down traverses to more recent history lines until the most recent one
-has been displayed, then finally to the saved input line.
+### [Enter]:
 
-This could be implemented by:
-
-Fetch next newer history entry.
-
-If there was a newer history entry, save buffer text as a draft, set the
-buffer text to the value of the history entry, and request repaint.
-
-If not, take the saved draft, and if it's not None, set buffer text to
-the draft's taken value, and request repaint.
-
-Escape:
-
-If viewing history, Escape returns to previously saved edited input.
-Otherwise, it's a NOP.
-
-This could be implemented by:
-
-Reset the history stack, then take the value from the saved draft, and if
-it's not none, set buffer text to the draft's taken value and request
-repaint.
-
-Enter:
-
-Enter causes current buffer text to be saved to history if it is not
-empty and is different from the most recent line in history. Then
-it ends the text input loop so that the input (terminated with
-native_eol) can be copied into the output buffer and control returned
-to the caller.
-
-This could be implemented by:
-
-collect buffer text
-push it to history
-reset the buffer
-return Break(buffer_text)
+[Enter] causes current buffer text to be saved to history if it is not
+empty and is different from the most recent line in history. The
+history index is also reset to 1 past the end. Then the text input loop
+exits so that the input (terminated with native_eol) can be copied into
+the output buffer and control returned to the caller.
