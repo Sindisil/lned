@@ -855,7 +855,6 @@ fn handle_up(
         let (accepted, edited) = history
             .next_older()
             .expect("shouldn't be either at_top or at_bottom");
-        eprintln!("line: {accepted:?}  edited: {edited:?}");
         buffer
             .set(render_ctx, edited.as_ref().map_or(accepted, |e| e.as_str()));
     }
