@@ -420,3 +420,62 @@ Certain KeyEvents trigger transitions between these states.
 10. [Esc] when viewing history returns first of editing history or editing
     input that is_some()
 
+
+# New history design
+
+The current history design is unnecessarily complex and because of this
+has several annoying and somewhat intractable bugs. I propose a new
+design that is simpler, and therefore straightforward to implement,
+but still should retain the desired functionality.
+
+## Data model:
+
+struct EditBuffer {
+    lines: Vec<BufferLine>,     // text split to fit on display lines
+    prompt_char_count: usize,   // length of prompt string in chars
+    input_start: BufferIndex,   // BufferIndex of first non-prompt char
+    draft: Option<String>,      // Input line before viewing/editing
+                                // history.
+}
+
+)struct HistoryStack {
+    lines: Vec<String>,          // accepted input lines
+    edited: Vec<Option<String>>, // edited copy of accepted lines
+    index: usize,
+}
+
+## Actions:
+
+### [Up]:
+
+[Up] traverses to older history lines until the oldest saved line
+has been viewed.
+If no older history to view, this is a NOP.
+If not viewing history, save buffer to draft, otherwise if buffer
+differs from current edited history, if some, or current history, if
+not, save buffer to current edited history.
+Advance to next oldest history and load buffer from edited, if it
+exists, otherwise accepted.
+
+### [Down]:
+
+[Down] traverses to more recent history lines until the most recent one
+has been displayed, then finally to the draft input line.
+If not viewing history (i.e., history at end) this is a NOP.
+If buffer differs from current edited history, if there is one, or else current accepted history, save it to current edited history.
+Advance to next newer history.
+If at end, take draft to load buffer.
+Otherwise load buffer from current edited hstory, if there is one, or
+else from current accepted.
+
+### [Esc]:
+
+Load buffer from draft, clear draft, and reset history to end, clearing any edited history.
+
+### [Enter]:
+
+[Enter] causes current buffer text to be saved to history if it is not
+empty and is different from the most recent line in history. The
+history index is also reset to 1 past the end. Then the text input loop
+exits so that the input (terminated with native_eol) can be copied into
+the output buffer and control returned to the caller.

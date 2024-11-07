@@ -113,7 +113,7 @@ pub fn run(
     let mut previous_pattern: Option<regex::Regex> = None;
 
     if let Some(file) = &args.file {
-        edit_cmd(&mut buffer, &mut output, Some(file), &previous_cmd)
+        edit_cmd(&mut buffer, &mut output, Some(file), previous_cmd.as_ref())
             .or_else(|e| writeln!(output, "{e}"))
             .unwrap();
     }
@@ -137,7 +137,7 @@ pub fn run(
                         &mut buffer,
                         &mut output,
                         filename.as_deref(),
-                        &previous_cmd,
+                        previous_cmd.as_ref(),
                     ),
                     Cmd::Enumerate(address) => {
                         enumerate_cmd(&mut buffer, &mut output, *address)
@@ -167,9 +167,8 @@ pub fn run(
                     Cmd::Print(address) => {
                         print_cmd(&mut buffer, &mut output, *address)
                     }
-                    Cmd::Quit => {
-                        quit_cmd(&buffer, &previous_cmd).map(|()| done = true)
-                    }
+                    Cmd::Quit => quit_cmd(&buffer, previous_cmd.as_ref())
+                        .map(|()| done = true),
                     Cmd::Redo => {
                         buffer.do_redo();
                         Ok(())
@@ -259,7 +258,7 @@ fn edit_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     filename: Option<&Path>,
-    previous_cmd: &Option<Cmd>,
+    previous_cmd: Option<&Cmd>,
 ) -> Result<(), Error> {
     if buffer.is_dirty() && !matches!(previous_cmd, Some(Cmd::Edit(_))) {
         return Err(Error::EditUnwrittenChanges);
@@ -490,7 +489,7 @@ fn print_cmd(
 /// buffer changes are detected.
 fn quit_cmd(
     buffer: &EditBuffer,
-    previous_cmd: &Option<Cmd>,
+    previous_cmd: Option<&Cmd>,
 ) -> Result<(), Error> {
     match previous_cmd {
         Some(Cmd::Quit) => Ok(()),
@@ -1664,7 +1663,7 @@ mod tests {
     #[test]
     fn edit_cmd_no_filename_error() {
         let mut buffer = EditBuffer::new();
-        let res = edit_cmd(&mut buffer, &mut Vec::new(), None, &None)
+        let res = edit_cmd(&mut buffer, &mut Vec::new(), None, None)
             .expect_err("no filename");
         assert!(matches!(res, Error::NoFilename));
     }
@@ -1675,7 +1674,7 @@ mod tests {
         assert_eq!(buffer.len(), 3);
         let mut output = Vec::new();
         let not_a_file = Some(Path::new("non-existant_file.txt"));
-        let res = edit_cmd(&mut buffer, &mut output, not_a_file, &None)
+        let res = edit_cmd(&mut buffer, &mut output, not_a_file, None)
             .expect_err("EditFileNotFound");
         assert!(matches!(res, Error::EditFileNotFound(_)));
         assert_eq!(buffer.filename(), not_a_file);
@@ -1709,7 +1708,7 @@ mod tests {
         let filename2 =
             Some(Path::new(r"test/assets/text_with_no_final_eol.txt"));
 
-        edit_cmd(&mut buffer, &mut output, filename1, &None).unwrap();
+        edit_cmd(&mut buffer, &mut output, filename1, None).unwrap();
         assert_eq!(buffer.len(), 10);
         let out_text = str::from_utf8(&output[..]).unwrap();
         assert!(
@@ -1717,7 +1716,7 @@ mod tests {
         );
 
         output.clear();
-        edit_cmd(&mut buffer, &mut output, filename2, &None).unwrap();
+        edit_cmd(&mut buffer, &mut output, filename2, None).unwrap();
         assert_eq!(buffer.len(), 10);
         let out_text = str::from_utf8(&output[..]).unwrap();
         assert!(
