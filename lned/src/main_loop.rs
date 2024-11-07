@@ -219,7 +219,6 @@ fn append_cmd(
     let mut lines = Vec::new();
     Cmd::read_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
-    //    let location = address.map_or(buffer.current_line(), |addr| addr.1);
     buffer.do_append(address, lines, None);
     Ok(())
 }
@@ -440,14 +439,18 @@ fn null_cmd(
 ) -> Result<(), Error> {
     match address {
         None => {
-            if buffer.is_empty() || buffer.current_line() == buffer.len() {
+            if buffer.is_empty() || buffer.current_line() == (buffer.len() + 1)
+            {
                 return Err(Error::InvalidAddress);
             }
             print_cmd(
                 buffer,
                 output,
-                Some(Address::line(buffer.current_line() + 1)),
+                Some(Address::line(buffer.current_line())),
             )
+            .inspect(|()| {
+                buffer.set_current_line(buffer.current_line() + 1);
+            })
         }
         _ => print_cmd(buffer, output, address),
     }
@@ -715,7 +718,8 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         null_cmd(&mut buffer, &mut output, None).unwrap();
-        assert_eq!(&output[..], b"3\r\n");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "2\r\n");
+        assert_eq!(buffer.current_line(), 3);
     }
 
     #[test]
@@ -1236,7 +1240,7 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("two"));
+        assert!(output.contains("one"));
     }
 
     #[test]
