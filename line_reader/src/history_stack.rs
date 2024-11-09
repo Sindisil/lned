@@ -1,4 +1,3 @@
-
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct HistoryStack {
     pub(crate) lines: Vec<String>,
