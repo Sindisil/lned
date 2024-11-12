@@ -1413,6 +1413,57 @@ mod tests {
     }
 
     #[test]
+    fn substitute_split_line() {
+        let mut buffer = EditBuffer::from(vec!["a line, to split\r\n"]);
+        buffer.set_current_line(1);
+        let cmd_line = "s/, /\\\r\n/";
+        let mut input = cmd_line.as_bytes();
+        let Cmd::Substitute(address, pattern, replacement, scope) =
+            Cmd::read(&mut input, &mut buffer, &mut None).unwrap()
+        else {
+            panic!("{cmd_line} didn't parse as Cmd::Substitute");
+        };
+        substitute_cmd(
+            &mut buffer,
+            address,
+            &pattern,
+            replacement.as_str(),
+            scope,
+        )
+        .unwrap();
+        let mut expected = EditBuffer::from(vec!["a line\r\n", "to split"]);
+        expected.set_current_line(2);
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn substitute_split_line_no_end_delimiter() {
+        let mut buffer = EditBuffer::from(vec!["a line, to split\n"]);
+        buffer.set_current_line(1);
+        let cmd_line = "/, /\\\n";
+        let mut input = "\n".as_bytes();
+        let Ok(Cmd::Substitute(address, pattern, replacement, scope)) =
+            command::parse_substitute_cmd(
+                cmd_line, None, &mut None, &mut input,
+            )
+        else {
+            panic!("should have parsed to Cmd::Substitute!");
+        };
+        substitute_cmd(
+            &mut buffer,
+            address,
+            &pattern,
+            replacement.as_str(),
+            scope,
+        )
+        .unwrap();
+        let mut expected = EditBuffer::from(vec!["a line\n", "to split"]);
+        expected.set_current_line(2);
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+    }
+
+    #[test]
     fn substitute_cmd_multi_line_single() {
         let mut buffer = EditBuffer::from(vec![
             "1:one two three four\n",

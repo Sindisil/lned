@@ -403,7 +403,7 @@ fn parse_move_cmd<'a>(
     }
 }
 
-fn parse_substitute_cmd(
+pub(crate) fn parse_substitute_cmd(
     cmd_line: &str,
     address: Option<Address>,
     previous_pattern: &mut Option<Regex>,
@@ -417,7 +417,9 @@ fn parse_substitute_cmd(
         Ok(loop {
             match graphemes.next() {
                 None => break false,
-                Some(gr) if gr == delimiter => break false,
+                Some(gr) if gr == delimiter || gr == "\n" || gr == "\r\n" => {
+                    break false
+                }
                 Some("\\") => {
                     let escaped =
                         graphemes.next().ok_or(Error::TrailingBackslash)?;
