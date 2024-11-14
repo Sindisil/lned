@@ -694,6 +694,7 @@ mod tests {
     use std::str;
 
     use similar_asserts::assert_eq;
+    use unicode_segmentation::UnicodeSegmentation;
 
     struct BadWriter {}
 
@@ -1440,11 +1441,14 @@ mod tests {
     fn substitute_split_line_no_end_delimiter() {
         let mut buffer = EditBuffer::from(vec!["a line, to split\n"]);
         buffer.set_current_line(1);
-        let cmd_line = "/, /\\\n";
+        let mut cmd_line = "/, /\\\n".graphemes(true).peekable();
         let mut input = "\n".as_bytes();
         let Ok(Cmd::Substitute(address, pattern, replacement, scope)) =
             command::parse_substitute_cmd(
-                cmd_line, None, &mut None, &mut input,
+                &mut cmd_line,
+                None,
+                &mut None,
+                &mut input,
             )
         else {
             panic!("should have parsed to Cmd::Substitute!");
