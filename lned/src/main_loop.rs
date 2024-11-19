@@ -437,22 +437,10 @@ fn null_cmd(
     output: &mut impl Write,
     address: Option<Address>,
 ) -> Result<(), Error> {
-    match address {
-        None => {
-            if buffer.is_empty() || buffer.current_line() == buffer.len() {
-                return Err(Error::InvalidAddress);
-            }
-            print_cmd(
-                buffer,
-                output,
-                Some(Address::line(buffer.current_line())),
-            )
-            .inspect(|()| {
-                buffer.set_current_line(buffer.current_line() + 1);
-            })
-        }
-        _ => print_cmd(buffer, output, address.map(|a| a.as_end())),
-    }
+    let address = Some(Address::line(
+        address.map_or_else(|| buffer.current_line() + 1, |a| a.end()),
+    ));
+    print_cmd(buffer, output, address)
 }
 
 fn print_cmd(
@@ -717,12 +705,22 @@ mod tests {
 
     /////
     #[test]
+    fn null_cmd_single_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        buffer.set_current_line(2);
+        null_cmd(&mut buffer, &mut output, Some(Address::line(1))).unwrap();
+        assert_eq!(buffer.current_line(), 1);
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "1\n");
+    }
+
+    #[test]
     fn null_cmd_no_addr() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         null_cmd(&mut buffer, &mut output, None).unwrap();
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), "2\r\n");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "3\r\n");
         assert_eq!(buffer.current_line(), 3);
     }
 
@@ -747,16 +745,6 @@ mod tests {
         let output = str::from_utf8(&output[..]).unwrap();
         assert_eq!(output, "4\r\n");
         assert_eq!(buffer.current_line(), 4);
-    }
-
-    #[test]
-    fn null_cmd_sets_current_line() {
-        let mut output = Vec::new();
-        let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_line(5);
-        null_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
-        assert_eq!(4, buffer.current_line());
     }
 
     #[test]
