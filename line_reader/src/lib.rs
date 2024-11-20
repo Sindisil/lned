@@ -33,7 +33,7 @@ pub trait LineRead {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineReader {
     buffer: EditBuffer,
-    history: HistoryStack,
+    history: Option<HistoryStack>,
 }
 
 // Non-public structs, enums, and traits
@@ -59,14 +59,15 @@ pub fn native_eol() -> &'static str {
 
 impl Default for LineReader {
     fn default() -> LineReader {
-        LineReader { buffer: EditBuffer::new(), history: HistoryStack::new() }
+        LineReader { buffer: EditBuffer::new(), history: None }
     }
 }
 
 impl LineReader {
     #[must_use]
-    pub fn new() -> LineReader {
-        LineReader { ..Default::default() }
+    pub fn new(history: bool) -> LineReader {
+        let history = if history { Some(HistoryStack::new()) } else { None };
+        LineReader { history, ..Default::default() }
     }
 
     #[cfg(not(tarpaulin_include))]
@@ -119,7 +120,7 @@ impl LineReader {
             res = handle_event(
                 &mut self.buffer,
                 &mut render_ctx,
-                &mut self.history,
+                self.history.as_mut(),
                 &event,
             );
             if !matches!(event, Event::Resize(..)) {
@@ -195,7 +196,7 @@ where
 fn handle_event(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-    history: &mut HistoryStack,
+    history: Option<&mut HistoryStack>,
     event: &Event,
 ) -> ControlFlow<bool> {
     match event {
@@ -234,17 +235,19 @@ fn handle_resize_event(
 fn handle_key_event(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-    history: &mut HistoryStack,
+    history: Option<&mut HistoryStack>,
     event: &KeyEvent,
 ) -> ControlFlow<bool> {
     match event.code {
         KeyCode::Enter => {
-            if !buffer.is_empty()
-                && history.last().is_none_or(|(last, _)| {
-                    last.chars().ne(buffer.input_chars())
-                })
-            {
-                history.push(buffer.input_chars().collect());
+            if let Some(history) = history {
+                if !buffer.is_empty()
+                    && history.last().is_none_or(|(last, _)| {
+                        last.chars().ne(buffer.input_chars())
+                    })
+                {
+                    history.push(buffer.input_chars().collect());
+                }
             }
             ControlFlow::Break(true)
         }
@@ -265,18 +268,23 @@ fn handle_key_event(
 fn handle_esc(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-    history: &mut HistoryStack,
+    history: Option<&mut HistoryStack>,
 ) -> ControlFlow<bool> {
     buffer.set_from_draft(render_ctx);
-    history.rewind();
+    if let Some(history) = history {
+        history.rewind();
+    }
     ControlFlow::Continue(())
 }
 
 fn handle_down(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-    history: &mut HistoryStack,
+    history: Option<&mut HistoryStack>,
 ) -> ControlFlow<bool> {
+    let Some(history) = history else {
+        return ControlFlow::Continue(());
+    };
     if let Some((cur_a, &mut ref mut cur_e)) = history.current() {
         // If buffer differs from current edited (if any) or else
         // current accepted history, copy buffer to edited.
@@ -311,8 +319,11 @@ fn handle_down(
 fn handle_up(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-    history: &mut HistoryStack,
+    history: Option<&mut HistoryStack>,
 ) -> ControlFlow<bool> {
+    let Some(history) = history else {
+        return ControlFlow::Continue(());
+    };
     // If no older history to view, nothing to do
     if !history.is_at_bottom() {
         if history.is_at_top() {
@@ -560,9 +571,8 @@ mod tests {
     fn unimplemented_event_ignored() {
         let mut buf = EditBuffer::new();
         let mut ctx = RenderContext::new(10, 5, 0);
-        let mut hs = HistoryStack::new();
         let event = Event::FocusLost;
-        let res = handle_event(&mut buf, &mut ctx, &mut hs, &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
     }
 
@@ -573,7 +583,7 @@ mod tests {
         let res = handle_event(
             &mut EditBuffer::new(),
             &mut RenderContext::new(10, 5, 0),
-            &mut HistoryStack::new(),
+            None,
             &event,
         );
         assert!(res.is_continue());
@@ -586,7 +596,7 @@ mod tests {
         let res = handle_event(
             &mut EditBuffer::new(),
             &mut RenderContext::new(10, 5, 0),
-            &mut HistoryStack::new(),
+            None,
             &event,
         );
         assert!(matches!(res, ControlFlow::Break(true)));
@@ -606,8 +616,7 @@ mod tests {
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -635,8 +644,7 @@ mod tests {
             KeyModifiers::NONE,
         ));
 
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -672,8 +680,7 @@ mod tests {
             KeyModifiers::NONE,
         ));
 
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -698,8 +705,7 @@ mod tests {
             KeyCode::Char('\u{0308}'),
             KeyModifiers::NONE,
         ));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -711,8 +717,7 @@ mod tests {
             cursor: Cursor { line: 0, column: 4, index: (0, 8).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -725,8 +730,7 @@ mod tests {
             cursor: Cursor { line: 0, column: 5, index: (0, 9).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -757,8 +761,7 @@ mod tests {
             cursor: Cursor { column: 0, line: 1, index: (1, 0).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -787,8 +790,7 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -820,8 +822,7 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -854,8 +855,7 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -889,8 +889,7 @@ mod tests {
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -939,8 +938,7 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -982,8 +980,7 @@ mod tests {
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1033,8 +1030,7 @@ mod tests {
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!((buf, ctx), (expected_buf, expected_ctx));
     }
@@ -1063,8 +1059,7 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1087,8 +1082,7 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1111,8 +1105,7 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1133,8 +1126,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
 
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1156,8 +1148,7 @@ mod tests {
         };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1182,8 +1173,7 @@ mod tests {
             cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1198,8 +1188,7 @@ mod tests {
         };
         let expected_buf = make_buf(&["12345678a", "eiou"], ':');
         let expected_ctx = ctx;
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1244,8 +1233,7 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1264,8 +1252,7 @@ mod tests {
         let expected_ctx = ctx;
         let event =
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1287,8 +1274,7 @@ mod tests {
             cursor: Cursor { column: 5, line: 0, index: (0, 9).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1297,8 +1283,7 @@ mod tests {
             cursor: Cursor { column: 3, line: 0, index: (0, 5).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1307,8 +1292,7 @@ mod tests {
             cursor: Cursor { column: 2, line: 0, index: (0, 2).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1333,8 +1317,7 @@ mod tests {
             ..ctx
         };
 
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1369,8 +1352,7 @@ mod tests {
             ..ctx
         };
 
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1390,8 +1372,7 @@ mod tests {
         };
         let expected_buf = buf.clone();
         let expected_ctx = ctx;
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1414,8 +1395,7 @@ mod tests {
             cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1442,8 +1422,7 @@ mod tests {
             cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
             ..Default::default()
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1461,8 +1440,7 @@ mod tests {
         };
         let expected_buf = buf.clone();
         let expected_ctx = ctx;
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1484,8 +1462,7 @@ mod tests {
             cursor: Cursor { column: 2, line: 0, index: (0, 2).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1494,8 +1471,7 @@ mod tests {
             cursor: Cursor { column: 3, line: 0, index: (0, 5).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1504,8 +1480,7 @@ mod tests {
             cursor: Cursor { column: 5, line: 0, index: (0, 9).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1527,8 +1502,7 @@ mod tests {
             cursor: Cursor { line: 1, column: 0, index: (1, 0).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1543,8 +1517,7 @@ mod tests {
             cursor: Cursor { line: 2, column: 0, index: (2, 0).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1579,8 +1552,7 @@ mod tests {
             ..ctx
         };
 
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1613,8 +1585,7 @@ mod tests {
         };
         let expected_buf = buf.clone();
         let expected_ctx = ctx;
-        let ret =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let ret = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(ret.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1650,8 +1621,7 @@ mod tests {
             cursor: Cursor { column: 0, line: 4, index: (9, 0).into() },
             ..ctx
         };
-        let ret =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let ret = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(ret.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1680,8 +1650,7 @@ mod tests {
             scroll_needed: 3,
             ..ctx
         };
-        let ret =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let ret = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(ret.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1718,8 +1687,7 @@ mod tests {
             first_buffer_line: 5,
             ..ctx
         };
-        let ret =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let ret = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(ret.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1738,8 +1706,7 @@ mod tests {
         };
         let expected_buf = buf.clone();
         let expected_ctx = ctx;
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1759,22 +1726,19 @@ mod tests {
 
         let expected_buf = make_buf(&["a🎸io"], ':');
         let expected_ctx = ctx;
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_buf = make_buf(&["aio"], ':');
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_buf = make_buf(&["ao"], ':');
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1797,8 +1761,7 @@ mod tests {
             cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1827,8 +1790,7 @@ mod tests {
             cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1863,12 +1825,7 @@ mod tests {
             ..ctx
         };
         let expected_buf = buf.clone();
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(10, 8),
-        );
+        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 8));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1879,12 +1836,7 @@ mod tests {
             cursor: Cursor { column: 3, line: 6, index: (6, 5).into() },
             ..ctx
         };
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(10, 7),
-        );
+        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 7));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1895,12 +1847,7 @@ mod tests {
             cursor: Cursor { column: 3, line: 4, index: (6, 5).into() },
             ..ctx
         };
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(10, 5),
-        );
+        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 5));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1935,12 +1882,7 @@ mod tests {
             cursor: Cursor { column: 1, line: 1, index: (0, 1).into() },
             ..ctx
         };
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(10, 8),
-        );
+        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 8));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1951,12 +1893,7 @@ mod tests {
             cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
             ..ctx
         };
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(10, 7),
-        );
+        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 7));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -1966,12 +1903,7 @@ mod tests {
             cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
             ..ctx
         };
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(10, 5),
-        );
+        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 5));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -2008,12 +1940,7 @@ mod tests {
         );
         let expected_ctx = RenderContext { display_width: 6, ..ctx };
 
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(6, 10),
-        );
+        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -2067,12 +1994,7 @@ mod tests {
             ..ctx
         };
 
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(6, 10),
-        );
+        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -2116,12 +2038,7 @@ mod tests {
             ..ctx
         };
 
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(6, 10),
-        );
+        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -2160,8 +2077,7 @@ mod tests {
             cursor: Cursor { column: 8, line: 8, index: (8, 10).into() },
             ..ctx
         };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -2193,8 +2109,7 @@ mod tests {
         let event = Event::Resize(10, 10);
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext { display_height: 10, ..ctx };
-        let res =
-            handle_event(&mut buf, &mut ctx, &mut HistoryStack::new(), &event);
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -2230,12 +2145,8 @@ mod tests {
             ':',
         );
         let expected_ctx = RenderContext { display_width: 10, ..ctx };
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(10, 10),
-        );
+        let res =
+            handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -2288,12 +2199,8 @@ mod tests {
             cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
             ..ctx
         };
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(10, 10),
-        );
+        let res =
+            handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -2334,12 +2241,8 @@ mod tests {
             cursor: Cursor { column: 9, line: 6, index: (6, 11).into() },
             ..ctx
         };
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            &mut HistoryStack::new(),
-            &Event::Resize(10, 10),
-        );
+        let res =
+            handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
@@ -2359,7 +2262,7 @@ mod tests {
         let res = handle_event(
             &mut buf,
             &mut ctx,
-            &mut HistoryStack::new(),
+            None,
             &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
         );
         assert!(res.is_continue());
@@ -2381,7 +2284,7 @@ mod tests {
         let res = handle_event(
             &mut buf,
             &mut ctx,
-            &mut HistoryStack::new(),
+            None,
             &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
         );
         assert!(res.is_continue());
@@ -2403,7 +2306,7 @@ mod tests {
         let res = handle_event(
             &mut buf,
             &mut ctx,
-            &mut HistoryStack::new(),
+            None,
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         );
         assert!(res.is_continue());
@@ -2421,14 +2324,14 @@ mod tests {
             cursor: Cursor { column: 9, line: 0, index: (0, 13).into() },
             ..Default::default()
         };
-        let mut hs = HistoryStack::new();
+        let mut hs = Some(HistoryStack::new());
         let expected_buf = buf.clone();
         let expected_ctx = ctx;
         let expected_hs = hs.clone();
         let res = handle_event(
             &mut buf,
             &mut ctx,
-            &mut hs,
+            hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
         );
         assert!(res.is_continue());
@@ -2447,7 +2350,7 @@ mod tests {
             cursor: Cursor { column: 3, line: 1, index: (1, 3).into() },
             ..Default::default()
         };
-        let mut hs = HistoryStack::new();
+        let mut hs = Some(HistoryStack::new());
         let expected_hs = HistoryStack {
             lines: vec!["123456789abc".to_owned()],
             edited: vec![None],
@@ -2456,11 +2359,11 @@ mod tests {
         let res = handle_event(
             &mut buf,
             &mut ctx,
-            &mut hs,
+            hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         );
         assert!(res.is_break());
-        assert_eq!(hs, expected_hs);
+        assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
@@ -2472,7 +2375,7 @@ mod tests {
             cursor: Cursor { column: 3, line: 1, index: (1, 3).into() },
             ..Default::default()
         };
-        let mut hs = HistoryStack {
+        let hs = HistoryStack {
             lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
             edited: vec![None, None, None],
             index: 3,
@@ -2489,11 +2392,12 @@ mod tests {
             ..ctx
         };
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, &mut hs, &event);
+        let mut hs = Some(hs);
+        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
-        assert_eq!(hs, expected_hs);
+        assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
@@ -2510,7 +2414,7 @@ mod tests {
             prompt_char_count: 1,
             draft: Some("123456789abc".to_owned()),
         };
-        let mut hs = HistoryStack {
+        let hs = HistoryStack {
             lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
             edited: vec![None, None, None],
             index: 1,
@@ -2528,11 +2432,12 @@ mod tests {
             ..hs.clone()
         };
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, &mut hs, &event);
+        let mut hs = Some(hs);
+        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
-        assert_eq!(hs, expected_hs);
+        assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
@@ -2545,7 +2450,7 @@ mod tests {
             cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
             ..Default::default()
         };
-        let mut hs = HistoryStack {
+        let hs = HistoryStack {
             lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
             edited: vec![None, None, None],
             index: 2,
@@ -2555,11 +2460,12 @@ mod tests {
         let expected_ctx = ctx;
         let expected_hs = HistoryStack { index: 1, ..hs.clone() };
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, &mut hs, &event);
+        let mut hs = Some(hs);
+        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
-        assert_eq!(hs, expected_hs);
+        assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
@@ -2572,7 +2478,7 @@ mod tests {
             cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
             ..Default::default()
         };
-        let mut hs = HistoryStack {
+        let hs = HistoryStack {
             lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
             edited: vec![None, None, None],
             index: 0,
@@ -2581,11 +2487,12 @@ mod tests {
         let expected_ctx = ctx;
         let expected_hs = hs.clone();
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, &mut hs, &event);
+        let mut hs = Some(hs);
+        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
-        assert_eq!(hs, expected_hs);
+        assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
@@ -2598,7 +2505,7 @@ mod tests {
             cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
             ..Default::default()
         };
-        let mut hs = HistoryStack {
+        let hs = HistoryStack {
             lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
             edited: vec![None, None, None],
             index: 0,
@@ -2609,11 +2516,12 @@ mod tests {
         let expected_hs = HistoryStack { index: 1, ..hs.clone() };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, &mut hs, &event);
+        let mut hs = Some(hs);
+        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
-        assert_eq!(hs, expected_hs);
+        assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
@@ -2630,7 +2538,7 @@ mod tests {
             input_start: (0, 1).into(),
             draft: Some("123456789abc".to_owned()),
         };
-        let mut hs = HistoryStack {
+        let hs = HistoryStack {
             lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
             edited: vec![None, None, None],
             index: 2,
@@ -2647,16 +2555,17 @@ mod tests {
         let expected_hs = HistoryStack { index: 3, ..hs.clone() };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, &mut hs, &event);
+        let mut hs = Some(hs);
+        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
-        assert_eq!(hs, expected_hs);
+        assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
     fn esc_editing_history_edits_draft() {
-        let mut hs = HistoryStack {
+        let hs = HistoryStack {
             lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
             edited: vec![None, None, None],
             index: 0,
@@ -2679,16 +2588,17 @@ mod tests {
             edited: vec![None, None, None],
             index: 3,
         };
+        let mut hs = Some(hs);
         let res = handle_event(
             &mut buf,
             &mut ctx,
-            &mut hs,
+            hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         );
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
-        assert_eq!(hs, expected_hs);
+        assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
@@ -2705,7 +2615,7 @@ mod tests {
         let res = handle_event(
             &mut buf,
             &mut ctx,
-            &mut HistoryStack::new(),
+            None,
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         );
         assert!(res.is_continue());
@@ -2727,7 +2637,7 @@ mod tests {
             cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
             ..Default::default()
         };
-        let mut hs = HistoryStack {
+        let hs = HistoryStack {
             lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
             edited: vec![None, None, None],
             index: 0,
@@ -2743,15 +2653,16 @@ mod tests {
             ..ctx
         };
         let expected_hs = HistoryStack { index: 3, ..hs.clone() };
+        let mut hs = Some(hs);
         let res = handle_event(
             &mut buf,
             &mut ctx,
-            &mut hs,
+            hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         );
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
-        assert_eq!(hs, expected_hs);
+        assert_eq!(hs.unwrap(), expected_hs);
     }
 }

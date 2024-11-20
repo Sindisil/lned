@@ -4,7 +4,7 @@ use line_reader::LineReader;
 #[cfg(not(tarpaulin_include))]
 fn main() {
     let mut line = String::new();
-    let mut reader = LineReader::new();
+    let mut reader = LineReader::new(true);
     let res = reader.read_line(":", &mut line);
     match res {
         Err(e) => eprintln!("{e}"),

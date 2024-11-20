@@ -21,7 +21,8 @@ fn main() {
         }
     };
 
-    if let Err(err) = main_loop::run(LineReader::new(), io::stdout(), &args) {
+    if let Err(err) = main_loop::run(LineReader::new(true), io::stdout(), &args)
+    {
         eprintln!("Error: {err}");
         if let Some(cause) = err.source() {
             println!("\nCaused by:");
