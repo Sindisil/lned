@@ -102,7 +102,7 @@ impl LineReader {
             display_height.into(),
             first_display_line.into(),
         );
-        self.buffer.set_prompt(&mut render_ctx, &options.prompt);
+        self.buffer.reset(&mut render_ctx, &options.prompt);
         terminal::enable_raw_mode()?;
         render_ctx.repaint(&self.buffer)?;
 
@@ -809,10 +809,8 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let expected_buf = EditBuffer {
-            lines: vec![":1234567🎸".into(), "".into()],
-            ..buf.clone()
-        };
+        let expected_buf =
+            EditBuffer { lines: vec![":1234567🎸".into()], ..buf.clone() };
         let expected_ctx = RenderContext {
             cursor: Cursor { column: 0, line: 1, index: (1, 0).into() },
             ..ctx
@@ -934,7 +932,7 @@ mod tests {
             ..Default::default()
         };
         let expected_buf = EditBuffer {
-            lines: vec![":12345678".into(), "🎸2345678a".into(), "".into()],
+            lines: vec![":12345678".into(), "🎸2345678a".into()],
             ..buf.clone()
         };
         let expected_ctx = RenderContext {
@@ -982,7 +980,6 @@ mod tests {
                 "0123456789".into(),
                 "012345678".into(),
                 "🎸2345678a".into(),
-                "".into(),
             ],
             ..buf.clone()
         };
@@ -1075,7 +1072,6 @@ mod tests {
                 "012345678a".into(),
                 "9012345678".into(),
                 "9012345678".into(),
-                "".into(),
             ],
             ..buf.clone()
         };
@@ -1503,10 +1499,10 @@ mod tests {
     }
 
     #[test]
-    fn right_moves_cursor_to_next_base_char() {
+    fn right_moves_cursor_to_next_base_char_until_end() {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let mut buf = make_buf(&["aë🎸ou"], ':');
+        let mut buf = make_buf(&["aë🎸o"], ':');
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
@@ -1534,6 +1530,15 @@ mod tests {
 
         let expected_ctx = RenderContext {
             cursor: Cursor { column: 5, line: 0, index: (0, 9).into() },
+            ..ctx
+        };
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        assert!(res.is_continue());
+        assert_eq!(buf, expected_buf);
+        assert_eq!(ctx, expected_ctx);
+
+        let expected_ctx = RenderContext {
+            cursor: Cursor { column: 6, line: 0, index: (0, 10).into() },
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &event);

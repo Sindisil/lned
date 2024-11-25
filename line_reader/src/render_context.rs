@@ -128,7 +128,9 @@ impl RenderContext {
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Cursor {
+    // Horizontal coordinate in display buffer [0, display_width)
     pub column: usize,
+    // Vertical coordinate in display buffer [0, display_height)
     pub line: usize,
     pub index: BufferIndex,
 }
