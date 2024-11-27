@@ -283,6 +283,17 @@ impl EditBuffer {
     }
 }
 
+impl Default for EditBuffer {
+    fn default() -> EditBuffer {
+        EditBuffer {
+            lines: vec!["".into()],
+            prompt_char_count: 0,
+            input_start: (0, 0).into(),
+            draft: None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct BufferLine {
     pub(crate) text: String,

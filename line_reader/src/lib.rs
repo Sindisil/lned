@@ -214,17 +214,6 @@ impl Drop for TerminalSession {
     }
 }
 
-impl Default for EditBuffer {
-    fn default() -> EditBuffer {
-        EditBuffer {
-            lines: vec!["".into()],
-            prompt_char_count: 0,
-            input_start: (0, 0).into(),
-            draft: None,
-        }
-    }
-}
-
 // impls of LineRead
 ////////
 
