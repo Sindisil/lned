@@ -359,7 +359,7 @@ fn global_cmd(
     let search_range = address.map_or_else(|| 1..=buffer.len(), Into::into);
     let mut matched_lines = (search_range)
         .filter(|&n| {
-            buffer[n].lines().next().map_or(false, |l| pattern.is_match(l))
+            buffer[n].lines().next().is_some_and(|l| pattern.is_match(l))
         })
         .collect::<VecDeque<usize>>();
 
