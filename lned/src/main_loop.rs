@@ -619,18 +619,16 @@ fn write_cmd(
     address: Option<Address>,
     filename: Option<&Path>,
 ) -> Result<(), Error> {
-    if buffer.filename().is_none() {
-        if filename.is_none() {
-            return Err(Error::NoFilename);
-        }
-        buffer.set_filename(filename.map(ToOwned::to_owned));
-    }
+  if buffer.filename().is_none() && filename.is_some() {
+    buffer.set_filename(filename.map(ToOwned::to_owned));
+  }
+  let filename = filename.or(buffer.filename()).ok_or(Error::NoFilename)?;
 
     let mut destination = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open(buffer.filename().as_ref().unwrap())
+        .open(filename)
         .map_err(|source| Error::WriteFileOpen { source })?;
 
     let (bytes_written, lines_written) =
