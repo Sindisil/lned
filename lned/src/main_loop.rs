@@ -259,8 +259,12 @@ fn edit_cmd(
     filename: Option<&Path>,
     previous_cmd: Option<&Cmd>,
 ) -> Result<(), Error> {
-    if buffer.is_dirty() && !matches!(previous_cmd, Some(Cmd::Edit(_))) {
-        return Err(Error::EditUnwrittenChanges);
+    if buffer.is_dirty() {
+        if matches!(previous_cmd, Some(Cmd::Edit(_))) {
+            buffer.reset_clean_fingerprint();
+        } else {
+            return Err(Error::EditUnwrittenChanges);
+        }
     }
 
     if let Some(filename) = filename {
@@ -619,10 +623,10 @@ fn write_cmd(
     address: Option<Address>,
     filename: Option<&Path>,
 ) -> Result<(), Error> {
-  if buffer.filename().is_none() && filename.is_some() {
-    buffer.set_filename(filename.map(ToOwned::to_owned));
-  }
-  let filename = filename.or(buffer.filename()).ok_or(Error::NoFilename)?;
+    if buffer.filename().is_none() && filename.is_some() {
+        buffer.set_filename(filename.map(ToOwned::to_owned));
+    }
+    let filename = filename.or(buffer.filename()).ok_or(Error::NoFilename)?;
 
     let mut destination = OpenOptions::new()
         .write(true)
@@ -1096,8 +1100,12 @@ mod tests {
         let mut output = Vec::new();
 
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert!(str::from_utf8(&output[..]).unwrap().contains(
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains(
             "unwritten changes - repeat edit command to discard changes"
+        ));
+        assert!(!output.contains(
+            "unwritten changes - repeat quit command to discard changes"
         ));
     }
 
