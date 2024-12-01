@@ -287,6 +287,7 @@ fn handle_key_event(
     match event.code {
         KeyCode::Enter => {
             if let Some(history) = history {
+                history.rewind();
                 if !buffer.is_empty()
                     && history.last().is_none_or(|(last, _)| {
                         last.chars().ne(buffer.input_chars())
@@ -2507,6 +2508,63 @@ mod tests {
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
+    }
+    #[test]
+    fn accepting_history_item_resets_history_stack() {
+        let mut ctx = RenderContext {
+            display_width: 10,
+            display_height: 5,
+            cursor: Cursor { column: 3, line: 0, index: (0, 3).into() },
+            ..Default::default()
+        };
+        let mut buf = EditBuffer {
+            lines: vec![":ba".into()],
+            input_start: (0, 1).into(),
+            prompt_char_count: 1,
+            draft: Some("123456789abc".to_owned()),
+        };
+        let hs = HistoryStack {
+            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
+            edited: vec![None, None, None],
+            index: 1,
+        };
+
+        let expected_ctx = RenderContext {
+            cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
+            ..ctx
+        };
+        let expected_buf =
+            EditBuffer { lines: vec![":foo".into()], ..buf.clone() };
+        let expected_hs = HistoryStack {
+            index: 0,
+            edited: vec![None, Some("ba".to_owned()), None],
+            ..hs.clone()
+        };
+        let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let mut hs = Some(hs);
+        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        assert!(res.is_continue());
+        assert_eq!(buf, expected_buf);
+        assert_eq!(ctx, expected_ctx);
+        assert_eq!(hs.as_ref(), Some(&expected_hs));
+
+        let expected_hs = HistoryStack {
+            lines: vec![
+                "foo".to_owned(),
+                "bar".to_owned(),
+                "baz".to_owned(),
+                "foo".to_owned(),
+            ],
+            edited: vec![None, None, None, None],
+            index: 4,
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        assert!(res.is_break());
+        assert_eq!(buf, expected_buf);
+        assert_eq!(ctx, expected_ctx);
+        assert_eq!(hs.as_ref(), Some(&expected_hs));
     }
 
     #[test]
