@@ -174,6 +174,9 @@ impl Address {
                 Some(&";") => {
                     graphemes.next();
                     left = Some(match right {
+                        Some(r) if r > buffer.len() => {
+                            return Err(Error::InvalidAddress)
+                        }
                         Some(r) => {
                             buffer.set_current_line(r);
                             r
@@ -1153,6 +1156,17 @@ mod tests {
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
         assert_eq!(res, Some(Address::line(4)));
+    }
+
+    #[test]
+    fn eval_semicolon_addr_past_end() {
+        let mut input = "+;np\n".graphemes(true).peekable();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(buffer.current_line(), 6);
+        let res = Address::eval(&mut input, &mut buffer, &mut None)
+            .expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
