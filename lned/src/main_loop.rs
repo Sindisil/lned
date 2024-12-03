@@ -29,6 +29,8 @@ pub enum Error {
     EditFileNotFound(String),
     DestinationIntersectsSource,
     NoMatch,
+    NothingToUndo,
+    NothingToRedo,
 }
 
 impl std::error::Error for Error {
@@ -44,6 +46,8 @@ impl std::error::Error for Error {
             | Error::ReadGlobalCmd
             | Error::DestinationIntersectsSource
             | Error::NoMatch
+            | Error::NothingToUndo
+            | Error::NothingToRedo
             | Error::NoFilename => None,
             Error::EditFileOpen { ref source }
             | Error::WriteFileOpen { ref source }
@@ -95,6 +99,8 @@ impl fmt::Display for Error {
             Error::NoMatch => {
                 write!(f, "no matches found")
             }
+            Error::NothingToUndo => write!(f, "nothing to undo"),
+            Error::NothingToRedo => write!(f, "nothing to redo"),
         }
     }
 }
@@ -170,7 +176,7 @@ pub fn run(
                     Cmd::Quit => quit_cmd(&buffer, previous_cmd.as_ref())
                         .map(|()| done = true),
                     Cmd::Redo => {
-                        buffer.do_redo();
+                        buffer.do_redo()?;
                         Ok(())
                     }
                     Cmd::Substitute(address, pattern, replacement, scope) => {
@@ -186,7 +192,7 @@ pub fn run(
                         transfer_cmd(&mut buffer, *address, *destination)
                     }
                     Cmd::Undo => {
-                        buffer.do_undo();
+                        buffer.do_undo()?;
                         Ok(())
                     }
                     Cmd::Write(address, filename) => write_cmd(
@@ -1536,10 +1542,10 @@ mod tests {
         .unwrap();
         assert_eq!(buffer.current_line(), expected.current_line());
         assert_eq!(&buffer[..], &expected[..]);
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer.current_line(), before.current_line());
         assert_eq!(&before[..], &buffer[..]);
-        buffer.do_redo();
+        buffer.do_redo().unwrap();
         assert_eq!(buffer.current_line(), expected.current_line());
         assert_eq!(&buffer[..], &expected[..]);
     }
@@ -1625,10 +1631,10 @@ mod tests {
         );
         let after = buffer.clone();
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(&buffer[..], &before[..]);
 
-        buffer.do_redo();
+        buffer.do_redo().unwrap();
         assert_eq!(&buffer[..], &after[..]);
     }
 

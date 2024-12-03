@@ -13,6 +13,7 @@ use regex::Regex;
 use crate::command::Address;
 pub use crate::edit_buffer::undo_stack::ChangeSet;
 use crate::edit_buffer::undo_stack::{Diff, UndoStack};
+use crate::main_loop::Error;
 
 #[derive(Debug, Clone)]
 pub struct EditBuffer {
@@ -424,42 +425,46 @@ impl EditBuffer {
         }
     }
 
-    pub fn do_undo(&mut self) {
-        if let Some(undo) = self.undo_stack.pop_undo() {
-            self.current_line = undo.current_line_before;
-            {
-                for diff in undo.diffs() {
-                    match diff {
-                        Diff::Add(p, l) => {
-                            drop(self.text.splice(*p..*p + l.len(), None));
-                        }
-                        Diff::Remove(p, l) => {
-                            drop(self.text.splice(*p..*p, l.iter().cloned()));
-                        }
+    pub fn do_undo(&mut self) -> Result<(), Error> {
+        let Some(undo) = self.undo_stack.pop_undo() else {
+            return Err(Error::NothingToUndo);
+        };
+        self.current_line = undo.current_line_before;
+        {
+            for diff in undo.diffs() {
+                match diff {
+                    Diff::Add(p, l) => {
+                        drop(self.text.splice(*p..*p + l.len(), None));
+                    }
+                    Diff::Remove(p, l) => {
+                        drop(self.text.splice(*p..*p, l.iter().cloned()));
                     }
                 }
             }
-            self.undo_stack.push_redo(undo);
         }
+        self.undo_stack.push_redo(undo);
+        Ok(())
     }
 
-    pub fn do_redo(&mut self) {
-        if let Some(redo) = self.undo_stack.pop_redo() {
-            self.current_line = redo.current_line_after;
-            {
-                for diff in redo.diffs().rev() {
-                    match diff {
-                        Diff::Add(p, l) => {
-                            self.text.splice(*p..*p, l.iter().cloned());
-                        }
-                        Diff::Remove(p, l) => {
-                            self.text.splice(*p..*p + l.len(), None);
-                        }
+    pub fn do_redo(&mut self) -> Result<(), Error> {
+        let Some(redo) = self.undo_stack.pop_redo() else {
+            return Err(Error::NothingToRedo);
+        };
+        self.current_line = redo.current_line_after;
+        {
+            for diff in redo.diffs().rev() {
+                match diff {
+                    Diff::Add(p, l) => {
+                        self.text.splice(*p..*p, l.iter().cloned());
+                    }
+                    Diff::Remove(p, l) => {
+                        self.text.splice(*p..*p + l.len(), None);
                     }
                 }
             }
-            self.undo_stack.push_undo(redo);
         }
+        self.undo_stack.push_undo(redo);
+        Ok(())
     }
 
     pub fn do_transfer(
@@ -839,15 +844,15 @@ mod tests {
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
-        buffer.do_redo();
+        buffer.do_redo().unwrap();
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
@@ -860,26 +865,27 @@ mod tests {
         assert_eq!(buffer[..], expected3[..]);
         assert_eq!(buffer.current_line(), 6);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
         assert!(buffer.is_dirty());
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert!(buffer.is_empty());
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), 0);
         assert!(!buffer.is_dirty());
 
-        buffer.do_undo();
+        let _ret = buffer.do_undo().expect_err("nothing to undo");
+        assert!(matches!(Error::NothingToUndo, _ret));
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), 0);
     }
@@ -895,7 +901,7 @@ mod tests {
         buffer.do_change(Some(Address::line(0)), lines, None);
         assert_eq!(buffer.current_line(), 1);
         assert_eq!(buffer[1], "changed\n");
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), orig.current_line());
     }
@@ -910,7 +916,7 @@ mod tests {
         buffer.do_change(Some(Address::span(3, 5)), lines, None);
         assert_eq!(buffer.current_line(), 3);
         assert_eq!(buffer[3], "6\n");
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), orig.current_line());
 
@@ -918,7 +924,7 @@ mod tests {
         assert_eq!(buffer.current_line(), 6);
         buffer.do_change(Some(Address::span(5, 6)), Vec::new(), None);
         assert_eq!(buffer.current_line(), 4);
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), orig.current_line());
 
@@ -926,7 +932,7 @@ mod tests {
         assert_eq!(buffer.current_line(), 6);
         buffer.do_change(Some(Address::span(0, 2)), Vec::new(), None);
         assert_eq!(buffer.current_line(), 1);
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), orig.current_line());
 
@@ -935,7 +941,7 @@ mod tests {
         buffer.do_change(Some(Address::span(1, 6)), Vec::new(), None);
         assert_eq!(buffer.current_line(), 0);
         assert!(buffer.is_empty());
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), orig.current_line());
     }
@@ -1004,7 +1010,7 @@ mod tests {
         let lines = ["1\n", "2\n", "3\n"].map(ToOwned::to_owned).to_vec();
         buffer.do_append(Some(Address::line(0)), lines, None);
         assert_eq!(buffer[..], EditBuffer::from(vec!["1\n", "2", "3"])[..]);
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], EditBuffer::new()[..]);
     }
 
@@ -1014,7 +1020,7 @@ mod tests {
         let expected = buffer.clone();
         buffer.do_delete(Some(Address::span(1, 4)), None);
         assert_eq!(buffer[..], EditBuffer::from(vec!["5\n", "6"])[..]);
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected[..]);
     }
 
@@ -1027,7 +1033,7 @@ mod tests {
             buffer[..],
             EditBuffer::from(vec!["1\n", "2", "4", "5", "6"])[..]
         );
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected[..]);
     }
 
@@ -1041,7 +1047,7 @@ mod tests {
             buffer[..],
             EditBuffer::from(vec!["1\n", "2", "3", "5", "6"])[..]
         );
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected[..]);
     }
 
@@ -1056,9 +1062,9 @@ mod tests {
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
         buffer.do_insert(Some(Address::line(3)), lines, None);
         assert_eq!(buffer[..], expected_modified[..]);
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(expected_final[..], buffer[..]);
-        buffer.do_redo();
+        buffer.do_redo().unwrap();
         assert_eq!(buffer[..], expected_modified[..]);
     }
 
@@ -1072,7 +1078,7 @@ mod tests {
         buffer.do_transfer(Some(Address::line(6)), Address::line(2), None);
         assert_eq!(buffer[..], expected_tr[..]);
         assert_eq!(buffer.current_line(), expected_tr.current_line());
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_final[..]);
         assert_eq!(buffer.current_line(), expected_final.current_line());
     }
@@ -1087,7 +1093,7 @@ mod tests {
         buffer.do_transfer(Some(Address::span(5, 6)), Address::line(2), None);
         assert_eq!(buffer[..], expected_tr[..]);
         assert_eq!(buffer.current_line(), expected_tr.current_line());
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_final[..]);
         assert_eq!(buffer.current_line(), expected_final.current_line());
     }
@@ -1103,7 +1109,7 @@ mod tests {
         buffer.do_transfer(None, Address::line(2), None);
         assert_eq!(buffer[..], expected_tr[..]);
         assert_eq!(buffer.current_line(), expected_tr.current_line());
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_final[..]);
         assert_eq!(buffer.current_line(), expected_final.current_line());
     }
@@ -1126,10 +1132,10 @@ mod tests {
         let expected_2 = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
         assert_eq!(buffer[..], expected_2[..]);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_1[..]);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_final[..]);
     }
 
@@ -1151,7 +1157,7 @@ mod tests {
         let expected_2 = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
         assert_eq!(buffer[..], expected_2[..]);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_1[..]);
 
         let lines = vec!["spam!\n".to_owned()];
@@ -1161,19 +1167,20 @@ mod tests {
         ]);
         assert_eq!(buffer[..], expected_3[..]);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_1[..]);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_2[..]);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_1[..]);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_final[..]);
 
-        buffer.do_undo();
+        let _ret = buffer.do_undo().expect_err("nothing to undo");
+        assert!(matches!(Error::NothingToUndo, _ret));
         // Undo stack should be empty here, so buffer shouldn't change
         assert_eq!(buffer[..], expected_final[..]);
     }
@@ -1190,15 +1197,16 @@ mod tests {
         let lines = ["x\n", "y\n", "z\n"].map(ToOwned::to_owned).to_vec();
         buffer.do_append(Some(Address::line(0)), lines, None);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
 
         assert!(!buffer.is_dirty());
 
-        buffer.do_undo();
+        let _ret = buffer.do_undo().expect_err("nothing to undo");
+        assert!(matches!(Error::NothingToUndo, _ret));
         assert!(!buffer.is_dirty()); // still not dirty
     }
 
@@ -1220,20 +1228,22 @@ mod tests {
         let expected_final = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
         assert_eq!(buffer[..], expected_final[..]);
 
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected_1[..]);
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer[..], buffer_orig[..]);
-        buffer.do_undo();
+        let _ret = buffer.do_undo().expect_err("nothing to undo");
+        assert!(matches!(Error::NothingToUndo, _ret));
         assert_eq!(buffer[..], buffer_orig[..]); // buffer unchanged
 
-        buffer.do_redo();
+        buffer.do_redo().unwrap();
         assert_eq!(&expected_1[..], &buffer[..]);
 
-        buffer.do_redo();
+        buffer.do_redo().unwrap();
         assert_eq!(buffer[..], expected_final[..]);
 
-        buffer.do_redo();
+        let _ret = buffer.do_redo().expect_err("nothing to redo");
+        assert!(matches!(Error::NothingToRedo, _ret));
         assert_eq!(buffer[..], expected_final[..]); // buffer unchanged
     }
 
@@ -1344,9 +1354,9 @@ mod tests {
         expected.set_current_line(3);
         buffer.do_join(Some(Address::span(3, 5)), None);
         assert_eq!(buffer, expected);
-        buffer.do_undo();
+        buffer.do_undo().unwrap();
         assert_eq!(buffer, expected_original);
-        buffer.do_redo();
+        buffer.do_redo().unwrap();
         assert_eq!(buffer, expected);
     }
 
