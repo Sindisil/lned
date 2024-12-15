@@ -115,6 +115,16 @@ addr,	: addr,addr
 ;addr   : .;addr
 addr;   : addr;addr
 
+## Print Suffixes
+
+Any command other than e, f, g, q, r, w, and ! may have an 'n' or 'p' added
+to their end. If this is the case, the command will be executed and then
+the new current line will be written as described under the 'n'
+(enumerate), and p (print) commands. Only one print suffix is supported per
+command.
+
+Note that, although the 'g' (global) command cannot itself have a print
+suffix applied, commands supplied to the global command can.
 
 ## Commands
 

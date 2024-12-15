@@ -7,7 +7,7 @@ use std::path::Path;
 use regex::Regex;
 
 use crate::cli;
-use crate::command::{self, Address, Cmd, SubstitutionScope};
+use crate::command::{self, Address, Cmd, PrintSuffix, SubstitutionScope};
 use crate::edit_buffer::{ChangeSet, EditBuffer};
 
 use line_reader::LineRead;
@@ -18,7 +18,7 @@ pub enum Error {
     InvalidAddress,
     NestedGlobalCmd,
     UnsupportedGlobalCmd,
-    ReadGlobalCmd,
+    ReadGlobalCmd { source: command::Error },
     NoFilename,
     EditFileOpen { source: std::io::Error },
     WriteFileOpen { source: std::io::Error },
@@ -43,7 +43,6 @@ impl std::error::Error for Error {
             | Error::InvalidAddress
             | Error::NestedGlobalCmd
             | Error::UnsupportedGlobalCmd
-            | Error::ReadGlobalCmd
             | Error::DestinationIntersectsSource
             | Error::NoMatch
             | Error::NothingToUndo
@@ -53,6 +52,7 @@ impl std::error::Error for Error {
             | Error::WriteFileOpen { ref source }
             | Error::WriteLines { ref source }
             | Error::ReadLines { ref source } => Some(source),
+            Error::ReadGlobalCmd { ref source } => Some(source),
         }
     }
 }
@@ -68,7 +68,9 @@ impl fmt::Display for Error {
             Error::UnsupportedGlobalCmd => {
                 write!(f, "unsupported global command")
             }
-            Error::ReadGlobalCmd => write!(f, "error reading global command"),
+            Error::ReadGlobalCmd { .. } => {
+                write!(f, "error reading global command")
+            }
             Error::NoFilename => write!(f, "no filename"),
             Error::EditFileOpen { .. } => {
                 write!(f, "error opening file to edit")
@@ -129,81 +131,32 @@ pub fn run(
     while !done {
         Cmd::read(&mut input, &mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
-            .and_then(|cmd| {
-                let res = match &cmd {
-                    // dispatch editor commands
-                    Cmd::Append(address) => {
-                        append_cmd(&mut buffer, &mut input, *address)
-                    }
-                    Cmd::Delete(address) => delete_cmd(&mut buffer, *address),
-                    Cmd::Change(address) => {
-                        change_cmd(&mut buffer, &mut input, *address)
-                    }
-                    Cmd::Edit(filename) => edit_cmd(
-                        &mut buffer,
-                        &mut output,
-                        filename.as_deref(),
-                        previous_cmd.as_ref(),
-                    ),
-                    Cmd::Enumerate(address) => {
-                        enumerate_cmd(&mut buffer, &mut output, *address)
-                    }
-                    Cmd::File(filename) => {
-                        file_cmd(&mut buffer, &mut output, filename.as_deref());
-                        Ok(())
-                    }
-                    Cmd::Global(address, pattern, commands) => global_cmd(
-                        &mut buffer,
-                        &mut output,
-                        *address,
-                        pattern,
-                        commands,
-                        &mut previous_pattern,
-                    ),
-                    Cmd::Insert(address) => {
-                        insert_cmd(&mut buffer, &mut input, *address)
-                    }
-                    Cmd::Join(address) => join_cmd(&mut buffer, *address),
-                    Cmd::Move(address, destination) => {
-                        move_cmd(&mut buffer, *address, *destination)
-                    }
-                    Cmd::Null(address) => {
-                        null_cmd(&mut buffer, &mut output, *address)
-                    }
-                    Cmd::Print(address) => {
-                        print_cmd(&mut buffer, &mut output, *address)
-                    }
-                    Cmd::Quit => quit_cmd(&buffer, previous_cmd.as_ref())
-                        .map(|()| done = true),
-                    Cmd::Redo => {
-                        buffer.do_redo()?;
-                        Ok(())
-                    }
-                    Cmd::Substitute(address, pattern, replacement, scope) => {
-                        substitute_cmd(
-                            &mut buffer,
-                            *address,
-                            pattern,
-                            replacement,
-                            *scope,
-                        )
-                    }
-                    Cmd::Transfer(address, destination) => {
-                        transfer_cmd(&mut buffer, *address, *destination)
-                    }
-                    Cmd::Undo => {
-                        buffer.do_undo()?;
-                        Ok(())
-                    }
-                    Cmd::Write(address, filename) => write_cmd(
-                        &mut buffer,
-                        &mut output,
-                        *address,
-                        filename.as_deref(),
-                    ),
-                };
+            .and_then(|(cmd, sfx)| {
+                let res = dispatch_cmd(
+                    &cmd,
+                    &mut buffer,
+                    &mut output,
+                    &mut input,
+                    &mut previous_cmd,
+                    &mut previous_pattern,
+                );
                 previous_cmd = Some(cmd);
-                res
+                res.and_then(|exit| {
+                    done = exit;
+                    let cur_line_addr =
+                        Some(Address::line(buffer.current_line()));
+                    match sfx {
+                        Some(PrintSuffix::Print) => {
+                            print_cmd(&mut buffer, &mut output, cur_line_addr)
+                        }
+                        Some(PrintSuffix::Enumerate) => enumerate_cmd(
+                            &mut buffer,
+                            &mut output,
+                            cur_line_addr,
+                        ),
+                        None => Ok(()),
+                    }
+                })
             })
             .or_else(|e| {
                 writeln!(output, "{e}").unwrap();
@@ -212,6 +165,67 @@ pub fn run(
             })?;
     }
     Ok(())
+}
+
+fn dispatch_cmd(
+    cmd: &Cmd,
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    input: &mut impl LineRead,
+    previous_cmd: &mut Option<Cmd>,
+    previous_pattern: &mut Option<regex::Regex>,
+) -> Result<bool, Error> {
+    let mut done = false;
+    let res = match cmd {
+        // dispatch editor commands
+        Cmd::Append(address) => append_cmd(buffer, input, *address),
+        Cmd::Delete(address) => delete_cmd(buffer, *address),
+        Cmd::Change(address) => change_cmd(buffer, input, *address),
+        Cmd::Edit(filename) => {
+            edit_cmd(buffer, output, filename.as_deref(), previous_cmd.as_ref())
+        }
+        Cmd::Enumerate(address) => enumerate_cmd(buffer, output, *address),
+        Cmd::File(filename) => {
+            file_cmd(buffer, output, filename.as_deref());
+            Ok(())
+        }
+        Cmd::Global(address, pattern, commands) => global_cmd(
+            buffer,
+            output,
+            *address,
+            pattern,
+            commands,
+            previous_pattern,
+        ),
+        Cmd::Insert(address) => insert_cmd(buffer, input, *address),
+        Cmd::Join(address) => join_cmd(buffer, *address),
+        Cmd::Move(address, destination) => {
+            move_cmd(buffer, *address, *destination)
+        }
+        Cmd::Null(address) => null_cmd(buffer, output, *address),
+        Cmd::Print(address) => print_cmd(buffer, output, *address),
+        Cmd::Quit => {
+            quit_cmd(buffer, previous_cmd.as_ref()).map(|()| done = true)
+        }
+        Cmd::Redo => {
+            buffer.do_redo()?;
+            Ok(())
+        }
+        Cmd::Substitute(address, pattern, replacement, scope) => {
+            substitute_cmd(buffer, *address, pattern, replacement, *scope)
+        }
+        Cmd::Transfer(address, destination) => {
+            transfer_cmd(buffer, *address, *destination)
+        }
+        Cmd::Undo => {
+            buffer.do_undo()?;
+            Ok(())
+        }
+        Cmd::Write(address, filename) => {
+            write_cmd(buffer, output, *address, filename.as_deref())
+        }
+    };
+    res.map_or_else(Err, |()| Ok(done))
 }
 
 fn append_cmd(
@@ -379,8 +393,8 @@ fn global_cmd(
         let mut input = commands.as_bytes();
 
         // parse and execute command list for line
-        let cmd = Cmd::read(&mut input, buffer, previous_pattern)
-            .map_err(|_| Error::ReadGlobalCmd)?;
+        let (cmd, sfx) = Cmd::read(&mut input, buffer, previous_pattern)
+            .map_err(|source| Error::ReadGlobalCmd { source })?;
         match cmd {
             Cmd::Enumerate(address) => enumerate_cmd(buffer, output, address)?,
             Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
@@ -388,6 +402,15 @@ fn global_cmd(
                 print_cmd(buffer, output, address)?;
             }
             _ => return Err(Error::UnsupportedGlobalCmd),
+        }
+        if let Some(sfx) = sfx {
+            let cur_line_addr = Some(Address::line(buffer.current_line()));
+            match sfx {
+                PrintSuffix::Print => print_cmd(buffer, output, cur_line_addr)?,
+                PrintSuffix::Enumerate => {
+                    enumerate_cmd(buffer, output, cur_line_addr)?;
+                }
+            }
         }
     }
 
@@ -1153,6 +1176,30 @@ mod tests {
     }
 
     #[test]
+    fn append_cmd_dispatch_p_print_sfx() {
+        let input = b"ap\none\ntwo\nthree\n.\n2p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("two\n"));
+        assert!(output.contains("unwritten changes"));
+        assert!(!output.contains("one"));
+        assert!(output.contains("three\n"));
+    }
+
+    #[test]
+    fn append_cmd_dispatch_n_print_sfx() {
+        let input = b"an\none\ntwo\nthree\n.\n2p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("two\n"));
+        assert!(output.contains("unwritten changes"));
+        assert!(!output.contains("one"));
+        assert!(output.contains("3  three\n"));
+    }
+
+    #[test]
     fn delete_cmd_dispatch() {
         let input = b"a\none\ntwo\nthree\n.\n1,2d\np\nd\np\nq\nq\n";
         let mut output = Vec::new();
@@ -1419,7 +1466,7 @@ mod tests {
         buffer.set_current_line(1);
         let cmd_line = "s/, /\\\r\n/";
         let mut input = cmd_line.as_bytes();
-        let Cmd::Substitute(address, pattern, replacement, scope) =
+        let (Cmd::Substitute(address, pattern, replacement, scope), None) =
             Cmd::read(&mut input, &mut buffer, &mut None).unwrap()
         else {
             panic!("{cmd_line} didn't parse as Cmd::Substitute");
@@ -1443,7 +1490,7 @@ mod tests {
         buffer.set_current_line(1);
         let mut cmd_line = "/, /\\\n".graphemes(true).peekable();
         let mut input = "\n".as_bytes();
-        let Ok(Cmd::Substitute(address, pattern, replacement, scope)) =
+        let Ok((Cmd::Substitute(address, pattern, replacement, scope), None)) =
             command::parse_substitute_cmd(
                 &mut cmd_line,
                 None,
