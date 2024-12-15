@@ -128,19 +128,7 @@ suffix applied, commands supplied to the global command can.
 
 ## Commands
 
-### (null command)
-
-#### Syntax
-
-(.,+1)
-
-#### Behavior
-
-An address alone on a line will display the addressed line. A newline
-alone on a line will display the next line (i.e., equivalent to +1p). The
-line displayed becomes the current line.
-
-### 'a' (append)
+### Append ('a')
 
 #### Syntax
 
@@ -156,7 +144,7 @@ line, becomes the current line. A line address of '0' is valid for the
 append command; the input text will then be placed at the beginning of the
 buffer.
 
-### 'c' (change)
+### Change ('c')
 
 #### Syntax
 
@@ -181,7 +169,11 @@ replacement text inserted at the beginning of the buffer. An address with
 a lower bound of 0 is also valid, and will be interpreted in this case as
 the first line in the buffer (i.e., 0 if empty, 1 otherwise).
 
-### 'd' (delete)
+### Copy ('t')
+
+See Transfer.
+
+### Delete ('d')
 
 #### Syntax
 
@@ -196,7 +188,7 @@ deleted lines were atthe end of the buffer, the new last line becomes the
 current line. If the buffer is empty after addressed lines are deleted,
 the current line becomes 0.
 
-### 'e' (edit)
+### Edit ('e')
 
 #### Syntax
 
@@ -227,7 +219,22 @@ successive edit command will proceed, even if the buffer has been changed.
 
 An 'e' command may be undone.
 
-### 'f' (file)
+### Enumerate ('n')
+
+#### Syntax
+
+(.,.)n
+
+#### Behavior
+
+Write the addressed lines to stdout, prefixing each line with its line
+number. The line number will be right justified within a field wide enough
+to hold the largest line number in the file, and will be separated from
+the line content by two spaces.
+
+The last line written becomes the current line.
+
+### File ('f')
 
 #### Syntax
 
@@ -241,7 +248,7 @@ remembered filename is printed to stdout.
 
 The current line is not affected by this command.
 
-### 'g' (global)
+### Global ('g')
 
 #### Syntax
 
@@ -270,7 +277,7 @@ The list of permitted commands in a global command list includes either of
 'n' or 'p'. If no command is provided, it will be interpreted as if a 'p'
 command were given.
 
-### 'i' (insert)
+### Insert ('i')
 
 #### Syntax
 (.)i
@@ -285,7 +292,7 @@ addressed line, becomes the current line. A line address of '0' is valid
 for the insert command; the input text will then be placed at the
 beginning of the buffer.
 
-### 'j' (join)
+### Join ('j')
 
 #### Syntax
 
@@ -302,7 +309,7 @@ If any lines are joined, the current line will be set tot he address of
 the resulting joined line, otherwise the current line number will not
 be set.
 
-### 'm' (move)
+### Move ('m')
 
 #### Syntax
 
@@ -320,22 +327,19 @@ lines.
 The current line number will be set to the resulting address of the last line
 moved.
 
-### 'n' (enumerate)
+### Null command ('')
 
 #### Syntax
 
-(.,.)n
+(.,+1)
 
 #### Behavior
 
-Write the addressed lines to stdout, prefixing each line with its line
-number. The line number will be right justified within a field wide enough
-to hold the largest line number in the file, and will be separated from
-the line content by two spaces.
+An address alone on a line will display the addressed line. A newline
+alone on a line will display the next line (i.e., equivalent to +1p). The
+line displayed becomes the current line.
 
-The last line written becomes the current line.
-
-### 'p' (print)
+### Print ('p')
 
 #### Syntax
 
@@ -346,8 +350,19 @@ The last line written becomes the current line.
 The addressed lines are written to stdout. The last line written becomes
 the current line.
 
+### Quit ('q')
 
-### 'U' (redo)
+#### Syntax
+
+q
+
+#### Behavior
+
+Exits the editor. If there are unsaved changes, a warning will be
+printed. Repeating the Quit command will discard the changes and
+exit.
+
+### Redo ('U')
 
 #### Syntax
 
@@ -364,7 +379,7 @@ undo stack.
 For more details about the undo/redo system, see the 'u' (undo) command.
 
 
-### 's' (substitute, or search and replace)
+### Substitute ('s')
 
 #### Syntax
 
@@ -399,7 +414,11 @@ Flags may be either (but not both) of:
 * 'g'    Globaly replace all non-overlapping of regex with replacement
 * _number_    Replace the _number_th occurrance of regex with replacement
 
-### 't' (transfer, or copy)
+### Copy ('t')
+
+See Transfer.
+
+### Transfer ('t')
 
 #### Syntax
 
@@ -417,7 +436,7 @@ destination may not fall within the span of copied lines.
 The current line number will be set to the resulting address of the
 last line copied.
 
-### 'u' (undo)
+### Undo ('u')
 
 #### Syntax
 
@@ -447,7 +466,7 @@ reverse order, then in forward order but with inverted effect (i.e.,
 deletes become inserts, transfers become deletes, etc.). This is so
 that no history of edit actions are lost, including 'undo' commands.
 
-### 'w' (write)
+### Write ('w')
 
 #### Syntax
 
