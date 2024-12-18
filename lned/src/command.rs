@@ -477,10 +477,8 @@ fn parse_substitution_scope(
         } else if gr == "g" {
             s = Some(SubstitutionScope::Global);
             graphemes.next();
-        } else if gr == "\n" || gr == "\r\n" {
-            break;
         } else {
-            return Err(Error::InvalidCmdSuffix);
+            break;
         }
     }
     Ok(s.unwrap_or(SubstitutionScope::Single(1)))
@@ -1603,10 +1601,10 @@ mod tests {
 
     #[test]
     fn parse_single_substitute() {
-        let mut cmd_line = "/[^01]*/./\r\n".graphemes(true).peekable();
+        let mut cmd_line = "/[^01]*/./n\r\n".graphemes(true).peekable();
         let address = Some(Address::span(1, 10));
         let mut prev_pattern = None;
-        let (cmd, sfx) = parse_substitute_cmd(
+        let (cmd, _sfx) = parse_substitute_cmd(
             &mut cmd_line,
             address,
             &mut prev_pattern,
@@ -1619,7 +1617,7 @@ mod tests {
         assert_eq!(a, address);
         assert_eq!(p.as_str(), "[^01]*");
         assert_eq!(r, ".");
-        assert!(sfx.is_none());
+        assert!(matches!(Some(PrintSuffix::Enumerate), _sfx));
     }
 
     #[test]
