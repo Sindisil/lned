@@ -798,56 +798,56 @@ mod tests {
     #[test]
     fn parse_no_args_p_print_suffix() {
         let mut cmd_line = "p\r\n".graphemes(true).peekable();
-        let (_cmd, _sfx) =
+        let (cmd, sfx) =
             parse_no_args(&mut cmd_line, Cmd::Delete(None)).unwrap();
-        assert!(matches!(Cmd::Delete(None), _cmd));
-        assert!(matches!(Some(PrintSuffix::Enumerate), _sfx));
+        assert!(matches!(cmd, Cmd::Delete(None)));
+        assert!(matches!(sfx, Some(PrintSuffix::Print)));
     }
 
     #[test]
     fn parse_no_args_n_print_suffix() {
         let mut cmd_line = "n\r\n".graphemes(true).peekable();
-        let (_cmd, _sfx) =
+        let (cmd, sfx) =
             parse_no_args(&mut cmd_line, Cmd::Delete(None)).unwrap();
-        assert!(matches!(Cmd::Delete(None), _cmd));
-        assert!(matches!(Some(PrintSuffix::Enumerate), _sfx));
+        assert!(matches!(cmd, Cmd::Delete(None)));
+        assert!(matches!(sfx, Some(PrintSuffix::Enumerate)));
     }
 
     #[test]
     fn parse_no_args_extra_chars_after_print_suffix_error() {
         let mut cmd_line = "n!\r\n".graphemes(true).peekable();
-        let _res = parse_no_args(&mut cmd_line, Cmd::Delete(None))
+        let res = parse_no_args(&mut cmd_line, Cmd::Delete(None))
             .expect_err("invalid suffix");
-        assert!(matches!(Error::InvalidCmdSuffix, _res));
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
     fn parse_no_args_multiple_print_suffix_error() {
         let mut cmd_line = "pn\r\n".graphemes(true).peekable();
-        let _res = parse_no_args(&mut cmd_line, Cmd::Delete(None))
+        let res = parse_no_args(&mut cmd_line, Cmd::Delete(None))
             .expect_err("invalid suffix");
-        assert!(matches!(Error::InvalidCmdSuffix, _res));
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
     fn parse_print_suffix_p() {
         let mut graphs = "p\r\n".graphemes(true).peekable();
-        let _res = parse_print_suffix(&mut graphs).unwrap();
-        assert!(matches!(Some(PrintSuffix::Print), _res));
+        let res = parse_print_suffix(&mut graphs).unwrap();
+        assert!(matches!(res, Some(PrintSuffix::Print)));
     }
 
     #[test]
     fn parse_print_suffix_n() {
         let mut graphs = "n\r\n".graphemes(true).peekable();
-        let _res = parse_print_suffix(&mut graphs).unwrap();
-        assert!(matches!(Some(PrintSuffix::Enumerate), _res));
+        let res = parse_print_suffix(&mut graphs).unwrap();
+        assert!(matches!(res, Some(PrintSuffix::Enumerate)));
     }
 
     #[test]
     fn parse_print_suffix_trailing_chars_error() {
         let mut graphs = "pn\r\n".graphemes(true).peekable();
-        let _res = parse_print_suffix(&mut graphs).expect_err("invalid suffix");
-        assert!(matches!(Error::InvalidCmdSuffix, _res));
+        let res = parse_print_suffix(&mut graphs).expect_err("invalid suffix");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
@@ -1634,7 +1634,7 @@ mod tests {
         let mut cmd_line = "/[^01]*/./n\r\n".graphemes(true).peekable();
         let address = Some(Address::span(1, 10));
         let mut prev_pattern = None;
-        let (cmd, _sfx) = parse_substitute_cmd(
+        let (cmd, sfx) = parse_substitute_cmd(
             &mut cmd_line,
             address,
             &mut prev_pattern,
@@ -1647,7 +1647,7 @@ mod tests {
         assert_eq!(a, address);
         assert_eq!(p.as_str(), "[^01]*");
         assert_eq!(r, ".");
-        assert!(matches!(Some(PrintSuffix::Enumerate), _sfx));
+        assert!(matches!(sfx, Some(PrintSuffix::Enumerate)));
     }
 
     #[test]
