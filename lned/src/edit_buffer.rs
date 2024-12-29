@@ -277,9 +277,11 @@ impl EditBuffer {
         let b =
             cmp::max(1, address.map_or(self.current_line, |addr| addr.start()));
         let e = address.map_or(self.current_line, |addr| addr.end());
-        let mut removed: Vec<String> = Vec::new();
+        //        let mut removed: Vec<String> = Vec::new();
         if b <= e {
-            removed.extend(self.text.splice(b - 1..e, None));
+            //            removed.extend(self.text.splice(b - 1..e, None));
+            let removed = self.text.splice(b - 1..e, None).collect();
+            change.push_remove(b - 1, removed);
         }
 
         // handle insertion of new lines, if any
@@ -293,9 +295,9 @@ impl EditBuffer {
             change.push_add(b, lines);
         }
 
-        if !removed.is_empty() {
-            change.push_remove(b - 1, removed);
-        }
+        //        if !removed.is_empty() {
+        //            change.push_remove(b - 1, removed);
+        //        }
         if let Some(mut change) = my_change {
             change.current_line_after = self.current_line;
             self.undo_stack.push_undo(change);
@@ -386,8 +388,8 @@ impl EditBuffer {
             .splice(address.start() - 1..address.end(), joined.clone())
             .collect();
         self.current_line = address.start();
-        change.push_remove(address.start(), replaced);
         change.push_add(address.start() - 1, joined);
+        change.push_remove(address.start(), replaced);
         if let Some(mut change) = my_change {
             change.current_line_after = self.current_line;
             self.undo_stack.push_undo(change);
@@ -429,9 +431,8 @@ impl EditBuffer {
         let Some(undo) = self.undo_stack.pop_undo() else {
             return Err(Error::NothingToUndo);
         };
-        self.current_line = undo.current_line_before;
         {
-            for diff in undo.diffs() {
+            for diff in undo.diffs().rev() {
                 match diff {
                     Diff::Add(p, l) => {
                         drop(self.text.splice(*p..*p + l.len(), None));
@@ -442,6 +443,7 @@ impl EditBuffer {
                 }
             }
         }
+        self.current_line = undo.current_line_before;
         self.undo_stack.push_redo(undo);
         Ok(())
     }
@@ -452,7 +454,7 @@ impl EditBuffer {
         };
         self.current_line = redo.current_line_after;
         {
-            for diff in redo.diffs().rev() {
+            for diff in redo.diffs() {
                 match diff {
                     Diff::Add(p, l) => {
                         self.text.splice(*p..*p, l.iter().cloned());

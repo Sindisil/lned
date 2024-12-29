@@ -388,43 +388,115 @@ fn global_cmd(
 ) -> Result<(), Error> {
     // make a list of matching lines
     let search_range = address.map_or_else(|| 1..=buffer.len(), Into::into);
-    let mut matched_lines = (search_range)
+    let matched_lines = (search_range)
         .filter(|&n| {
             buffer[n].lines().next().is_some_and(|l| pattern.is_match(l))
         })
         .collect::<VecDeque<usize>>();
+    if matched_lines.is_empty() {
+        return Ok(());
+    }
 
+    let mut changes = ChangeSet::new(buffer.current_line());
+    let ret = do_global_cmds(
+        buffer,
+        output,
+        commands,
+        previous_pattern,
+        matched_lines,
+        &mut changes,
+    );
+
+    if !changes.is_empty() {
+        changes.current_line_after = buffer.current_line();
+        buffer.push_undo(changes);
+    }
+    ret
+}
+
+fn do_global_cmds(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    commands: &str,
+    previous_pattern: &mut Option<Regex>,
+    mut matched_lines: VecDeque<usize>,
+    changes: &mut ChangeSet,
+) -> Result<(), Error> {
     // iterate over list
     while let Some(line_num) = matched_lines.pop_front() {
         buffer.set_current_line(line_num);
         let mut input = commands.as_bytes();
 
         // parse and execute command list for line
-        let cmd_line = Cmd::read(&mut input, buffer, previous_pattern)
-            .map_err(|source| Error::ReadGlobalCmd { source })?;
-        let Some((cmd, sfx)) = cmd_line else {
-            continue;
-        };
-        match cmd {
-            Cmd::Enumerate(address) => enumerate_cmd(buffer, output, address)?,
-            Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
-            Cmd::Null(address) | Cmd::Print(address) => {
-                print_cmd(buffer, output, address)?;
+        while let Some((cmd, sfx)) =
+            Cmd::read(&mut input, buffer, previous_pattern)
+                .map_err(|source| Error::ReadGlobalCmd { source })?
+        {
+            match cmd {
+                Cmd::Delete(address) => {
+                    let removed = global_delete_cmd(buffer, address, changes)?;
+                    adjust_global_list(&mut matched_lines, Some(removed), None);
+                }
+                Cmd::Enumerate(address) => {
+                    enumerate_cmd(buffer, output, address)?;
+                }
+                Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
+                Cmd::Null(address) | Cmd::Print(address) => {
+                    print_cmd(buffer, output, address)?;
+                }
+                _ => return Err(Error::UnsupportedGlobalCmd),
             }
-            _ => return Err(Error::UnsupportedGlobalCmd),
-        }
-        if let Some(sfx) = sfx {
-            let cur_line_addr = Some(Address::line(buffer.current_line()));
-            match sfx {
-                PrintSuffix::Print => print_cmd(buffer, output, cur_line_addr)?,
-                PrintSuffix::Enumerate => {
-                    enumerate_cmd(buffer, output, cur_line_addr)?;
+            if let Some(sfx) = sfx {
+                let cur_line_addr = Some(Address::line(buffer.current_line()));
+                match sfx {
+                    PrintSuffix::Print => {
+                        print_cmd(buffer, output, cur_line_addr)?;
+                    }
+                    PrintSuffix::Enumerate => {
+                        enumerate_cmd(buffer, output, cur_line_addr)?;
+                    }
                 }
             }
         }
     }
-
     Ok(())
+}
+
+fn global_delete_cmd(
+    buffer: &mut EditBuffer,
+    address: Option<Address>,
+    changes: &mut ChangeSet,
+) -> Result<Address, Error> {
+    match address {
+        Some(addr) if addr.start() == 0 => Err(Error::InvalidAddress),
+        None if buffer.current_line() == 0 => Err(Error::InvalidAddress),
+        _ => {
+            let removed = address
+                .map_or_else(|| Address::line(buffer.current_line()), |a| a);
+            buffer.do_delete(address, Some(changes));
+            Ok(removed)
+        }
+    }
+}
+
+fn adjust_global_list(
+    list: &mut VecDeque<usize>,
+    removed: Option<Address>,
+    _added: Option<Address>,
+) {
+    // remove lines
+    if let Some(removed) = removed {
+        list.retain_mut(|n| {
+            if removed.contains(*n) {
+                false
+            } else {
+                if *n > removed.end() {
+                    *n -= removed.line_count();
+                }
+                true
+            }
+        });
+    }
 }
 
 fn insert_cmd(
@@ -1057,6 +1129,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec![
             "one\n", "two", "three", "four", "five", "six",
         ]);
+        let orig = buffer.clone();
         let expected = EditBuffer::from(vec!["two\n", "four", "six"]);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -1071,12 +1144,22 @@ mod tests {
             &mut prev_pattern,
         )
         .unwrap();
-        eprintln!("{}", str::from_utf8(&output[..]).unwrap());
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
-            "1  one\n3  three\n5  five\n"
+            "1  one\n2  three\n3  five\n"
         );
         assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 3);
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 3);
     }
 
     #[test]

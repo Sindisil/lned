@@ -158,6 +158,10 @@ impl Address {
         Self::line(self.end)
     }
 
+    pub fn contains(&self, line: usize) -> bool {
+        self.start <= line && line <= self.end
+    }
+
     pub fn line_count(&self) -> usize {
         self.end - self.start + 1
     }
@@ -307,7 +311,7 @@ impl Cmd {
         input
             .read(&mut line, &cmd_read_options)
             .map_err(|source| Error::ReadCommand { source })?;
-        if line.len() == 0 {
+        if line.is_empty() {
             return Ok(None);
         }
         let mut graphemes = line.as_str().graphemes(true).peekable();
