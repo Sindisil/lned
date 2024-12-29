@@ -185,7 +185,7 @@ fn dispatch_cmd(
     let res = match cmd {
         // dispatch editor commands
         Cmd::Append(address) => append_cmd(buffer, input, *address),
-        Cmd::Delete(address) => delete_cmd(buffer, *address),
+        Cmd::Delete(address) => delete_cmd(buffer, *address, None).map(|_| ()),
         Cmd::Change(address) => change_cmd(buffer, input, *address),
         Cmd::Edit(filename) => {
             edit_cmd(buffer, output, filename.as_deref(), previous_cmd.as_ref())
@@ -268,13 +268,16 @@ fn change_cmd(
 fn delete_cmd(
     buffer: &mut EditBuffer,
     address: Option<Address>,
-) -> Result<(), Error> {
+    changes: Option<&mut ChangeSet>,
+) -> Result<Address, Error> {
     match address {
         Some(addr) if addr.start() == 0 => Err(Error::InvalidAddress),
         None if buffer.current_line() == 0 => Err(Error::InvalidAddress),
         _ => {
-            buffer.do_delete(address, None);
-            Ok(())
+            let removed = address
+                .map_or_else(|| Address::line(buffer.current_line()), |a| a);
+            buffer.do_delete(address, changes);
+            Ok(removed)
         }
     }
 }
@@ -434,7 +437,7 @@ fn do_global_cmds(
         {
             match cmd {
                 Cmd::Delete(address) => {
-                    let removed = global_delete_cmd(buffer, address, changes)?;
+                    let removed = delete_cmd(buffer, address, Some(changes))?;
                     adjust_global_list(&mut matched_lines, Some(removed), None);
                 }
                 Cmd::Enumerate(address) => {
@@ -460,23 +463,6 @@ fn do_global_cmds(
         }
     }
     Ok(())
-}
-
-fn global_delete_cmd(
-    buffer: &mut EditBuffer,
-    address: Option<Address>,
-    changes: &mut ChangeSet,
-) -> Result<Address, Error> {
-    match address {
-        Some(addr) if addr.start() == 0 => Err(Error::InvalidAddress),
-        None if buffer.current_line() == 0 => Err(Error::InvalidAddress),
-        _ => {
-            let removed = address
-                .map_or_else(|| Address::line(buffer.current_line()), |a| a);
-            buffer.do_delete(address, Some(changes));
-            Ok(removed)
-        }
-    }
 }
 
 fn adjust_global_list(
@@ -1949,14 +1935,15 @@ mod tests {
     #[test]
     fn delete_cmd_empty_buffer() {
         let mut buffer = EditBuffer::new();
-        let res = delete_cmd(&mut buffer, None).expect_err("invalid address");
+        let res =
+            delete_cmd(&mut buffer, None, None).expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
     fn delete_cmd_line_zero() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let res = delete_cmd(&mut buffer, Some(Address::line(0)))
+        let res = delete_cmd(&mut buffer, Some(Address::line(0)), None)
             .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
     }
@@ -1964,7 +1951,7 @@ mod tests {
     #[test]
     fn delete_cmd_span_starting_at_zero() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5"]);
-        let res = delete_cmd(&mut buffer, Some(Address::span(0, 3)))
+        let res = delete_cmd(&mut buffer, Some(Address::span(0, 3)), None)
             .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
     }
