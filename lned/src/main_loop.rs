@@ -218,7 +218,7 @@ fn dispatch_cmd(
             Ok(())
         }
         Cmd::Substitute(address, pattern, replacement, scope) => {
-            substitute_cmd(buffer, *address, pattern, replacement, *scope)
+            substitute_cmd(buffer, *address, pattern, replacement, *scope, None)
         }
         Cmd::Transfer(address, destination) => {
             transfer_cmd(buffer, *address, *destination)
@@ -595,6 +595,7 @@ fn substitute_cmd(
     pattern: &Regex,
     replacement: &str,
     scope: SubstitutionScope,
+    changes: Option<&mut ChangeSet>,
 ) -> Result<(), Error> {
     let address =
         address.unwrap_or_else(|| Address::line(buffer.current_line()));
@@ -610,7 +611,12 @@ fn substitute_cmd(
         (0, 0)
     };
 
-    let mut changes = ChangeSet::new(buffer.current_line());
+    let mut my_changes = if changes.is_none() {
+        Some(ChangeSet::new(buffer.current_line()))
+    } else {
+        None
+    };
+    let mut changes = changes.or(my_changes.as_mut()).unwrap();
     let mut replacement_lines = Vec::new();
     let mut span_start: Option<usize> = None;
     loop {
@@ -671,7 +677,9 @@ fn substitute_cmd(
         Err(Error::NoMatch)
     } else {
         changes.current_line_after = buffer.current_line();
-        buffer.push_undo(changes);
+        if let Some(my_changes) = my_changes {
+            buffer.push_undo(my_changes);
+        }
         Ok(())
     }
 }
@@ -1483,6 +1491,7 @@ mod tests {
             &Regex::new("won't match").unwrap(),
             "",
             SubstitutionScope::Global,
+            None,
         )
         .expect_err("should give error");
         assert!(matches!(res, Error::NoMatch));
@@ -1504,6 +1513,7 @@ mod tests {
             &Regex::new("e+n").unwrap(),
             "'",
             SubstitutionScope::Global,
+            None,
         )
         .unwrap();
         assert_eq!(buffer[5], "sev't' eight' ninet' tw'ty\r\n");
@@ -1519,6 +1529,7 @@ mod tests {
             &Regex::new("$").unwrap(),
             "!",
             SubstitutionScope::Single(1),
+            None,
         )
         .unwrap();
         assert_eq!(&buffer[..], &expected[..]);
@@ -1540,6 +1551,7 @@ mod tests {
             &Regex::new("e+n").unwrap(),
             "'",
             SubstitutionScope::Single(1),
+            None,
         )
         .unwrap();
         assert_eq!(buffer[5], "sev'teen eighteen nineteen twenty\r\n");
@@ -1561,6 +1573,7 @@ mod tests {
             &Regex::new("e+n").unwrap(),
             "'",
             SubstitutionScope::Single(4),
+            None,
         )
         .unwrap();
         assert_eq!(buffer[5], "seventeen eighteen ninet' twenty\r\n");
@@ -1583,6 +1596,7 @@ mod tests {
             &pattern,
             replacement.as_str(),
             scope,
+            None,
         )
         .unwrap();
         let mut expected = EditBuffer::from(vec!["a line\r\n", "to split"]);
@@ -1614,6 +1628,7 @@ mod tests {
             &pattern,
             replacement.as_str(),
             scope,
+            None,
         )
         .unwrap();
         let mut expected = EditBuffer::from(vec!["a line\n", "to split"]);
@@ -1654,6 +1669,7 @@ mod tests {
             &Regex::new("s[aeiou]").unwrap(),
             "'",
             SubstitutionScope::Single(1),
+            None,
         )
         .unwrap();
         assert_eq!(buffer.current_line(), expected.current_line());
@@ -1693,6 +1709,7 @@ mod tests {
             &Regex::new("s[aeiou]").unwrap(),
             "'",
             SubstitutionScope::Single(1),
+            None,
         )
         .unwrap();
         assert_eq!(buffer.current_line(), expected.current_line());
@@ -1721,6 +1738,7 @@ mod tests {
             &Regex::new("e+n").unwrap(),
             "'",
             SubstitutionScope::Single(1),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1745,6 +1763,7 @@ mod tests {
             &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
             "$1 ($0)",
             SubstitutionScope::Single(2),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1774,6 +1793,7 @@ mod tests {
             &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
             "$1 ($0)",
             SubstitutionScope::Single(2),
+            None,
         )
         .unwrap();
         assert_eq!(

@@ -277,9 +277,7 @@ impl EditBuffer {
         let b =
             cmp::max(1, address.map_or(self.current_line, |addr| addr.start()));
         let e = address.map_or(self.current_line, |addr| addr.end());
-        //        let mut removed: Vec<String> = Vec::new();
         if b <= e {
-            //            removed.extend(self.text.splice(b - 1..e, None));
             let removed = self.text.splice(b - 1..e, None).collect();
             change.push_remove(b - 1, removed);
         }
@@ -295,9 +293,6 @@ impl EditBuffer {
             change.push_add(b, lines);
         }
 
-        //        if !removed.is_empty() {
-        //            change.push_remove(b - 1, removed);
-        //        }
         if let Some(mut change) = my_change {
             change.current_line_after = self.current_line;
             self.undo_stack.push_undo(change);
