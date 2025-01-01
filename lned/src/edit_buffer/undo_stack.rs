@@ -69,16 +69,14 @@ impl ChangeSet {
             &mut change.current_line_before,
             &mut change.current_line_after,
         );
-        let inv = change
-            .diffs
-            .into_iter()
-            .rev()
-            .map(|d| match d {
-                Diff::Add(p, l) => Diff::Remove(p, l),
-                Diff::Remove(p, l) => Diff::Add(p, l),
-            })
-            .collect::<Vec<Diff>>();
-        change.diffs = inv;
+        for diff in &mut change.diffs {
+            let new_diff = match diff {
+                Diff::Add(p, l) => Diff::Remove(*p, mem::take(l)),
+                Diff::Remove(p, l) => Diff::Add(*p, mem::take(l)),
+            };
+            *diff = new_diff;
+        }
+        change.diffs.reverse();
         change
     }
 }
