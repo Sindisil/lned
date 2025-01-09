@@ -411,8 +411,7 @@ fn global_cmd(
     );
 
     if !changes.is_empty() {
-        changes.current_line_after = buffer.current_line();
-        buffer.push_undo(changes);
+        buffer.push_undo(changes, buffer.current_line());
     }
     ret
 }
@@ -676,9 +675,8 @@ fn substitute_cmd(
     if changes.is_empty() {
         Err(Error::NoMatch)
     } else {
-        changes.current_line_after = buffer.current_line();
         if let Some(my_changes) = my_changes {
-            buffer.push_undo(my_changes);
+            buffer.push_undo(my_changes, buffer.current_line());
         }
         Ok(())
     }
@@ -1128,7 +1126,7 @@ mod tests {
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
-        let commands = "n\nd\n".to_owned();
+        let commands = "d\nn\n".to_owned();
         global_cmd(
             &mut buffer,
             &mut output,
@@ -1140,7 +1138,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
-            "1  one\n2  three\n3  five\n"
+            "1  two\n2  four\n3  six\n"
         );
         assert_eq!(&buffer[..], &expected[..]);
         assert_eq!(buffer.current_line(), 3);

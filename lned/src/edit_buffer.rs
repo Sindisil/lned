@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 
 use crate::command::Address;
+pub use crate::edit_buffer::undo_stack::Change;
 pub use crate::edit_buffer::undo_stack::ChangeSet;
 use crate::edit_buffer::undo_stack::{Diff, UndoStack};
 use crate::main_loop::Error;
@@ -185,8 +186,8 @@ impl EditBuffer {
         self.clean_fingerprint
     }
 
-    pub fn push_undo(&mut self, changes: ChangeSet) {
-        self.undo_stack.push_undo(changes);
+    pub fn push_undo(&mut self, changes: ChangeSet, current_line: usize) {
+        self.undo_stack.push_undo(changes, current_line);
     }
 
     pub fn find_line(&self, pattern: &Regex) -> Option<usize> {
@@ -223,12 +224,14 @@ impl EditBuffer {
         lines: Vec<String>,
         changes: Option<&mut ChangeSet>,
     ) {
-        let mut my_change = if changes.is_none() {
+        let mut my_changes = if changes.is_none() {
             Some(ChangeSet::new(self.current_line))
         } else {
             None
         };
-        let change = changes.or(my_change.as_mut()).unwrap();
+        let changes = changes.or(my_changes.as_mut()).unwrap();
+
+        let mut change = Change::new(self.current_line);
         let location = address.map_or(self.current_line, |addr| addr.end());
         if lines.is_empty() {
             self.current_line = location;
@@ -237,9 +240,10 @@ impl EditBuffer {
             self.current_line = location + lines.len();
             change.push_add(location, lines);
         }
-        if let Some(mut change) = my_change {
-            change.current_line_after = self.current_line;
-            self.undo_stack.push_undo(change);
+        changes.push(change, self.current_line);
+
+        if let Some(changes) = my_changes {
+            self.undo_stack.push_undo(changes, self.current_line);
         }
     }
 
@@ -266,12 +270,13 @@ impl EditBuffer {
         lines: Vec<String>,
         changes: Option<&mut ChangeSet>,
     ) {
-        let mut my_change = if changes.is_none() {
+        let mut my_changes = if changes.is_none() {
             Some(ChangeSet::new(self.current_line))
         } else {
             None
         };
-        let change = changes.or(my_change.as_mut()).unwrap();
+        let changes = changes.or(my_changes.as_mut()).unwrap();
+        let mut change = Change::new(self.current_line);
 
         // handle deletion of addressed lines
         let b =
@@ -293,9 +298,9 @@ impl EditBuffer {
             change.push_add(b, lines);
         }
 
-        if let Some(mut change) = my_change {
-            change.current_line_after = self.current_line;
-            self.undo_stack.push_undo(change);
+        changes.push(change, self.current_line);
+        if let Some(changes) = my_changes {
+            self.undo_stack.push_undo(changes, self.current_line);
         }
     }
 
@@ -311,17 +316,18 @@ impl EditBuffer {
 
         let removed: Vec<String> = self.text.splice(b - 1..e, None).collect();
 
-        let mut my_change = if changes.is_none() {
+        let mut my_changes = if changes.is_none() {
             Some(ChangeSet::new(self.current_line))
         } else {
             None
         };
-        let change = changes.or(my_change.as_mut()).unwrap();
+        let changes = changes.or(my_changes.as_mut()).unwrap();
+        let mut change = Change::new(self.current_line);
         self.current_line = usize::min(self.text.len(), b);
         change.push_remove(b - 1, removed);
-        if let Some(mut change) = my_change {
-            change.current_line_after = self.current_line;
-            self.undo_stack.push_undo(change);
+        changes.push(change, self.current_line);
+        if let Some(changes) = my_changes {
+            self.undo_stack.push_undo(changes, self.current_line);
         }
     }
 
@@ -339,12 +345,13 @@ impl EditBuffer {
                 .map_or(self.current_line, |addr| addr.end())
                 .saturating_sub(1)
         };
-        let mut my_change = if changes.is_none() {
+        let mut my_changes = if changes.is_none() {
             Some(ChangeSet::new(self.current_line))
         } else {
             None
         };
-        let change = changes.or(my_change.as_mut()).unwrap();
+        let changes = changes.or(my_changes.as_mut()).unwrap();
+        let mut change = Change::new(self.current_line);
         if lines.is_empty() {
             self.current_line = location;
         } else {
@@ -352,9 +359,9 @@ impl EditBuffer {
             self.current_line = location + lines.len();
             change.push_add(location, lines);
         }
-        if let Some(mut change) = my_change {
-            change.current_line_after = self.current_line;
-            self.undo_stack.push_undo(change);
+        changes.push(change, self.current_line);
+        if let Some(changes) = my_changes {
+            self.undo_stack.push_undo(changes, self.current_line);
         }
     }
 
@@ -366,12 +373,13 @@ impl EditBuffer {
         let address = address.unwrap_or_else(|| {
             Address::span(self.current_line, self.current_line + 1)
         });
-        let mut my_change = if changes.is_none() {
+        let mut my_changes = if changes.is_none() {
             Some(ChangeSet::new(self.current_line))
         } else {
             None
         };
-        let change = changes.or(my_change.as_mut()).unwrap();
+        let changes = changes.or(my_changes.as_mut()).unwrap();
+        let mut change = Change::new(self.current_line);
 
         let mut joined = vec![String::new()];
         for l in &self[address.start()..address.end()] {
@@ -385,9 +393,9 @@ impl EditBuffer {
         self.current_line = address.start();
         change.push_add(address.start() - 1, joined);
         change.push_remove(address.start(), replaced);
-        if let Some(mut change) = my_change {
-            change.current_line_after = self.current_line;
-            self.undo_stack.push_undo(change);
+        changes.push(change, self.current_line);
+        if let Some(changes) = my_changes {
+            self.undo_stack.push_undo(changes, self.current_line);
         }
     }
 
@@ -407,18 +415,19 @@ impl EditBuffer {
             destination.end()
         };
 
-        let mut my_change = if changes.is_none() {
+        let mut my_changes = if changes.is_none() {
             Some(ChangeSet::new(self.current_line))
         } else {
             None
         };
-        let change = changes.or(my_change.as_mut()).unwrap();
+        let changes = changes.or(my_changes.as_mut()).unwrap();
+        let mut change = Change::new(self.current_line);
         change.push_add(destination, lines.clone());
         self.text.splice(destination..destination, lines);
         self.current_line = destination + address.line_count();
-        if let Some(mut change) = my_change {
-            change.current_line_after = self.current_line;
-            self.undo_stack.push_undo(change);
+        changes.push(change, self.current_line);
+        if let Some(changes) = my_changes {
+            self.undo_stack.push_undo(changes, self.current_line);
         }
     }
 
@@ -426,8 +435,10 @@ impl EditBuffer {
         let Some(undo) = self.undo_stack.pop_undo() else {
             return Err(Error::NothingToUndo);
         };
-        {
-            for diff in undo.diffs().rev() {
+        eprintln!("do_undo: {undo:?}");
+        for change in undo.changes().rev() {
+            self.current_line = change.current_line_after;
+            for diff in change.diffs().rev() {
                 match diff {
                     Diff::Add(p, l) => {
                         drop(self.text.splice(*p..*p + l.len(), None));
@@ -437,6 +448,7 @@ impl EditBuffer {
                     }
                 }
             }
+            self.current_line = change.current_line_before;
         }
         self.current_line = undo.current_line_before;
         self.undo_stack.push_redo(undo);
@@ -447,9 +459,11 @@ impl EditBuffer {
         let Some(redo) = self.undo_stack.pop_redo() else {
             return Err(Error::NothingToRedo);
         };
-        self.current_line = redo.current_line_after;
-        {
-            for diff in redo.diffs() {
+        eprintln!("do_redo: cl before {}", self.current_line);
+        eprintln!("do_redo: {redo:?}");
+        for change in redo.changes() {
+            self.current_line = change.current_line_before;
+            for diff in change.diffs() {
                 match diff {
                     Diff::Add(p, l) => {
                         self.text.splice(*p..*p, l.iter().cloned());
@@ -459,8 +473,9 @@ impl EditBuffer {
                     }
                 }
             }
+            self.current_line = change.current_line_after;
         }
-        self.undo_stack.push_undo(redo);
+        self.undo_stack.push_undo(redo, self.current_line);
         Ok(())
     }
 
@@ -475,18 +490,19 @@ impl EditBuffer {
         let source = self.text[address.start() - 1..address.end()].to_vec();
         let destination = destination.end();
 
-        let mut my_change = if changes.is_none() {
+        let mut my_changes = if changes.is_none() {
             Some(ChangeSet::new(self.current_line))
         } else {
             None
         };
-        let change = changes.or(my_change.as_mut()).unwrap();
+        let changes = changes.or(my_changes.as_mut()).unwrap();
+        let mut change = Change::new(self.current_line);
         change.push_add(destination, source.clone());
         self.text.splice(destination..destination, source);
         self.current_line = destination + address.line_count();
-        change.current_line_after = self.current_line;
-        if let Some(change) = my_change {
-            self.undo_stack.push_undo(change);
+        changes.push(change, self.current_line);
+        if let Some(changes) = my_changes {
+            self.undo_stack.push_undo(changes, self.current_line);
         }
     }
 
@@ -841,19 +857,23 @@ mod tests {
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
 
+        eprintln!("\tundo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
+        eprintln!("\tredo");
         buffer.do_redo().unwrap();
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
 
+        eprintln!("\tundo the redo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
         let expected3 = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        eprintln!("\n\n\tsecond change command");
         buffer.do_change(
             Some(Address::span(2, 3)),
             expected3[2..].to_vec(),
@@ -862,19 +882,23 @@ mod tests {
         assert_eq!(buffer[..], expected3[..]);
         assert_eq!(buffer.current_line(), 6);
 
+        eprintln!("\n\tundo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
+        eprintln!("\n\tundo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
 
+        eprintln!("\n\tundo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
         assert!(buffer.is_dirty());
 
+        eprintln!("\n\tlast undo");
         buffer.do_undo().unwrap();
         assert!(buffer.is_empty());
         assert_eq!(buffer[..], orig[..]);

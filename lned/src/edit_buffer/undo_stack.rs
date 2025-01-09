@@ -22,6 +22,13 @@ pub struct ChangeSet {
     id: Option<u64>,
     pub current_line_before: usize,
     pub current_line_after: usize,
+    changes: Vec<Change>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Change {
+    pub current_line_before: usize,
+    pub current_line_after: usize,
     diffs: Vec<Diff>,
 }
 
@@ -43,13 +50,55 @@ impl ChangeSet {
         ChangeSet {
             id: None,
             current_line_before: current_line,
-            current_line_after: 0,
-            diffs: Vec::new(),
+            current_line_after: current_line,
+            changes: Vec::new(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.diffs.is_empty()
+        self.changes.is_empty()
+    }
+
+    pub fn push(&mut self, mut change: Change, current_line: usize) {
+        change.current_line_after = current_line;
+        self.changes.push(change);
+    }
+
+    pub fn changes(&self) -> impl DoubleEndedIterator<Item = &Change> {
+        self.changes.iter()
+    }
+
+    fn invert(mut change_set: ChangeSet) -> ChangeSet {
+        mem::swap(
+            &mut change_set.current_line_before,
+            &mut change_set.current_line_after,
+        );
+        for change in &mut change_set.changes {
+            mem::swap(
+                &mut change.current_line_before,
+                &mut change.current_line_after,
+            );
+            for diff in &mut change.diffs {
+                let new_diff = match diff {
+                    Diff::Add(p, l) => Diff::Remove(*p, mem::take(l)),
+                    Diff::Remove(p, l) => Diff::Add(*p, mem::take(l)),
+                };
+                *diff = new_diff;
+            }
+            change.diffs.reverse();
+        }
+        change_set.changes.reverse();
+        change_set
+    }
+}
+
+impl Change {
+    pub fn new(current_line: usize) -> Self {
+        Change {
+            current_line_before: current_line,
+            current_line_after: current_line,
+            diffs: Vec::new(),
+        }
     }
 
     pub fn push_add(&mut self, position: usize, lines_added: Vec<String>) {
@@ -62,22 +111,6 @@ impl ChangeSet {
 
     pub fn diffs(&self) -> impl DoubleEndedIterator<Item = &Diff> {
         self.diffs.iter()
-    }
-
-    fn invert(mut change: ChangeSet) -> ChangeSet {
-        mem::swap(
-            &mut change.current_line_before,
-            &mut change.current_line_after,
-        );
-        for diff in &mut change.diffs {
-            let new_diff = match diff {
-                Diff::Add(p, l) => Diff::Remove(*p, mem::take(l)),
-                Diff::Remove(p, l) => Diff::Add(*p, mem::take(l)),
-            };
-            *diff = new_diff;
-        }
-        change.diffs.reverse();
-        change
     }
 }
 
@@ -99,7 +132,7 @@ impl UndoStack {
     ///
     /// This will preserve full history, including the undo
     /// commands issued before the current change.
-    pub fn push_undo(&mut self, mut change: ChangeSet) {
+    pub fn push_undo(&mut self, mut change: ChangeSet, current_line: usize) {
         if change.id.is_none() {
             change.id = Some(next_id());
             if !self.redo.is_empty() {
@@ -109,6 +142,7 @@ impl UndoStack {
                 self.undo.extend(self.redo.drain(..).map(ChangeSet::invert));
             }
         }
+        change.current_line_after = current_line;
         self.undo.push(change);
     }
 
@@ -161,10 +195,16 @@ mod tests {
     #[test]
     fn undo_stack_non_empty_fingerprint() {
         let mut s = UndoStack::new();
-        s.push_undo(ChangeSet::new(1));
+        let mut cs = ChangeSet::new(0);
+        let ch = Change::new(0);
+        cs.push(ch, 0);
+        s.push_undo(cs, 0);
         let fp1 = s.fingerprint();
         assert!(fp1.is_some());
-        s.push_undo(ChangeSet::new(1));
+        let mut cs = ChangeSet::new(0);
+        let ch = Change::new(0);
+        cs.push(ch, 0);
+        s.push_undo(cs, 0);
         let fp2 = s.fingerprint();
         assert!(fp2.is_some() && fp1 != fp2);
         assert!(!s.undo.is_empty());
@@ -178,13 +218,22 @@ mod tests {
     #[test]
     fn invert_swaps_add_and_remove() {
         let mut orig = ChangeSet::new(13);
-        orig.current_line_after = 42;
-        orig.push_add(2, vec!["added\n".to_owned()]);
-        orig.push_remove(1, vec!["removed\n".to_owned()]);
+        let mut orig_change = Change::new(13);
+        orig_change.current_line_after = 42;
+        orig_change.push_add(2, vec!["added\n".to_owned()]);
+        orig_change.push_remove(1, vec!["removed\n".to_owned()]);
+        orig.push(orig_change.clone(), orig_change.current_line_after);
         let inverted = ChangeSet::invert(orig.clone());
-        assert_eq!(inverted.current_line_before, orig.current_line_after);
-        assert_eq!(inverted.current_line_after, orig.current_line_before);
-        for diff in inverted.diffs() {
+        let inverted_change = &inverted.changes[0];
+        assert_eq!(
+            inverted_change.current_line_before,
+            orig_change.current_line_after
+        );
+        assert_eq!(
+            inverted_change.current_line_after,
+            orig_change.current_line_before
+        );
+        for diff in inverted_change.diffs() {
             match diff {
                 Diff::Add(p, l) => {
                     assert_eq!(*p, 1);
