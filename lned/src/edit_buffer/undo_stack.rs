@@ -1,3 +1,4 @@
+use std::fmt;
 use std::mem;
 /// `UndoStack` ecapsulates the undo and redo stacks, with methods that
 /// maintain the correct invarients.
@@ -17,7 +18,7 @@ pub struct UndoStack {
     redo: Vec<ChangeSet>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct ChangeSet {
     id: Option<u64>,
     pub current_line_before: usize,
@@ -39,19 +40,39 @@ pub enum Diff {
     Remove(usize, Vec<String>), // Removal of lines
 }
 
+#[derive(Debug)]
+pub struct TryFromChangeSetError;
+
+impl fmt::Display for TryFromChangeSetError {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        "ChangeSet doesn't contain exactly one Change".fmt(fmt)
+    }
+}
+
+impl std::error::Error for TryFromChangeSetError {}
+
 static INST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn next_id() -> u64 {
     INST_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
+impl TryFrom<ChangeSet> for Change {
+    type Error = TryFromChangeSetError;
+
+    fn try_from(mut v: ChangeSet) -> Result<Self, Self::Error> {
+        match v.changes.len() {
+            1 => Ok(v.changes.remove(0)),
+            _ => Err(TryFromChangeSetError),
+        }
+    }
+}
 impl ChangeSet {
     pub fn new(current_line: usize) -> Self {
         ChangeSet {
-            id: None,
             current_line_before: current_line,
             current_line_after: current_line,
-            changes: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -133,6 +154,9 @@ impl UndoStack {
     /// This will preserve full history, including the undo
     /// commands issued before the current change.
     pub fn push_undo(&mut self, mut change: ChangeSet, current_line: usize) {
+        if change.is_empty() {
+            return;
+        }
         if change.id.is_none() {
             change.id = Some(next_id());
             if !self.redo.is_empty() {
@@ -245,5 +269,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn try_from_changeset() {
+        let good =
+            ChangeSet { changes: vec![Change::new(1)], ..Default::default() };
+        let bad = ChangeSet::new(0);
+        let bad2 = ChangeSet {
+            changes: vec![Change::new(1), Change::new(1)],
+            ..Default::default()
+        };
+        Change::try_from(good).expect("successful conversion");
+        Change::try_from(bad).expect_err("should fail because no Changes");
+        Change::try_from(bad2).expect_err("should fail because > 1 Change");
     }
 }
