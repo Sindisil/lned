@@ -185,7 +185,7 @@ impl Address {
                     graphemes.next();
                     left = Some(match right {
                         Some(r) if r > buffer.len() => {
-                            return Err(Error::InvalidAddress)
+                            return Err(Error::InvalidAddress);
                         }
                         Some(r) => {
                             buffer.set_current_line(r);
@@ -456,7 +456,7 @@ fn parse_replacement_line(
         match graphemes.next() {
             None => break false,
             Some(gr) if gr == delimiter || gr == "\n" || gr == "\r\n" => {
-                break false
+                break false;
             }
             Some("\\") => {
                 let escaped =

@@ -520,10 +520,12 @@ mod tests {
         let buf_non_terminated = EditBuffer::from(vec!["1", "2", "3"]);
         let buf_partially_terminated = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert_eq!(buf_partially_terminated[..], buf_fully_terminated[..]);
-        assert!(buf_non_terminated
-            .text
-            .iter()
-            .all(|l| l.ends_with("\r\n") || l.ends_with('\n')));
+        assert!(
+            buf_non_terminated
+                .text
+                .iter()
+                .all(|l| l.ends_with("\r\n") || l.ends_with('\n'))
+        );
     }
 
     #[test]

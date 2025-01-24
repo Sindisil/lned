@@ -1,13 +1,13 @@
 use std::io;
 use std::io::Write;
 
+use crossterm::QueueableCommand;
 use crossterm::cursor::Hide;
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::Show;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
 use crossterm::terminal::ScrollUp;
-use crossterm::QueueableCommand;
 
 use crate::edit_buffer::BufferIndex;
 use crate::edit_buffer::EditBuffer;

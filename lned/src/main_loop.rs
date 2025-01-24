@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{self, prelude::*, BufReader};
+use std::io::{self, BufReader, prelude::*};
 use std::path::Path;
 
 use regex::Regex;
@@ -136,8 +136,8 @@ pub fn run(
     while !done {
         Cmd::read(&mut input, &mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
-            .and_then(|res| {
-                if let Some((cmd, sfx)) = res {
+            .and_then(|res| match res {
+                Some((cmd, sfx)) => {
                     let res = dispatch_cmd(
                         &cmd,
                         &mut buffer,
@@ -165,9 +165,8 @@ pub fn run(
                             None => Ok(None),
                         }
                     })
-                } else {
-                    Ok(None)
                 }
+                _ => Ok(None),
             })
             .or_else(|e| {
                 writeln!(output, "{e}").unwrap();
@@ -675,11 +674,7 @@ fn substitute_cmd(
         last_line = address.end() + step - 1;
     }
 
-    if changes.is_empty() {
-        Err(Error::NoMatch)
-    } else {
-        Ok(Some(changes))
-    }
+    if changes.is_empty() { Err(Error::NoMatch) } else { Ok(Some(changes)) }
 }
 
 fn transfer_cmd(
@@ -1914,10 +1909,10 @@ mod tests {
             SubstitutionScope::Single(1),
         )
         .unwrap();
-        assert_eq!(
-            buffer[2..4],
-            ["five six sev' eight\r\n", "nine t' eleven twelve\r\n"]
-        );
+        assert_eq!(buffer[2..4], [
+            "five six sev' eight\r\n",
+            "nine t' eleven twelve\r\n"
+        ]);
     }
 
     #[test]
@@ -1938,14 +1933,11 @@ mod tests {
             SubstitutionScope::Single(2),
         )
         .unwrap();
-        assert_eq!(
-            buffer[2..5],
-            [
-                "five six seven eight\r\n",
-                "nine ten en (eleven) twelve\r\n",
-                "thirteen een (fourteen) fifteen sixteen\r\n"
-            ]
-        );
+        assert_eq!(buffer[2..5], [
+            "five six seven eight\r\n",
+            "nine ten en (eleven) twelve\r\n",
+            "thirteen een (fourteen) fifteen sixteen\r\n"
+        ]);
     }
 
     #[test]
@@ -1970,14 +1962,11 @@ mod tests {
         };
         assert!(!changes.is_empty());
         buffer.push_undo(changes);
-        assert_eq!(
-            buffer[2..5],
-            [
-                "five six seven eight\r\n",
-                "nine ten en (eleven) twelve\r\n",
-                "thirteen een (fourteen) fifteen sixteen\r\n"
-            ]
-        );
+        assert_eq!(buffer[2..5], [
+            "five six seven eight\r\n",
+            "nine ten en (eleven) twelve\r\n",
+            "thirteen een (fourteen) fifteen sixteen\r\n"
+        ]);
         let after = buffer.clone();
 
         buffer.do_undo().unwrap();
@@ -1993,10 +1982,9 @@ mod tests {
         let source = Address::span(3, 5);
         let destination = Address::line(5);
         transfer_cmd(&mut buffer, Some(source), destination).unwrap();
-        assert_eq!(
-            &buffer[..],
-            &["1\n", "2\n", "3\n", "4\n", "5\n", "3\n", "4\n", "5\n", "6\n"]
-        );
+        assert_eq!(&buffer[..], &[
+            "1\n", "2\n", "3\n", "4\n", "5\n", "3\n", "4\n", "5\n", "6\n"
+        ]);
         let destination = Address::line(4);
         let res = transfer_cmd(&mut buffer, Some(source), destination)
             .expect_err("should fail");
