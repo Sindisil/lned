@@ -31,6 +31,7 @@ pub enum Error {
     NoMatch,
     NothingToUndo,
     NothingToRedo,
+    GlobalCmdError { source: Box<Error>, changes: Option<ChangeSet> },
 }
 
 impl std::error::Error for Error {
@@ -53,6 +54,7 @@ impl std::error::Error for Error {
             | Error::WriteLines { ref source }
             | Error::ReadLines { ref source } => Some(source),
             Error::ReadGlobalCmd { ref source } => Some(source),
+            Error::GlobalCmdError { ref source, .. } => Some(source),
         }
     }
 }
@@ -103,6 +105,9 @@ impl fmt::Display for Error {
             }
             Error::NothingToUndo => write!(f, "nothing to undo"),
             Error::NothingToRedo => write!(f, "nothing to redo"),
+            Error::GlobalCmdError { .. } => {
+                write!(f, "error executing global command")
+            }
         }
     }
 }
@@ -186,7 +191,7 @@ fn dispatch_cmd(
     previous_pattern: &mut Option<regex::Regex>,
 ) -> Result<bool, Error> {
     let mut done = false;
-    let changes = match cmd {
+    let res = match cmd {
         // dispatch editor commands
         Cmd::Append(address) => append_cmd(buffer, input, *address),
         Cmd::Delete(address) => delete_cmd(buffer, *address),
@@ -199,23 +204,14 @@ fn dispatch_cmd(
             file_cmd(buffer, output, filename.as_deref());
             Ok(None)
         }
-        Cmd::Global(address, pattern, commands) => {
-            let (changes, err) = global_cmd(
-                buffer,
-                output,
-                *address,
-                pattern,
-                commands,
-                previous_pattern,
-            );
-            match err {
-                None => Ok(Some(changes)),
-                Some(e) => {
-                    buffer.push_undo(changes);
-                    Err(e)
-                }
-            }
-        }
+        Cmd::Global(address, pattern, commands) => global_cmd(
+            buffer,
+            output,
+            *address,
+            pattern,
+            commands,
+            previous_pattern,
+        ),
         Cmd::Insert(address) => insert_cmd(buffer, input, *address),
         Cmd::Join(address) => join_cmd(buffer, *address),
         Cmd::Move(address, destination) => {
@@ -237,9 +233,17 @@ fn dispatch_cmd(
         Cmd::Write(address, filename) => {
             write_cmd(buffer, output, *address, filename.as_deref())
         }
-    }?;
-    if let Some(changes) = changes {
-        buffer.push_undo(changes);
+    };
+    match res {
+        Ok(Some(changes)) => buffer.push_undo(changes),
+        Ok(None) => (),
+        Err(Error::GlobalCmdError { source, changes }) => {
+            if let Some(changes) = changes {
+                buffer.push_undo(changes);
+            }
+            return Err(*source);
+        }
+        Err(e) => return Err(e),
     }
     Ok(done)
 }
@@ -390,8 +394,9 @@ fn global_cmd(
     pattern: &Regex,
     commands: &str,
     previous_pattern: &mut Option<Regex>,
-) -> (ChangeSet, Option<Error>) {
+) -> Result<Option<ChangeSet>, Error> {
     let mut changes = ChangeSet::new(buffer.current_line());
+    *previous_pattern = Some(pattern.clone());
     // make a list of matching lines
     let search_range = address.map_or_else(|| 1..=buffer.len(), Into::into);
     let matched_lines = (search_range)
@@ -399,7 +404,7 @@ fn global_cmd(
             buffer[n].lines().next().is_some_and(|l| pattern.is_match(l))
         })
         .collect::<VecDeque<usize>>();
-    let ret = do_global_cmds(
+    let res = do_global_cmds(
         buffer,
         output,
         commands,
@@ -407,7 +412,17 @@ fn global_cmd(
         matched_lines,
         &mut changes,
     );
-    (changes, ret.err())
+    match res {
+        Ok(()) => Ok(Some(changes)),
+        Err(e) => match e {
+            Error::NestedGlobalCmd => Err(Error::NestedGlobalCmd),
+            Error::UnsupportedGlobalCmd => Err(Error::UnsupportedGlobalCmd),
+            e => Err(Error::GlobalCmdError {
+                source: Box::new(e),
+                changes: Some(changes),
+            }),
+        },
+    }
 }
 
 fn do_global_cmds(
@@ -428,7 +443,7 @@ fn do_global_cmds(
             Cmd::read(&mut input, buffer, previous_pattern)
                 .map_err(|source| Error::ReadGlobalCmd { source })?
         {
-            let change = match cmd {
+            let cs = match cmd {
                 Cmd::Append(address) => append_cmd(buffer, &mut input, address),
                 Cmd::Change(address) => change_cmd(buffer, &mut input, address),
                 Cmd::Delete(address) => delete_cmd(buffer, address),
@@ -440,17 +455,26 @@ fn do_global_cmds(
                 Cmd::Null(address) | Cmd::Print(address) => {
                     print_cmd(buffer, output, address)
                 }
+                Cmd::Substitute(address, pattern, replacement, scope) => {
+                    substitute_cmd(
+                        buffer,
+                        address,
+                        &pattern,
+                        &replacement,
+                        scope,
+                    )
+                }
                 Cmd::Transfer(address, destination) => {
                     transfer_cmd(buffer, address, destination)
                 }
                 _ => Err(Error::UnsupportedGlobalCmd),
             }?;
-            if let Some(change) = change {
-                let change = Change::try_from(change).expect(
-                    "valid global commands return single Change ChangeSet",
-                );
-                adjust_global_list(&mut matched_lines, &change);
-                changes.push(change, buffer.current_line());
+            if let Some(mut cs) = cs {
+                for change in cs.drain() {
+                    adjust_global_list(&mut matched_lines, &change);
+                    let cl_after = change.current_line_after;
+                    changes.push(change, cl_after);
+                }
             }
             if let Some(sfx) = sfx {
                 let cur_line_addr = Some(Address::line(buffer.current_line()));
@@ -601,7 +625,10 @@ fn substitute_cmd(
 ) -> Result<Option<ChangeSet>, Error> {
     let address =
         address.unwrap_or_else(|| Address::line(buffer.current_line()));
-    if address.start() == 0 || address.start() > address.end() {
+    if address.start() == 0
+        || address.start() > address.end()
+        || address.end() > buffer.len()
+    {
         return Err(Error::InvalidAddress);
     }
 
@@ -992,7 +1019,7 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("four").unwrap();
         let commands = "p\n".to_owned();
-        let (changes, err) = global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             None,
@@ -1000,8 +1027,11 @@ mod tests {
             &commands,
             &mut prev_pattern,
         );
-        assert!(changes.is_empty());
-        assert!(err.is_none());
+        match res {
+            Err(e) => panic!("unexpected error \"{e:?}\""),
+            Ok(Some(changes)) => assert!(changes.is_empty()),
+            Ok(None) => panic!("should have returned an empty ChangeSet"),
+        }
         assert!(output.is_empty());
     }
 
@@ -1013,7 +1043,7 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "1,2g/ee/n\n".to_owned();
-        let (_, err) = global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             None,
@@ -1021,7 +1051,8 @@ mod tests {
             &commands,
             &mut prev_pattern,
         );
-        assert!(matches!(err, Some(Error::NestedGlobalCmd)));
+        eprintln!("{res:?}");
+        assert!(matches!(res, Err(Error::NestedGlobalCmd)));
     }
 
     #[test]
@@ -1033,16 +1064,17 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "\n".to_owned();
-        let (changes, err) = global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 3)),
             &pat,
             &commands,
             &mut prev_pattern,
-        );
+        ) else {
+            panic!("should have returned Ok(Some(ChangeSet))");
+        };
         assert!(changes.is_empty());
-        assert!(err.is_none());
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\r\nthree\r\n");
     }
 
@@ -1054,16 +1086,17 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "p\r\n".to_owned();
-        let (changes, err) = global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             None,
             &pat,
             &commands,
             &mut prev_pattern,
-        );
+        ) else {
+            panic!("should have returned Ok(Some(ChangeSet))");
+        };
         assert!(changes.is_empty());
-        assert!(err.is_none());
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\nthree\n");
     }
 
@@ -1075,16 +1108,17 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "n\r\n".to_owned();
-        let (changes, err) = global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 3)),
             &pat,
             &commands,
             &mut prev_pattern,
-        );
+        ) else {
+            panic!("should have returned Ok(Some(ChangeSet))");
+        };
         assert!(changes.is_empty());
-        assert!(err.is_none());
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "2  two\n3  three\n");
     }
 
@@ -1098,7 +1132,7 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
         let commands = "-1,.n\r\n".to_owned();
-        let (changes, None) = global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(2, 5)),
@@ -1129,7 +1163,7 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
         let commands = "a\nappend\n.\n".to_owned();
-        let (changes, None) = global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 6)),
@@ -1171,7 +1205,7 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("([a-z]*e)$").unwrap();
         let commands = ".,+c\nchange 1\nchange 2\nchange 3\n.\n".to_owned();
-        let (changes, None) = global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 6)),
@@ -1179,10 +1213,7 @@ mod tests {
             &commands,
             &mut prev_pattern,
         ) else {
-            panic!(
-                "global_cmd's err return wasn't None!
-"
-            )
+            panic!("global_cmd's err return wasn't None!")
         };
         assert!(!changes.is_empty());
         buffer.push_undo(changes);
@@ -1211,7 +1242,7 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
         let commands = "d\nn\n".to_owned();
-        let (changes, None) = global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 6)),
@@ -1262,7 +1293,7 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
         let commands = "i\r\ninsert\r\n.\r\n".to_owned();
-        let (changes, None) = global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 6)),
@@ -1289,6 +1320,133 @@ mod tests {
     }
 
     #[test]
+    fn global_cmd_substitute_with_error() {
+        let mut buffer = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five six seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen sixteen",
+            "5:seventeen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen sixteen",
+            "7:nine ten eleven twelve",
+            "8:five six seven eight",
+            "9:one two three four\n",
+        ]);
+        buffer.set_current_line(5);
+        let before = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five ",
+            "'x seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen ",
+            "'xteen",
+            "5:",
+            "'venteen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen ",
+            "'xteen",
+            "7:nine ten eleven twelve",
+            "8:five six seven eight",
+            "9:one two three four\n",
+        ]);
+        expected.set_current_line(12);
+        let expected_output = " 6  'xteen\n10  'xteen\n";
+
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("s[aeiou]").unwrap();
+        let commands = ".,+2s//\\\n'/n".to_string();
+        let Err(Error::GlobalCmdError { source, changes }) = global_cmd(
+            &mut buffer,
+            &mut output,
+            None,
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        ) else {
+            panic!("should have returned GlobalCmdError");
+        };
+        assert!(matches!(*source, Error::InvalidAddress));
+        let Some(changes) = changes else {
+            panic!("changes was None!");
+        };
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert_eq!(output, expected_output);
+        buffer.push_undo(changes);
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+        buffer.do_undo().unwrap();
+        assert_eq!(buffer.current_line(), before.current_line());
+        assert_eq!(&before[..], &buffer[..]);
+        buffer.do_redo().unwrap();
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+    }
+
+    #[test]
+    fn global_cmd_substitute() {
+        let mut buffer = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five six seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen sixteen",
+            "5:seventeen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen sixteen",
+            "7:nine ten eleven twelve",
+            "8:five six seven eight",
+            "9:one two three four\n",
+        ]);
+        buffer.set_current_line(5);
+        let before = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five ",
+            "'x seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen ",
+            "'xteen",
+            "5:",
+            "'venteen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen ",
+            "'xteen",
+            "7:nine ten eleven twelve",
+            "8:five ",
+            "'x seven eight",
+            "9:one two three four\n",
+        ]);
+        expected.set_current_line(13);
+        let expected_output = " 3  'x seven eight\n 6  'xteen\n 8  'venteen eighteen nineteen twenty\n10  'xteen\n13  'x seven eight\n";
+
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("s[aeiou]").unwrap();
+        let commands = "s//\\\n'/n".to_string();
+        let Some(changes) = global_cmd(
+            &mut buffer,
+            &mut output,
+            None,
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .expect("should have been Ok") else {
+            panic!("should have been Some(changes)!");
+        };
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert_eq!(output, expected_output);
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+        buffer.do_undo().unwrap();
+        assert_eq!(buffer.current_line(), before.current_line());
+        assert_eq!(&before[..], &buffer[..]);
+        buffer.do_redo().unwrap();
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+    }
+
+    #[test]
     fn global_cmd_transfer() {
         let mut buffer = EditBuffer::from(vec![
             "one\r\n", "two", "three", "four", "five", "six",
@@ -1302,15 +1460,16 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
         let commands = "t$\r\n".to_owned();
-        let (changes, None) = global_cmd(
+        let Some(changes) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 6)),
             &pat,
             &commands,
             &mut prev_pattern,
-        ) else {
-            panic!("unexpected global_cmd error!");
+        )
+        .expect("should have been Ok!") else {
+            panic!("should have been Some(changes)!");
         };
         assert!(!changes.is_empty());
         buffer.push_undo(changes);
@@ -1336,18 +1495,15 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new(r"t..").unwrap();
         let commands = "e filename.txt\n".to_owned();
-        let (changes, Some(err)) = global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 3)),
             &pat,
             &commands,
             &mut prev_pattern,
-        ) else {
-            panic!("global_cmd should have returned Some(error)!");
-        };
-        assert!(changes.is_empty());
-        assert!(matches!(err, Error::UnsupportedGlobalCmd));
+        );
+        assert!(matches!(res, Err(Error::UnsupportedGlobalCmd)));
     }
 
     #[test]
@@ -1528,13 +1684,9 @@ mod tests {
     fn file_cmd_dispatch() {
         let input = b"f\nf new_file_name.txt\nq\n";
         let mut output = Vec::new();
-        let args = CmdArgs {
-            file: None,
-            //            file: Some(PathBuf::from("test/assets/text_with_final_eol.txt")),
-        };
+        let args = CmdArgs { file: None };
         run(&input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        //        assert!(output.contains("test/assets/text_with_final_eol.txt"));
         assert!(output.contains("no current filename"));
         assert!(output.contains("new_file_name.txt"));
     }

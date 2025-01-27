@@ -527,7 +527,7 @@ pub(crate) fn parse_substitute_cmd(
     let line_read_options =
         LineReaderOptions { prompt: "".into(), ..Default::default() };
     let mut line = String::new();
-    let cmd = loop {
+    let (cmd, sfx) = loop {
         input
             .read(&mut line, &line_read_options)
             .map_err(|source| Error::ReadCommand { source })?;
@@ -539,11 +539,11 @@ pub(crate) fn parse_substitute_cmd(
         )?;
         if !more_lines {
             let scope = parse_substitution_scope(&mut graphemes)?;
-            break Cmd::Substitute(address, pattern, replacement, scope);
+            let sfx = parse_print_suffix(&mut graphemes)?;
+            break (Cmd::Substitute(address, pattern, replacement, scope), sfx);
         }
         line.clear();
     };
-    let sfx = parse_print_suffix(graphemes)?;
     Ok(Some((cmd, sfx)))
 }
 
@@ -710,7 +710,8 @@ fn parse_global_command_line(
     cmd_line: &mut String,
 ) -> Result<bool, Error> {
     Ok(loop {
-        match graphemes.next() {
+        let gr = graphemes.next();
+        match gr {
             None => break false,
             Some("\\") => {
                 let escaped =
@@ -733,23 +734,14 @@ fn parse_global_command_line(
     })
 }
 
-fn parse_global_cmd(
-    graphemes: &mut Peekable<Graphemes<'_>>,
-    address: Option<Address>,
-    previous_pattern: &mut Option<Regex>,
+fn parse_global_command_list(
+    cmd_line: &mut Peekable<Graphemes<'_>>,
     input: &mut impl LineRead,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
-    let (pattern, _) = parse_pattern(graphemes, None)?;
-    if !(pattern.is_empty()) {
-        *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
-    }
-    let pattern = previous_pattern.clone().ok_or(Error::NoPreviousPattern)?;
-
+) -> Result<String, Error> {
     let mut commands = String::new();
-
     // Copy first command to commands string,
     // noting and unescaping escaped EOL.
-    let mut more_lines = parse_global_command_line(graphemes, &mut commands)?;
+    let mut more_lines = parse_global_command_line(cmd_line, &mut commands)?;
 
     // if the EOL was escaped, use read_input_lines()
     // to read in rest of command list
@@ -767,6 +759,22 @@ fn parse_global_cmd(
             line.clear();
         }
     }
+    Ok(commands)
+}
+
+fn parse_global_cmd(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+    address: Option<Address>,
+    previous_pattern: &mut Option<Regex>,
+    input: &mut impl LineRead,
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+    let (pattern, _) = parse_pattern(graphemes, None)?;
+    if !(pattern.is_empty()) {
+        *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
+    }
+    let pattern = previous_pattern.clone().ok_or(Error::NoPreviousPattern)?;
+
+    let commands = parse_global_command_list(graphemes, input)?;
 
     Ok(Some((Cmd::Global(address, pattern, commands), None)))
 }
@@ -1594,6 +1602,26 @@ mod tests {
         assert!(addr.is_none());
         assert_eq!(pat.as_str(), "pat");
         assert_eq!(cmds, "p\r\n");
+    }
+
+    #[test]
+    fn parse_substitute_global_cmd() {
+        let mut input_1 = "/pat/s//\\\\\\\n".graphemes(true).peekable();
+        let mut input_2 = "'/n\n".as_bytes();
+        let mut prev_pattern = None;
+        let res = parse_global_cmd(
+            &mut input_1,
+            None,
+            &mut prev_pattern,
+            &mut input_2,
+        )
+        .unwrap();
+        let Some((Cmd::Global(addr, pat, cmds), None)) = res else {
+            panic!("{res:?} not Cmd::Global!");
+        };
+        assert!(addr.is_none());
+        assert_eq!(pat.as_str(), "pat");
+        assert_eq!(cmds, "s//\\\\\n'/n\n");
     }
 
     #[test]

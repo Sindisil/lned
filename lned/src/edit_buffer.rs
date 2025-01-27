@@ -418,6 +418,7 @@ impl EditBuffer {
             }
             self.current_line = change.current_line_after;
         }
+        self.current_line = redo.current_line_after;
         self.undo_stack.push_undo(redo, self.current_line);
         Ok(())
     }

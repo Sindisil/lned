@@ -11,6 +11,7 @@ use std::mem;
 /// order to allow "undoing the undos" (i.e., not losing any edit
 /// history).
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::vec::Drain;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UndoStack {
@@ -87,6 +88,11 @@ impl ChangeSet {
 
     pub fn changes(&self) -> impl DoubleEndedIterator<Item = &Change> {
         self.changes.iter()
+    }
+
+    pub fn drain(&mut self) -> Drain<'_, Change> {
+        self.current_line_after = self.current_line_before;
+        self.changes.drain(..)
     }
 
     fn invert(mut change_set: ChangeSet) -> ChangeSet {
