@@ -2,7 +2,7 @@
 name = "line_reader"
 description = "accept a line of input (similar to read-line)"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 
 [dependencies]

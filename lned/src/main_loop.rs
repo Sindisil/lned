@@ -1,14 +1,14 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::{File, OpenOptions};
-use std::io::{self, prelude::*, BufReader};
+use std::io::{self, BufReader, prelude::*};
 use std::path::Path;
 
 use regex::Regex;
 
 use crate::cli;
 use crate::command::{self, Address, Cmd, PrintSuffix, SubstitutionScope};
-use crate::edit_buffer::{ChangeSet, EditBuffer};
+use crate::edit_buffer::{Change, ChangeSet, Diff, EditBuffer};
 
 use line_reader::LineRead;
 
@@ -31,6 +31,7 @@ pub enum Error {
     NoMatch,
     NothingToUndo,
     NothingToRedo,
+    GlobalCmdErrorStop { source: Box<Error>, changes: Option<ChangeSet> },
 }
 
 impl std::error::Error for Error {
@@ -53,6 +54,7 @@ impl std::error::Error for Error {
             | Error::WriteLines { ref source }
             | Error::ReadLines { ref source } => Some(source),
             Error::ReadGlobalCmd { ref source } => Some(source),
+            Error::GlobalCmdErrorStop { ref source, .. } => Some(source),
         }
     }
 }
@@ -103,6 +105,9 @@ impl fmt::Display for Error {
             }
             Error::NothingToUndo => write!(f, "nothing to undo"),
             Error::NothingToRedo => write!(f, "nothing to redo"),
+            Error::GlobalCmdErrorStop { .. } => {
+                write!(f, "error executing global command")
+            }
         }
     }
 }
@@ -121,9 +126,14 @@ pub fn run(
     let mut previous_pattern: Option<regex::Regex> = None;
 
     if let Some(file) = &args.file {
-        edit_cmd(&mut buffer, &mut output, Some(file), previous_cmd.as_ref())
-            .or_else(|e| writeln!(output, "{e}"))
-            .unwrap();
+        if let Err(e) = edit_cmd(
+            &mut buffer,
+            &mut output,
+            Some(file),
+            previous_cmd.as_ref(),
+        ) {
+            writeln!(output, "{e}").unwrap();
+        }
     }
 
     // Accept and process commands until fatal error or exit
@@ -131,37 +141,42 @@ pub fn run(
     while !done {
         Cmd::read(&mut input, &mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
-            .and_then(|(cmd, sfx)| {
-                let res = dispatch_cmd(
-                    &cmd,
-                    &mut buffer,
-                    &mut output,
-                    &mut input,
-                    &mut previous_cmd,
-                    &mut previous_pattern,
-                );
-                previous_cmd = Some(cmd);
-                res.and_then(|exit| {
-                    done = exit;
-                    let cur_line_addr =
-                        Some(Address::line(buffer.current_line()));
-                    match sfx {
-                        Some(PrintSuffix::Print) => {
-                            print_cmd(&mut buffer, &mut output, cur_line_addr)
+            .and_then(|res| match res {
+                Some((cmd, sfx)) => {
+                    let res = dispatch_cmd(
+                        &cmd,
+                        &mut buffer,
+                        &mut output,
+                        &mut input,
+                        &mut previous_cmd,
+                        &mut previous_pattern,
+                    );
+                    previous_cmd = Some(cmd);
+                    res.and_then(|exit| {
+                        done = exit;
+                        let cur_line_addr =
+                            Some(Address::line(buffer.current_line()));
+                        match sfx {
+                            Some(PrintSuffix::Print) => print_cmd(
+                                &mut buffer,
+                                &mut output,
+                                cur_line_addr,
+                            ),
+                            Some(PrintSuffix::Enumerate) => enumerate_cmd(
+                                &mut buffer,
+                                &mut output,
+                                cur_line_addr,
+                            ),
+                            None => Ok(None),
                         }
-                        Some(PrintSuffix::Enumerate) => enumerate_cmd(
-                            &mut buffer,
-                            &mut output,
-                            cur_line_addr,
-                        ),
-                        None => Ok(()),
-                    }
-                })
+                    })
+                }
+                _ => Ok(None),
             })
             .or_else(|e| {
                 writeln!(output, "{e}").unwrap();
                 output.flush().unwrap();
-                Ok(())
+                Ok(None)
             })?;
     }
     Ok(())
@@ -187,7 +202,7 @@ fn dispatch_cmd(
         Cmd::Enumerate(address) => enumerate_cmd(buffer, output, *address),
         Cmd::File(filename) => {
             file_cmd(buffer, output, filename.as_deref());
-            Ok(())
+            Ok(None)
         }
         Cmd::Global(address, pattern, commands) => global_cmd(
             buffer,
@@ -205,49 +220,53 @@ fn dispatch_cmd(
         Cmd::Null(address) => null_cmd(buffer, output, *address),
         Cmd::Print(address) => print_cmd(buffer, output, *address),
         Cmd::Quit => {
-            quit_cmd(buffer, previous_cmd.as_ref()).map(|()| done = true)
+            quit_cmd(buffer, previous_cmd.as_ref()).inspect(|_| done = true)
         }
-        Cmd::Redo => {
-            buffer.do_redo()?;
-            Ok(())
-        }
+        Cmd::Redo => buffer.do_redo().map(|()| None),
         Cmd::Substitute(address, pattern, replacement, scope) => {
             substitute_cmd(buffer, *address, pattern, replacement, *scope)
         }
         Cmd::Transfer(address, destination) => {
             transfer_cmd(buffer, *address, *destination)
         }
-        Cmd::Undo => {
-            buffer.do_undo()?;
-            Ok(())
-        }
+        Cmd::Undo => buffer.do_undo().map(|()| None),
         Cmd::Write(address, filename) => {
             write_cmd(buffer, output, *address, filename.as_deref())
         }
     };
-    res.map_or_else(Err, |()| Ok(done))
+    match res {
+        Ok(Some(changes)) => buffer.push_undo(changes),
+        Ok(None) => (),
+        Err(Error::GlobalCmdErrorStop { source, changes }) => {
+            if let Some(changes) = changes {
+                buffer.push_undo(changes);
+            }
+            return Err(*source);
+        }
+        Err(e) => return Err(e),
+    }
+    Ok(done)
 }
 
 fn append_cmd(
     buffer: &mut EditBuffer,
     input: &mut impl LineRead,
     address: Option<Address>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
     Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
-    buffer.do_append(address, lines, None);
-    Ok(())
+    Ok(Some(buffer.do_append(address, lines)))
 }
 
 fn change_cmd(
     buffer: &mut EditBuffer,
     input: &mut impl LineRead,
     address: Option<Address>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(Error::InvalidAddress);
     }
@@ -255,21 +274,17 @@ fn change_cmd(
     let mut lines = Vec::new();
     Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
-    buffer.do_change(address, lines, None);
-    Ok(())
+    Ok(Some(buffer.do_change(address, lines)))
 }
 
 fn delete_cmd(
     buffer: &mut EditBuffer,
     address: Option<Address>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     match address {
         Some(addr) if addr.start() == 0 => Err(Error::InvalidAddress),
         None if buffer.current_line() == 0 => Err(Error::InvalidAddress),
-        _ => {
-            buffer.do_delete(address, None);
-            Ok(())
-        }
+        _ => Ok(Some(buffer.do_delete(address))),
     }
 }
 
@@ -278,7 +293,7 @@ fn edit_cmd(
     output: &mut impl Write,
     filename: Option<&Path>,
     previous_cmd: Option<&Cmd>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     if buffer.is_dirty() {
         if matches!(previous_cmd, Some(Cmd::Edit(_))) {
             buffer.reset_clean_fingerprint();
@@ -317,15 +332,15 @@ fn edit_cmd(
         output.flush().unwrap();
         writeln!(output, "missing line terminator appended").unwrap();
     }
-buffer.set_current_line(buffer.len());
-    Ok(())
+    buffer.set_current_line(buffer.len());
+    Ok(None)
 }
 
 fn enumerate_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     address: Option<Address>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     let span = if let Some(addr) = address {
         addr.into()
     } else {
@@ -353,7 +368,7 @@ fn enumerate_cmd(
             .unwrap();
     }
     output.flush().unwrap();
-    Ok(())
+    Ok(None)
 }
 
 fn file_cmd(
@@ -379,64 +394,151 @@ fn global_cmd(
     pattern: &Regex,
     commands: &str,
     previous_pattern: &mut Option<Regex>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
+    let mut changes = ChangeSet::new(buffer.current_line());
+    *previous_pattern = Some(pattern.clone());
     // make a list of matching lines
     let search_range = address.map_or_else(|| 1..=buffer.len(), Into::into);
-    let mut matched_lines = (search_range)
+    let matched_lines = (search_range)
         .filter(|&n| {
             buffer[n].lines().next().is_some_and(|l| pattern.is_match(l))
         })
         .collect::<VecDeque<usize>>();
+    let res = do_global_cmds(
+        buffer,
+        output,
+        commands,
+        previous_pattern,
+        matched_lines,
+        &mut changes,
+    );
+    match res {
+        Ok(()) => Ok(Some(changes)),
+        Err(e) => match e {
+            Error::NestedGlobalCmd => Err(Error::NestedGlobalCmd),
+            Error::UnsupportedGlobalCmd => Err(Error::UnsupportedGlobalCmd),
+            e => Err(Error::GlobalCmdErrorStop {
+                source: Box::new(e),
+                changes: Some(changes),
+            }),
+        },
+    }
+}
 
+fn do_global_cmds(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    commands: &str,
+    previous_pattern: &mut Option<Regex>,
+    mut matched_lines: VecDeque<usize>,
+    changes: &mut ChangeSet,
+) -> Result<(), Error> {
     // iterate over list
     while let Some(line_num) = matched_lines.pop_front() {
         buffer.set_current_line(line_num);
         let mut input = commands.as_bytes();
 
         // parse and execute command list for line
-        let (cmd, sfx) = Cmd::read(&mut input, buffer, previous_pattern)
-            .map_err(|source| Error::ReadGlobalCmd { source })?;
-        match cmd {
-            Cmd::Enumerate(address) => enumerate_cmd(buffer, output, address)?,
-            Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
-            Cmd::Null(address) | Cmd::Print(address) => {
-                print_cmd(buffer, output, address)?;
+        while let Some((cmd, sfx)) =
+            Cmd::read(&mut input, buffer, previous_pattern)
+                .map_err(|source| Error::ReadGlobalCmd { source })?
+        {
+            let cs = match cmd {
+                Cmd::Append(address) => append_cmd(buffer, &mut input, address),
+                Cmd::Change(address) => change_cmd(buffer, &mut input, address),
+                Cmd::Delete(address) => delete_cmd(buffer, address),
+                Cmd::Enumerate(address) => {
+                    enumerate_cmd(buffer, output, address)
+                }
+                Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
+                Cmd::Insert(address) => insert_cmd(buffer, &mut input, address),
+                Cmd::Join(address) => join_cmd(buffer, address),
+                Cmd::Move(address, destination) => {
+                    move_cmd(buffer, address, destination)
+                }
+                Cmd::Null(address) | Cmd::Print(address) => {
+                    print_cmd(buffer, output, address)
+                }
+                Cmd::Substitute(address, pattern, replacement, scope) => {
+                    substitute_cmd(
+                        buffer,
+                        address,
+                        &pattern,
+                        &replacement,
+                        scope,
+                    )
+                }
+                Cmd::Transfer(address, destination) => {
+                    transfer_cmd(buffer, address, destination)
+                }
+                _ => Err(Error::UnsupportedGlobalCmd),
+            }?;
+            if let Some(mut cs) = cs {
+                for change in cs.drain() {
+                    adjust_global_list(&mut matched_lines, &change);
+                    let cl_after = change.current_line_after;
+                    changes.push(change, cl_after);
+                }
             }
-            _ => return Err(Error::UnsupportedGlobalCmd),
-        }
-        if let Some(sfx) = sfx {
-            let cur_line_addr = Some(Address::line(buffer.current_line()));
-            match sfx {
-                PrintSuffix::Print => print_cmd(buffer, output, cur_line_addr)?,
-                PrintSuffix::Enumerate => {
-                    enumerate_cmd(buffer, output, cur_line_addr)?;
+            if let Some(sfx) = sfx {
+                let cur_line_addr = Some(Address::line(buffer.current_line()));
+                match sfx {
+                    PrintSuffix::Print => {
+                        print_cmd(buffer, output, cur_line_addr)?;
+                    }
+                    PrintSuffix::Enumerate => {
+                        enumerate_cmd(buffer, output, cur_line_addr)?;
+                    }
                 }
             }
         }
     }
-
     Ok(())
+}
+
+fn adjust_global_list(list: &mut VecDeque<usize>, change: &Change) {
+    for diff in change.diffs() {
+        match diff {
+            Diff::Remove(start, lines) => {
+                let end = start + lines.len();
+                list.retain_mut(|n| {
+                    if *n < *start {
+                        true
+                    } else if *n > end {
+                        *n -= lines.len();
+                        true
+                    } else {
+                        false
+                    }
+                });
+            }
+            Diff::Add(start, lines) => {
+                for n in list.iter_mut().filter(|n| **n > *start) {
+                    *n += lines.len();
+                }
+            }
+        }
+    }
 }
 
 fn insert_cmd(
     buffer: &mut EditBuffer,
     input: &mut impl LineRead,
     address: Option<Address>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
     Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
-    buffer.do_insert(address, lines, None);
-    Ok(())
+    Ok(Some(buffer.do_insert(address, lines)))
 }
 
 fn join_cmd(
     buffer: &mut EditBuffer,
     address: Option<Address>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     if buffer.is_empty() {
         return Err(Error::InvalidAddress);
     }
@@ -444,11 +546,8 @@ fn join_cmd(
         None if buffer.current_line() == buffer.len() => {
             Err(Error::InvalidAddress)
         }
-        Some(a) if a.line_count() == 1 => Ok(()),
-        _ => {
-            buffer.do_join(address, None);
-            Ok(())
-        }
+        Some(a) if a.line_count() == 1 => Ok(None),
+        _ => Ok(Some(buffer.do_join(address))),
     }
 }
 
@@ -456,21 +555,20 @@ fn move_cmd(
     buffer: &mut EditBuffer,
     mut address: Option<Address>,
     destination: Address,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     let source =
         address.get_or_insert_with(|| Address::line(buffer.current_line()));
     if destination.end() >= source.start() && destination.end() < source.end() {
         return Err(Error::DestinationIntersectsSource);
     }
-    buffer.do_move(address, destination, None);
-    Ok(())
+    Ok(Some(buffer.do_move(address, destination)))
 }
 
 fn null_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     address: Option<Address>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     let address = Some(Address::line(
         address.map_or_else(|| buffer.current_line() + 1, |a| a.end()),
     ));
@@ -481,7 +579,7 @@ fn print_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     address: Option<Address>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     let span = if let Some(addr) = address {
         addr.into()
     } else {
@@ -504,7 +602,7 @@ fn print_cmd(
         output.write_all(l.as_bytes()).unwrap();
     }
     output.flush().unwrap();
-    Ok(())
+    Ok(None)
 }
 
 /// Implements quit command.
@@ -514,10 +612,10 @@ fn print_cmd(
 fn quit_cmd(
     buffer: &EditBuffer,
     previous_cmd: Option<&Cmd>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     match previous_cmd {
-        Some(Cmd::Quit) => Ok(()),
-        _ if !buffer.is_dirty() => Ok(()),
+        Some(Cmd::Quit) => Ok(None),
+        _ if !buffer.is_dirty() => Ok(None),
         _ => Err(Error::QuitUnwrittenChanges),
     }
 }
@@ -528,10 +626,13 @@ fn substitute_cmd(
     pattern: &Regex,
     replacement: &str,
     scope: SubstitutionScope,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     let address =
         address.unwrap_or_else(|| Address::line(buffer.current_line()));
-    if address.start() == 0 || address.start() > address.end() {
+    if address.start() == 0
+        || address.start() > address.end()
+        || address.end() > buffer.len()
+    {
         return Err(Error::InvalidAddress);
     }
 
@@ -575,11 +676,13 @@ fn substitute_cmd(
             if let Some(span_start) = span_start.take() {
                 let step =
                     replacement_lines.len() - (line_num - span_start) + 1;
-                buffer.do_change(
+                let change = buffer.do_change(
                     Some(Address::span(span_start, line_num - 1)),
                     replacement_lines,
-                    Some(&mut changes),
                 );
+                let change = Change::try_from(change)
+                    .expect("do_change always returns single Change ChangeSet");
+                changes.push(change, buffer.current_line());
                 replacement_lines = Vec::new();
                 step
             } else {
@@ -588,11 +691,13 @@ fn substitute_cmd(
         };
         if line_num == last_line {
             if let Some(span_start) = span_start {
-                buffer.do_change(
+                let change = buffer.do_change(
                     Some(Address::span(span_start, line_num)),
                     replacement_lines,
-                    Some(&mut changes),
                 );
+                let change = Change::try_from(change)
+                    .expect("always returns single Change ChangeSet");
+                changes.push(change, buffer.current_line());
             }
             break;
         }
@@ -600,27 +705,20 @@ fn substitute_cmd(
         last_line = address.end() + step - 1;
     }
 
-    if changes.is_empty() {
-        Err(Error::NoMatch)
-    } else {
-        changes.current_line_after = buffer.current_line();
-        buffer.push_undo(changes);
-        Ok(())
-    }
+    if changes.is_empty() { Err(Error::NoMatch) } else { Ok(Some(changes)) }
 }
 
 fn transfer_cmd(
     buffer: &mut EditBuffer,
     mut address: Option<Address>,
     destination: Address,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     let source =
         address.get_or_insert_with(|| Address::line(buffer.current_line()));
     if destination.end() >= source.start() && destination.end() < source.end() {
         return Err(Error::DestinationIntersectsSource);
     }
-    buffer.do_transfer(address, destination, None);
-    Ok(())
+    Ok(Some(buffer.do_transfer(address, destination)))
 }
 
 fn read_lines(
@@ -652,7 +750,7 @@ fn write_cmd(
     output: &mut impl Write,
     address: Option<Address>,
     filename: Option<&Path>,
-) -> Result<(), Error> {
+) -> Result<Option<ChangeSet>, Error> {
     if buffer.filename().is_none() && filename.is_some() {
         buffer.set_filename(filename.map(ToOwned::to_owned));
     }
@@ -670,7 +768,7 @@ fn write_cmd(
     writeln!(output, "{lines_written} lines ({bytes_written} bytes) written")
         .unwrap();
     output.flush().unwrap();
-    Ok(())
+    Ok(None)
 }
 
 fn write_lines(
@@ -925,15 +1023,19 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("four").unwrap();
         let commands = "p\n".to_owned();
-        global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             None,
             &pat,
             &commands,
             &mut prev_pattern,
-        )
-        .unwrap();
+        );
+        match res {
+            Err(e) => panic!("unexpected error \"{e:?}\""),
+            Ok(Some(changes)) => assert!(changes.is_empty()),
+            Ok(None) => panic!("should have returned an empty ChangeSet"),
+        }
         assert!(output.is_empty());
     }
 
@@ -952,9 +1054,8 @@ mod tests {
             &pat,
             &commands,
             &mut prev_pattern,
-        )
-        .expect_err("nested global");
-        assert!(matches!(res, Error::NestedGlobalCmd));
+        );
+        assert!(matches!(res, Err(Error::NestedGlobalCmd)));
     }
 
     #[test]
@@ -966,15 +1067,17 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "\n".to_owned();
-        global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 3)),
             &pat,
             &commands,
             &mut prev_pattern,
-        )
-        .unwrap();
+        ) else {
+            panic!("should have returned Ok(Some(ChangeSet))");
+        };
+        assert!(changes.is_empty());
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\r\nthree\r\n");
     }
 
@@ -986,15 +1089,17 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "p\r\n".to_owned();
-        global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             None,
             &pat,
             &commands,
             &mut prev_pattern,
-        )
-        .unwrap();
+        ) else {
+            panic!("should have returned Ok(Some(ChangeSet))");
+        };
+        assert!(changes.is_empty());
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\nthree\n");
     }
 
@@ -1006,15 +1111,17 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "n\r\n".to_owned();
-        global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 3)),
             &pat,
             &commands,
             &mut prev_pattern,
-        )
-        .unwrap();
+        ) else {
+            panic!("should have returned Ok(Some(ChangeSet))");
+        };
+        assert!(changes.is_empty());
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "2  two\n3  three\n");
     }
 
@@ -1028,19 +1135,492 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
         let commands = "-1,.n\r\n".to_owned();
-        global_cmd(
+        let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(2, 5)),
             &pat,
             &commands,
             &mut prev_pattern,
-        )
-        .unwrap();
+        ) else {
+            panic!("unexpected global_cmd error!");
+        };
+        assert!(changes.is_empty());
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
             "2  two\n3  three\n4  four\n5  five\n"
         );
+    }
+
+    #[test]
+    fn global_cmd_append() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let expected = EditBuffer::from(vec![
+            "one\n", "append", "two", "three", "append", "four", "five",
+            "append", "six",
+        ]);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "a\nappend\n.\n".to_owned();
+        let Ok(Some(changes)) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        ) else {
+            panic!("global_cmd's err return was Some() rather than None!")
+        };
+        assert!(!changes.is_empty());
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 8);
+        buffer.push_undo(changes);
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 8);
+    }
+
+    #[test]
+    fn global_cmd_change() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\n", "one", "two", "two", "three", "three", "four", "four",
+            "five", "five", "six", "six",
+        ]);
+        let orig = buffer.clone();
+        let expected = EditBuffer::from(vec![
+            "change 1", "change 2", "change 3", "two", "two", "change 1",
+            "change 2", "change 3", "four", "four", "five", "five", "six",
+            "six",
+        ]);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("([a-z]*e)$").unwrap();
+        let commands = ".,+c\nchange 1\nchange 2\nchange 3\n.\n".to_owned();
+        let Ok(Some(changes)) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        ) else {
+            panic!("global_cmd's err return wasn't None!")
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 8);
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 8);
+    }
+
+    #[test]
+    fn global_cmd_delete() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let expected = EditBuffer::from(vec!["two\n", "four", "six"]);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "dn\n".to_owned();
+        let Ok(Some(changes)) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        ) else {
+            panic!("global_cmd err return wasn't None!");
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "1  two\n2  four\n3  six\n"
+        );
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 3);
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 3);
+    }
+
+    #[test]
+    fn global_cmd_insert() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\r\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let expected = EditBuffer::from(vec![
+            "insert\r\n",
+            "one",
+            "two",
+            "insert",
+            "three",
+            "four",
+            "insert",
+            "five",
+            "six",
+        ]);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "i\r\ninsert\r\n.\r\n".to_owned();
+        let Ok(Some(changes)) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        ) else {
+            panic!("global_cmd returned an unexpected error!");
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 7);
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 7);
+    }
+
+    #[test]
+    fn global_cmd_join() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let mut expected =
+            EditBuffer::from(vec!["onetwo\n", "threefour", "fivesix"]);
+        expected.set_current_line(3);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "jn\n".to_owned();
+        let res = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        );
+        let changes = match res {
+            Err(e) => panic!("unexpected error {e:?}"),
+            Ok(None) => panic!("should have returned Some(ChangeSet)"),
+            Ok(Some(changes)) => changes,
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "1  onetwo\n2  threefour\n3  fivesix\n"
+        );
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 3);
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 3);
+    }
+
+    #[test]
+    fn global_cmd_move() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\r\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "three\r\n",
+            "two",
+            "one",
+            "four",
+            "five",
+            "six",
+        ]);
+        expected.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("^t").unwrap();
+        let commands = "m0\r\n".to_owned();
+        let Some(changes) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .expect("should have been Ok!") else {
+            panic!("should have been Some(changes)!");
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+    }
+
+    #[test]
+    fn global_cmd_move_with_overlap() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\r\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "two\r\n", "three", "one", "four", "five", "six",
+        ]);
+        expected.set_current_line(2);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("^t").unwrap();
+        let commands = ".,+m0\r\n".to_owned();
+        let Some(changes) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .expect("should have been Ok!") else {
+            panic!("should have been Some(changes)!");
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+    }
+
+    #[test]
+    fn global_cmd_substitute_with_error() {
+        let mut buffer = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five six seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen sixteen",
+            "5:seventeen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen sixteen",
+            "7:nine ten eleven twelve",
+            "8:five six seven eight",
+            "9:one two three four\n",
+        ]);
+        buffer.set_current_line(5);
+        let before = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five ",
+            "'x seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen ",
+            "'xteen",
+            "5:",
+            "'venteen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen ",
+            "'xteen",
+            "7:nine ten eleven twelve",
+            "8:five six seven eight",
+            "9:one two three four\n",
+        ]);
+        expected.set_current_line(12);
+        let expected_output = " 6  'xteen\n10  'xteen\n";
+
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("s[aeiou]").unwrap();
+        let commands = ".,+2s//\\\n'/n".to_string();
+        let Err(Error::GlobalCmdErrorStop { source, changes }) = global_cmd(
+            &mut buffer,
+            &mut output,
+            None,
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        ) else {
+            panic!("should have returned GlobalCmdErrorStop");
+        };
+        assert!(matches!(*source, Error::InvalidAddress));
+        let Some(changes) = changes else {
+            panic!("changes was None!");
+        };
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert_eq!(output, expected_output);
+        buffer.push_undo(changes);
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+        buffer.do_undo().unwrap();
+        assert_eq!(buffer.current_line(), before.current_line());
+        assert_eq!(&before[..], &buffer[..]);
+        buffer.do_redo().unwrap();
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+    }
+
+    #[test]
+    fn global_cmd_substitute() {
+        let mut buffer = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five six seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen sixteen",
+            "5:seventeen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen sixteen",
+            "7:nine ten eleven twelve",
+            "8:five six seven eight",
+            "9:one two three four\n",
+        ]);
+        buffer.set_current_line(5);
+        let before = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five ",
+            "'x seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen ",
+            "'xteen",
+            "5:",
+            "'venteen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen ",
+            "'xteen",
+            "7:nine ten eleven twelve",
+            "8:five ",
+            "'x seven eight",
+            "9:one two three four\n",
+        ]);
+        expected.set_current_line(13);
+        let expected_output = " 3  'x seven eight\n 6  'xteen\n 8  'venteen eighteen nineteen twenty\n10  'xteen\n13  'x seven eight\n";
+
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("s[aeiou]").unwrap();
+        let commands = "s//\\\n'/n".to_string();
+        let Some(changes) = global_cmd(
+            &mut buffer,
+            &mut output,
+            None,
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .expect("should have been Ok") else {
+            panic!("should have been Some(changes)!");
+        };
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert_eq!(output, expected_output);
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+        buffer.do_undo().unwrap();
+        assert_eq!(buffer.current_line(), before.current_line());
+        assert_eq!(&before[..], &buffer[..]);
+        buffer.do_redo().unwrap();
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+    }
+
+    #[test]
+    fn global_cmd_transfer() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\r\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let expected = EditBuffer::from(vec![
+            "one\r\n", "two", "three", "four", "five", "six", "one", "three",
+            "five",
+        ]);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "t$\r\n".to_owned();
+        let Some(changes) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .expect("should have been Ok!") else {
+            panic!("should have been Some(changes)!");
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 9);
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 9);
     }
 
     #[test]
@@ -1058,9 +1638,8 @@ mod tests {
             &pat,
             &commands,
             &mut prev_pattern,
-        )
-        .expect_err("unsupported global command");
-        assert!(matches!(res, Error::UnsupportedGlobalCmd));
+        );
+        assert!(matches!(res, Err(Error::UnsupportedGlobalCmd)));
     }
 
     #[test]
@@ -1241,13 +1820,9 @@ mod tests {
     fn file_cmd_dispatch() {
         let input = b"f\nf new_file_name.txt\nq\n";
         let mut output = Vec::new();
-        let args = CmdArgs {
-            file: None,
-            //            file: Some(PathBuf::from("test/assets/text_with_final_eol.txt")),
-        };
+        let args = CmdArgs { file: None };
         run(&input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        //        assert!(output.contains("test/assets/text_with_final_eol.txt"));
         assert!(output.contains("no current filename"));
         assert!(output.contains("new_file_name.txt"));
     }
@@ -1467,7 +2042,7 @@ mod tests {
         buffer.set_current_line(1);
         let cmd_line = "s/, /\\\r\n/";
         let mut input = cmd_line.as_bytes();
-        let (Cmd::Substitute(address, pattern, replacement, scope), None) =
+        let Some((Cmd::Substitute(address, pattern, replacement, scope), None)) =
             Cmd::read(&mut input, &mut buffer, &mut None).unwrap()
         else {
             panic!("{cmd_line} didn't parse as Cmd::Substitute");
@@ -1491,13 +2066,15 @@ mod tests {
         buffer.set_current_line(1);
         let mut cmd_line = "/, /\\\n".graphemes(true).peekable();
         let mut input = "\n".as_bytes();
-        let Ok((Cmd::Substitute(address, pattern, replacement, scope), None)) =
-            command::parse_substitute_cmd(
-                &mut cmd_line,
-                None,
-                &mut None,
-                &mut input,
-            )
+        let Ok(Some((
+            Cmd::Substitute(address, pattern, replacement, scope),
+            None,
+        ))) = command::parse_substitute_cmd(
+            &mut cmd_line,
+            None,
+            &mut None,
+            &mut input,
+        )
         else {
             panic!("should have parsed to Cmd::Substitute!");
         };
@@ -1580,14 +2157,18 @@ mod tests {
             "9:one two three four\n",
         ]);
         expected.set_current_line(8);
-        substitute_cmd(
+        let Some(changes) = substitute_cmd(
             &mut buffer,
             Some(Address::span(2, 9)),
             &Regex::new("s[aeiou]").unwrap(),
             "'",
             SubstitutionScope::Single(1),
         )
-        .unwrap();
+        .unwrap() else {
+            panic!("expected Some(ChangeSet)!");
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
         assert_eq!(buffer.current_line(), expected.current_line());
         assert_eq!(&buffer[..], &expected[..]);
         buffer.do_undo().unwrap();
@@ -1616,10 +2197,10 @@ mod tests {
             SubstitutionScope::Single(1),
         )
         .unwrap();
-        assert_eq!(
-            buffer[2..4],
-            ["five six sev' eight\r\n", "nine t' eleven twelve\r\n"]
-        );
+        assert_eq!(buffer[2..4], [
+            "five six sev' eight\r\n",
+            "nine t' eleven twelve\r\n"
+        ]);
     }
 
     #[test]
@@ -1640,14 +2221,11 @@ mod tests {
             SubstitutionScope::Single(2),
         )
         .unwrap();
-        assert_eq!(
-            buffer[2..5],
-            [
-                "five six seven eight\r\n",
-                "nine ten en (eleven) twelve\r\n",
-                "thirteen een (fourteen) fifteen sixteen\r\n"
-            ]
-        );
+        assert_eq!(buffer[2..5], [
+            "five six seven eight\r\n",
+            "nine ten en (eleven) twelve\r\n",
+            "thirteen een (fourteen) fifteen sixteen\r\n"
+        ]);
     }
 
     #[test]
@@ -1661,22 +2239,22 @@ mod tests {
         ]);
         buffer.set_current_line(5);
         let before = buffer.clone();
-        substitute_cmd(
+        let Ok(Some(changes)) = substitute_cmd(
             &mut buffer,
             Some(Address::span(2, 4)),
             &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
             "$1 ($0)",
             SubstitutionScope::Single(2),
-        )
-        .unwrap();
-        assert_eq!(
-            buffer[2..5],
-            [
-                "five six seven eight\r\n",
-                "nine ten en (eleven) twelve\r\n",
-                "thirteen een (fourteen) fifteen sixteen\r\n"
-            ]
-        );
+        ) else {
+            panic!("expected Ok(Some(ChangeSet))!");
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(buffer[2..5], [
+            "five six seven eight\r\n",
+            "nine ten en (eleven) twelve\r\n",
+            "thirteen een (fourteen) fifteen sixteen\r\n"
+        ]);
         let after = buffer.clone();
 
         buffer.do_undo().unwrap();
@@ -1692,10 +2270,9 @@ mod tests {
         let source = Address::span(3, 5);
         let destination = Address::line(5);
         transfer_cmd(&mut buffer, Some(source), destination).unwrap();
-        assert_eq!(
-            &buffer[..],
-            &["1\n", "2\n", "3\n", "4\n", "5\n", "3\n", "4\n", "5\n", "6\n"]
-        );
+        assert_eq!(&buffer[..], &[
+            "1\n", "2\n", "3\n", "4\n", "5\n", "3\n", "4\n", "5\n", "6\n"
+        ]);
         let destination = Address::line(4);
         let res = transfer_cmd(&mut buffer, Some(source), destination)
             .expect_err("should fail");
@@ -1756,7 +2333,14 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
-        append_cmd(&mut buffer, &mut input, Some(Address::line(0))).unwrap();
+        let Some(change) =
+            append_cmd(&mut buffer, &mut input, Some(Address::line(0)))
+                .unwrap()
+        else {
+            panic!("expected Some(ChangeSet) from append_cmd!");
+        };
+        assert!(!change.is_empty());
+        buffer.push_undo(change);
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let (bytes, lines) =
@@ -1771,7 +2355,14 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
-        append_cmd(&mut buffer, &mut input, Some(Address::line(0))).unwrap();
+        let Some(change) =
+            append_cmd(&mut buffer, &mut input, Some(Address::line(0)))
+                .unwrap()
+        else {
+            panic!("expected append_cmd to return Some(ChangeSet)!");
+        };
+        assert!(!change.is_empty());
+        buffer.push_undo(change);
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let address = Some(Address::span(1, buffer.len()));
@@ -1787,7 +2378,14 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
-        append_cmd(&mut buffer, &mut input, Some(Address::line(0))).unwrap();
+        let Some(change) =
+            append_cmd(&mut buffer, &mut input, Some(Address::line(0)))
+                .unwrap()
+        else {
+            panic!("expected Some(ChangeSet) from append_cmd!");
+        };
+        assert!(!change.is_empty());
+        buffer.push_undo(change);
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let (bytes, lines) = write_lines(

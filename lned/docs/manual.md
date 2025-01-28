@@ -254,8 +254,8 @@ The current line is not affected by this command.
 
 #### Behavior
 
-The g command will first note every line matching the specified regex,
-then, working from beginning to end, the command list will be executed for
+The g command will first note every line matching the specified regex.
+Then, working from beginning to end, the command list will be executed for
 each matching line, with the current line set to the address of that line.
 Any matched line modified by the command list will be removed from the
 list of matching lines. Any error will immediately stop execution. Any
@@ -264,20 +264,29 @@ character other than ' ' (space) or '\n' (new line) may be used instead of
 as a literal character if escaped by a '\' character.
 
 Unless errors are encountered, the current line will eventually be set to
-the value assigned by the lastcommand in the command list. If there were
+the value assigned by the last command in the command list. If there were
 no matching lines, the current line will not change.
 
 The first command in the command list must appear on the same line as the
 global command. All additional lines in the command list but the last must
 be backslash terminated to escape the line terminator.
 
-The list of permitted commands in a global command list includes either of
-'n' or 'p'. If no command is provided, it will be interpreted as if a 'p'
-command were given.
+The list of permitted commands in a global command list includes any of:
+'a', 'c', 'd', 'i', 'j', 'm', 'n', 'p', 's', and 't'. Input lines
+associated with the 'a', 'c', and 'i' commands must be included in the
+command list. The terminating '.' may be omitted if it would be the last
+line in the command list.
+
+If no command is provided, it will be interpreted as if a 'p' command were
+given.
+
+Only those commands in the command list that successfully modify the edit
+buffer will be included when *undo*ing or *redo*ing a global command.
 
 ### Insert ('i')
 
 #### Syntax
+
 (.)i
 \<input text\>
 .

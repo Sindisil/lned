@@ -7,10 +7,10 @@ use std::io::{self, BufRead, Write};
 use std::ops::ControlFlow;
 use std::time::Duration;
 
+use crossterm::ExecutableCommand;
 use crossterm::cursor::{self, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::terminal;
-use crossterm::ExecutableCommand;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::edit_buffer::BufferLine;
@@ -61,11 +61,7 @@ pub struct LineReaderOptions {
 
 #[must_use]
 pub fn native_eol() -> &'static str {
-    if std::env::consts::FAMILY == "windows" {
-        "\r\n"
-    } else {
-        "\n"
-    }
+    if std::env::consts::FAMILY == "windows" { "\r\n" } else { "\n" }
 }
 
 // Non-public functions
@@ -174,10 +170,10 @@ impl LineRead for LineReader {
         prompt: &'static str,
         buffer: &mut String,
     ) -> io::Result<usize> {
-        self.accept_line(
-            buffer,
-            &LineReaderOptions { prompt: prompt.into(), ..Default::default() },
-        )
+        self.accept_line(buffer, &LineReaderOptions {
+            prompt: prompt.into(),
+            ..Default::default()
+        })
     }
 
     fn read(
