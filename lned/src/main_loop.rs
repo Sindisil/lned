@@ -452,6 +452,7 @@ fn do_global_cmds(
                 }
                 Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
                 Cmd::Insert(address) => insert_cmd(buffer, &mut input, address),
+                Cmd::Join(address) => join_cmd(buffer, address),
                 Cmd::Move(address, destination) => {
                     move_cmd(buffer, address, destination)
                 }
@@ -1243,7 +1244,7 @@ mod tests {
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
-        let commands = "d\nn\n".to_owned();
+        let commands = "dn\n".to_owned();
         let Ok(Some(changes)) = global_cmd(
             &mut buffer,
             &mut output,
@@ -1319,6 +1320,52 @@ mod tests {
         buffer.do_redo().expect("something there to undo");
         assert_eq!(&buffer[..], &expected[..]);
         assert_eq!(buffer.current_line(), 7);
+    }
+
+    #[test]
+    fn global_cmd_join() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let mut expected =
+            EditBuffer::from(vec!["onetwo\n", "threefour", "fivesix"]);
+        expected.set_current_line(3);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "jn\n".to_owned();
+        let res = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        );
+        let changes = match res {
+            Err(e) => panic!("unexpected error {e:?}"),
+            Ok(None) => panic!("should have returned Some(ChangeSet)"),
+            Ok(Some(changes)) => changes,
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "1  onetwo\n2  threefour\n3  fivesix\n"
+        );
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 3);
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), 3);
     }
 
     #[test]
