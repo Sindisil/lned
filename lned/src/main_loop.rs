@@ -31,7 +31,7 @@ pub enum Error {
     NoMatch,
     NothingToUndo,
     NothingToRedo,
-    GlobalCmdError { source: Box<Error>, changes: Option<ChangeSet> },
+    GlobalCmdErrorStop { source: Box<Error>, changes: Option<ChangeSet> },
 }
 
 impl std::error::Error for Error {
@@ -54,7 +54,7 @@ impl std::error::Error for Error {
             | Error::WriteLines { ref source }
             | Error::ReadLines { ref source } => Some(source),
             Error::ReadGlobalCmd { ref source } => Some(source),
-            Error::GlobalCmdError { ref source, .. } => Some(source),
+            Error::GlobalCmdErrorStop { ref source, .. } => Some(source),
         }
     }
 }
@@ -105,7 +105,7 @@ impl fmt::Display for Error {
             }
             Error::NothingToUndo => write!(f, "nothing to undo"),
             Error::NothingToRedo => write!(f, "nothing to redo"),
-            Error::GlobalCmdError { .. } => {
+            Error::GlobalCmdErrorStop { .. } => {
                 write!(f, "error executing global command")
             }
         }
@@ -237,7 +237,7 @@ fn dispatch_cmd(
     match res {
         Ok(Some(changes)) => buffer.push_undo(changes),
         Ok(None) => (),
-        Err(Error::GlobalCmdError { source, changes }) => {
+        Err(Error::GlobalCmdErrorStop { source, changes }) => {
             if let Some(changes) = changes {
                 buffer.push_undo(changes);
             }
@@ -417,7 +417,7 @@ fn global_cmd(
         Err(e) => match e {
             Error::NestedGlobalCmd => Err(Error::NestedGlobalCmd),
             Error::UnsupportedGlobalCmd => Err(Error::UnsupportedGlobalCmd),
-            e => Err(Error::GlobalCmdError {
+            e => Err(Error::GlobalCmdErrorStop {
                 source: Box::new(e),
                 changes: Some(changes),
             }),
@@ -452,6 +452,9 @@ fn do_global_cmds(
                 }
                 Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
                 Cmd::Insert(address) => insert_cmd(buffer, &mut input, address),
+                Cmd::Move(address, destination) => {
+                    move_cmd(buffer, address, destination)
+                }
                 Cmd::Null(address) | Cmd::Print(address) => {
                     print_cmd(buffer, output, address)
                 }
@@ -1051,7 +1054,6 @@ mod tests {
             &commands,
             &mut prev_pattern,
         );
-        eprintln!("{res:?}");
         assert!(matches!(res, Err(Error::NestedGlobalCmd)));
     }
 
@@ -1320,6 +1322,93 @@ mod tests {
     }
 
     #[test]
+    fn global_cmd_move() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\r\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "three\r\n",
+            "two",
+            "one",
+            "four",
+            "five",
+            "six",
+        ]);
+        expected.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("^t").unwrap();
+        let commands = "m0\r\n".to_owned();
+        let Some(changes) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .expect("should have been Ok!") else {
+            panic!("should have been Some(changes)!");
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+    }
+
+    #[test]
+    fn global_cmd_move_with_overlap() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\r\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "two\r\n", "three", "one", "four", "five", "six",
+        ]);
+        expected.set_current_line(2);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("^t").unwrap();
+        let commands = ".,+m0\r\n".to_owned();
+        let Some(changes) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .expect("should have been Ok!") else {
+            panic!("should have been Some(changes)!");
+        };
+        assert!(!changes.is_empty());
+        buffer.push_undo(changes);
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+
+        // now undo
+        buffer.do_undo().expect("something there to undo");
+        assert_eq!(&buffer[..], &orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        // redo
+        buffer.do_redo().expect("something there to undo");
+        assert_eq!(&buffer[..], &expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+    }
+
+    #[test]
     fn global_cmd_substitute_with_error() {
         let mut buffer = EditBuffer::from(vec![
             "1:one two three four\n",
@@ -1356,7 +1445,7 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("s[aeiou]").unwrap();
         let commands = ".,+2s//\\\n'/n".to_string();
-        let Err(Error::GlobalCmdError { source, changes }) = global_cmd(
+        let Err(Error::GlobalCmdErrorStop { source, changes }) = global_cmd(
             &mut buffer,
             &mut output,
             None,
@@ -1364,7 +1453,7 @@ mod tests {
             &commands,
             &mut prev_pattern,
         ) else {
-            panic!("should have returned GlobalCmdError");
+            panic!("should have returned GlobalCmdErrorStop");
         };
         assert!(matches!(*source, Error::InvalidAddress));
         let Some(changes) = changes else {

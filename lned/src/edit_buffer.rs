@@ -370,6 +370,7 @@ impl EditBuffer {
 
         let mut changes = ChangeSet::new(self.current_line);
         let mut change = Change::new(self.current_line);
+        change.push_remove(address.start() - 1, lines.clone());
         change.push_add(destination, lines.clone());
         self.text.splice(destination..destination, lines);
         self.current_line = destination + address.line_count();
@@ -925,48 +926,112 @@ mod tests {
     #[test]
     fn do_move_one_line() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["1\n", "2", "3", "5", "4", "6"]);
-        buffer.do_move(Some(Address::line(5)), Address::line(3));
+        let orig = buffer.clone();
+        let mut expected =
+            EditBuffer::from(vec!["1\n", "2", "3", "5", "4", "6"]);
+        expected.current_line = 4;
+        let changes = buffer.do_move(Some(Address::line(5)), Address::line(3));
+        buffer.push_undo(changes);
         assert_eq!(buffer[..], expected[..]);
-        assert_eq!(buffer.current_line(), 4);
+        assert_eq!(buffer.current_line(), expected.current_line);
+
+        buffer.do_undo().expect("something to undo");
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line, orig.current_line);
+
+        buffer.do_redo().expect("something on redo stack");
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line, expected.current_line);
     }
 
     #[test]
     fn do_move_span() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["1\n", "2", "3", "5", "6", "4"]);
-        buffer.do_move(Some(Address::span(5, 6)), Address::line(3));
+        let orig = buffer.clone();
+        let mut expected =
+            EditBuffer::from(vec!["1\n", "2", "3", "5", "6", "4"]);
+        expected.current_line = 5;
+        let changes =
+            buffer.do_move(Some(Address::span(5, 6)), Address::line(3));
+        buffer.push_undo(changes);
         assert_eq!(buffer[..], expected[..]);
-        assert_eq!(buffer.current_line(), 5);
+        assert_eq!(buffer.current_line(), expected.current_line);
+
+        buffer.do_undo().expect("something on undo stack");
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line, orig.current_line);
+
+        buffer.do_redo().expect("something on redo stack");
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line, expected.current_line);
     }
 
     #[test]
     fn do_move_no_addr() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["2\n", "3", "1", "4", "5", "6"]);
         buffer.set_current_line(1);
-        buffer.do_move(None, Address::line(3));
+        let orig = buffer.clone();
+        let mut expected =
+            EditBuffer::from(vec!["2\n", "3", "1", "4", "5", "6"]);
+        expected.set_current_line(3);
+        let changes = buffer.do_move(None, Address::line(3));
+        buffer.push_undo(changes);
         assert_eq!(buffer[..], expected[..]);
-        assert_eq!(buffer.current_line(), 3);
+        assert_eq!(buffer.current_line(), expected.current_line());
+
+        buffer.do_undo().expect("something on undo stack");
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        buffer.do_redo().expect("something on redo stack");
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
     }
 
     #[test]
     fn do_move_to_line_0() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["4\n", "5", "1", "2", "3", "6"]);
-        buffer.do_move(Some(Address::span(4, 5)), Address::line(0));
+        let orig = buffer.clone();
+        let mut expected =
+            EditBuffer::from(vec!["4\n", "5", "1", "2", "3", "6"]);
+        expected.set_current_line(2);
+        let changes =
+            buffer.do_move(Some(Address::span(4, 5)), Address::line(0));
+        buffer.push_undo(changes);
         assert_eq!(buffer[..], expected[..]);
-        assert_eq!(buffer.current_line(), 2);
+        assert_eq!(buffer.current_line(), expected.current_line());
+
+        buffer.do_undo().expect("something on undo stack");
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        buffer.do_redo().expect("something on redo stack");
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
     }
 
     #[test]
     fn do_move_destination_is_span() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["1\n", "2", "4", "5", "3", "6"]);
-        buffer.do_move(Some(Address::span(4, 5)), Address::span(1, 2));
+        let orig = buffer.clone();
+        let mut expected =
+            EditBuffer::from(vec!["1\n", "2", "4", "5", "3", "6"]);
+        expected.set_current_line(4);
+        let changes =
+            buffer.do_move(Some(Address::span(4, 5)), Address::span(1, 2));
+        buffer.push_undo(changes);
         assert_eq!(buffer[..], expected[..]);
-        assert_eq!(buffer.current_line(), 4);
+        assert_eq!(buffer.current_line(), expected.current_line());
+
+        buffer.do_undo().expect("something on undo stack");
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        buffer.do_redo().expect("something on redo stack");
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
     }
+
     #[test]
     fn buffer_dirty_after_append() {
         let mut buffer = EditBuffer::new();
