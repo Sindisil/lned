@@ -26,6 +26,7 @@ pub enum Cmd {
     Global(Option<Address>, Regex, String),
     Insert(Option<Address>),
     Join(Option<Address>),
+    LineNumber(Option<Address>),
     Move(Option<Address>, Address),
     Null(Option<Address>),
     Print(Option<Address>),
@@ -358,6 +359,9 @@ impl Cmd {
             Some("U") => parse_no_address(address, Cmd::Redo)
                 .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
             Some("w") => parse_write_cmd(&mut graphemes, address),
+            Some("=") => {
+                parse_no_args(&mut graphemes, Cmd::LineNumber(address))
+            }
             Some(s) => Err(Error::Unknown(s.to_owned())),
         }
     }
@@ -1836,6 +1840,20 @@ mod tests {
         let res =
             Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
         assert!(matches!(res, Some((Cmd::Join(None), None))));
+    }
+
+    #[test]
+    fn parse_line_number_cmd() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4"]);
+        buffer.set_current_line(2);
+        let mut input1 = "=\n".as_bytes();
+        let mut input2 = ".=\n".as_bytes();
+        let res = Cmd::read(&mut input1, &mut buffer, &mut None).unwrap();
+        assert!(matches!(res, Some((Cmd::LineNumber(None), None))));
+        let res = Cmd::read(&mut input2, &mut buffer, &mut None).unwrap();
+        assert!(
+            matches!(res, Some((Cmd::LineNumber(Some(a)), None)) if a == Address::line(2))
+        );
     }
 
     #[test]

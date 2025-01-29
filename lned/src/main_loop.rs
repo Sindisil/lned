@@ -214,6 +214,7 @@ fn dispatch_cmd(
         ),
         Cmd::Insert(address) => insert_cmd(buffer, input, *address),
         Cmd::Join(address) => join_cmd(buffer, *address),
+        Cmd::LineNumber(_address) => todo!(),
         Cmd::Move(address, destination) => {
             move_cmd(buffer, *address, *destination)
         }
