@@ -259,7 +259,7 @@ fn append_cmd(
     let mut lines = Vec::new();
     Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
-    Ok(Some(buffer.do_append(address, lines)))
+    Ok(buffer.do_append(address, lines))
 }
 
 fn change_cmd(
@@ -532,7 +532,7 @@ fn insert_cmd(
     let mut lines = Vec::new();
     Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
-    Ok(Some(buffer.do_insert(address, lines)))
+    Ok(buffer.do_insert(address, lines))
 }
 
 fn join_cmd(
