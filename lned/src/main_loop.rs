@@ -214,7 +214,9 @@ fn dispatch_cmd(
         ),
         Cmd::Insert(address) => insert_cmd(buffer, input, *address),
         Cmd::Join(address) => join_cmd(buffer, *address),
-        Cmd::LineNumber(_address) => todo!(),
+        Cmd::LineNumber(address) => {
+            Ok(line_number_cmd(buffer, output, *address))
+        }
         Cmd::Move(address, destination) => {
             move_cmd(buffer, *address, *destination)
         }
@@ -550,6 +552,22 @@ fn join_cmd(
         Some(a) if a.line_count() == 1 => Ok(None),
         _ => Ok(Some(buffer.do_join(address))),
     }
+}
+
+fn line_number_cmd(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    address: Option<Address>,
+) -> Option<ChangeSet> {
+    match address {
+        None => {
+            output.write_all(format!("{}\n", buffer.len()).as_bytes()).unwrap()
+        }
+        Some(address) => {
+            output.write_all(format!("{}\n", address.end()).as_bytes()).unwrap()
+        }
+    }
+    None
 }
 
 fn move_cmd(
@@ -1858,6 +1876,17 @@ mod tests {
     }
 
     #[test]
+    fn line_number_cmd_dispatch() {
+        let input = b"a\n1\n2\n3\n4\n.\n2n\n=\n.=\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        eprintln!("{output:?}");
+        assert!(output.contains("\n2\n"));
+        assert!(output.contains("\n4\n"));
+    }
+
+    #[test]
     fn move_cmd_dispatch() {
         let input = b"a\n3\n4\n5\n1\n2\n.\n3,4m0\n1,$p\nq\nq\n";
         let mut output = Vec::new();
@@ -2566,5 +2595,22 @@ mod tests {
         assert!(matches!(res, Error::DestinationIntersectsSource));
         move_cmd(&mut buffer, Some(source), Address::line(5))
             .expect("shouldn't fail");
+    }
+
+    #[test]
+    fn line_number_cmd_with_and_without_address() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(2);
+        let res = line_number_cmd(&mut buffer, &mut output, None);
+        let out_text = str::from_utf8(&output[..]).unwrap();
+        assert_eq!(out_text, "6\n");
+        assert!(res.is_none());
+        output.clear();
+        let res =
+            line_number_cmd(&mut buffer, &mut output, Some(Address::line(2)));
+        let out_text = str::from_utf8(&output[..]).unwrap();
+        assert!(res.is_none());
+        assert_eq!(out_text, "2\n");
     }
 }

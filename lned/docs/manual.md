@@ -316,6 +316,17 @@ If any lines are joined, the current line will be set tot he address of
 the resulting joined line, otherwise the current line number will not
 be set.
 
+### Line Number ('=')
+
+#### Syntax
+
+($)=
+
+#### Behavior
+
+Writes the line number of the addressed line to stdout.
+The current line number will be unchanged.
+
 ### Move ('m')
 
 #### Syntax
