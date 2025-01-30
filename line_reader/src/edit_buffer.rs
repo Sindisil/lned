@@ -323,7 +323,7 @@ impl From<&str> for BufferLine {
 }
 
 // Location within edit buffer
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct BufferIndex {
     // [0, buffer.len())
     pub line: usize,
@@ -342,3 +342,27 @@ impl From<BufferIndex> for (usize, usize) {
         (i.line, i.offset)
     }
 }
+
+impl PartialOrd for BufferIndex {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BufferIndex {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.line == other.line {
+            self.offset.cmp(&other.offset)
+        } else {
+            self.line.cmp(&other.line)
+        }
+    }
+}
+
+impl PartialEq for BufferIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.line == other.line && self.offset == other.offset
+    }
+}
+
+impl Eq for BufferIndex {}

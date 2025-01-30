@@ -594,12 +594,12 @@ fn handle_end(
     render_ctx: &mut RenderContext,
 ) -> ControlFlow<bool> {
     let buffer_end = buffer.buffer_end();
-    if render_ctx.cursor.index != buffer_end {
+    if render_ctx.cursor.index < buffer_end {
         render_ctx.cursor.line +=
             buffer_end.line - render_ctx.cursor.index.line;
         render_ctx.cursor.column = buffer.lines[buffer_end.line].width;
         render_ctx.cursor.index = buffer_end;
-        render_ctx.adjust_viewport(buffer);
+        buffer.reflow(render_ctx, buffer_end.line);
     }
     ControlFlow::Continue(())
 }

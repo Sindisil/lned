@@ -72,16 +72,16 @@ impl RenderContext {
         let cursor_line =
             u16::try_from(self.cursor.line).expect("cursor line fits u16");
 
-        stdout
-            .queue(MoveTo(0, first_display_line))?
-            .queue(Clear(ClearType::FromCursorDown))?;
-
         if self.scroll_needed > 0 {
             let scroll_needed = u16::try_from(self.scroll_needed)
                 .expect("scroll needed fits in u16");
-            stdout.queue(ScrollUp(scroll_needed - 1))?;
+            stdout.queue(ScrollUp(scroll_needed))?;
             self.scroll_needed = 0;
         }
+
+        stdout
+            .queue(MoveTo(0, first_display_line))?
+            .queue(Clear(ClearType::FromCursorDown))?;
 
         for line in &buffer.lines[self.first_buffer_line..last_displayed] {
             stdout.write_all(line.text.as_bytes())?;
@@ -134,6 +134,7 @@ pub struct Cursor {
     pub line: usize,
     pub index: BufferIndex,
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
