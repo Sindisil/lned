@@ -567,10 +567,10 @@ fn line_number_cmd(
 ) -> Option<ChangeSet> {
     match address {
         None => {
-            output.write_all(format!("{}\n", buffer.len()).as_bytes()).unwrap()
+            output.write_all(format!("{}\n", buffer.len()).as_bytes()).unwrap();
         }
         Some(address) => {
-            output.write_all(format!("{}\n", address.end()).as_bytes()).unwrap()
+            output.write_all(format!("{}\n", address.end()).as_bytes()).unwrap();
         }
     }
     None
