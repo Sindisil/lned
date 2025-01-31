@@ -1978,7 +1978,7 @@ mod tests {
 
     #[test]
     fn read_cmd_dispatch() {
-        let input = b"a\npre 1\npre 2\npost 1\npost 2\n2r test/assets/text_with_final_eol.txt\nq\n";
+        let input = b"a\npre 1\npre 2\npost 1\npost 2\n.\n2r test/assets/text_with_final_eol.txt\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
