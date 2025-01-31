@@ -380,6 +380,38 @@ Exits the editor. If there are unsaved changes, a warning will be
 printed. Repeating the Quit command will discard the changes and
 exit.
 
+### Read ('r')
+
+#### Syntax
+
+($)r [file]
+
+#### Behavior
+
+Inserts the contents of the specified file into the buffer after
+the specified address, or after the current_line if no address
+is specified.
+
+If the last line of the file isn't terminated, a line terminator
+will be appended.
+
+The current line number will be set to the address of the last line
+inserted.
+
+If no filename is specified, the currently rememberd filename will be
+used, if it is set, otherwise an error message will be output.
+
+If a file is read, the number of lines and bytes read are displayed.
+
+The remembered filename will be set to the filename specified, if any.
+
+If the filename doesn't exist, an error message will be displayed,
+and the current line will not change.
+
+A read may be undone as if it were an Insert command. As such, if
+a Read is undone, then redone by issuing a Redo command, the file
+is *not* reread; the lines previously read are simply reinserted.
+
 ### Redo ('U')
 
 #### Syntax
