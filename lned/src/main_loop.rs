@@ -26,19 +26,20 @@ pub enum Error {
     ReadLines { source: std::io::Error },
     QuitUnwrittenChanges,
     EditUnwrittenChanges,
-    EditFileNotFound(String),
+    FileNotFound(String),
     DestinationIntersectsSource,
     NoMatch,
     NothingToUndo,
     NothingToRedo,
     GlobalCmdErrorStop { source: Box<Error>, changes: Option<ChangeSet> },
+    ReadFileOpen { source: std::io::Error },
 }
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
             Error::ParseCmd(_)
-            | Error::EditFileNotFound(_)
+            | Error::FileNotFound(_)
             | Error::QuitUnwrittenChanges
             | Error::EditUnwrittenChanges
             | Error::InvalidAddress
@@ -52,6 +53,7 @@ impl std::error::Error for Error {
             Error::EditFileOpen { ref source }
             | Error::WriteFileOpen { ref source }
             | Error::WriteLines { ref source }
+            | Error::ReadFileOpen { ref source }
             | Error::ReadLines { ref source } => Some(source),
             Error::ReadGlobalCmd { ref source } => Some(source),
             Error::GlobalCmdErrorStop { ref source, .. } => Some(source),
@@ -94,7 +96,7 @@ impl fmt::Display for Error {
                     "unwritten changes - repeat edit command to discard changes"
                 )
             }
-            Error::EditFileNotFound(filename) => {
+            Error::FileNotFound(filename) => {
                 write!(f, "{filename} not found")
             }
             Error::DestinationIntersectsSource => {
@@ -107,6 +109,9 @@ impl fmt::Display for Error {
             Error::NothingToRedo => write!(f, "nothing to redo"),
             Error::GlobalCmdErrorStop { .. } => {
                 write!(f, "error executing global command")
+            }
+            Error::ReadFileOpen { .. } => {
+                write!(f, "error opening file to read")
             }
         }
     }
@@ -225,6 +230,7 @@ fn dispatch_cmd(
         Cmd::Quit => {
             quit_cmd(buffer, previous_cmd.as_ref()).inspect(|_| done = true)
         }
+        Cmd::Read(address, filename) => read_cmd(buffer, output, *address, filename.as_deref()),
         Cmd::Redo => buffer.do_redo().map(|()| None),
         Cmd::Substitute(address, pattern, replacement, scope) => {
             substitute_cmd(buffer, *address, pattern, replacement, *scope)
@@ -319,7 +325,7 @@ fn edit_cmd(
                 io::ErrorKind::NotFound => {
                     let missing_file = String::from(filename.to_string_lossy());
                     buffer.clear_text();
-                    Err(Error::EditFileNotFound(missing_file))
+                    Err(Error::FileNotFound(missing_file))
                 }
                 _ => Err(Error::EditFileOpen { source: e }),
             };
@@ -637,6 +643,56 @@ fn quit_cmd(
         _ if !buffer.is_dirty() => Ok(None),
         _ => Err(Error::QuitUnwrittenChanges),
     }
+}
+
+fn read_cmd(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    address: Option<Address>,
+    filename: Option<&Path>,
+) -> Result<Option<ChangeSet>, Error> {
+    let address = if let Some(address) = address {
+        if address.end() > buffer.len() {
+            return Err(Error::InvalidAddress);
+        }
+        address
+    } else {
+        Address::line(buffer.current_line())
+    };
+
+    if buffer.filename().is_none() && filename.is_some() {
+        buffer.set_filename(filename.map(ToOwned::to_owned));
+    }
+    let filename = filename.or(buffer.filename()).ok_or(Error::NoFilename)?;
+
+    let file = File::open(filename);
+    let mut source = match file {
+        Ok(f) => BufReader::new(f),
+        Err(e) => {
+            return match e.kind() {
+                io::ErrorKind::NotFound => {
+                    let missing_file = String::from(filename.to_string_lossy());
+                    Err(Error::FileNotFound(missing_file))
+                }
+                _ => Err(Error::ReadFileOpen { source: e }),
+            };
+        }
+    };
+
+    let mut lines = Vec::new();
+    let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
+    writeln!(output, "{lines_read} lines ({bytes_read} bytes) read").unwrap();
+    let mut changes = ChangeSet::new(buffer.current_line());
+    let mut change = Change::new(buffer.current_line());
+    change.push_add(address.end(), lines.clone());
+    let lines_added = lines.len();
+    if buffer.append(address.end(), lines) {
+        output.flush().unwrap();
+        writeln!(output, "missing line terminator appended").unwrap();
+    }
+    buffer.set_current_line(address.end() + lines_added);
+    changes.push(change, buffer.current_line());
+    Ok(Some(changes))
 }
 
 fn substitute_cmd(
@@ -1921,6 +1977,16 @@ mod tests {
     }
 
     #[test]
+    fn read_cmd_dispatch() {
+        let input = b"a\npre 1\npre 2\npost 1\npost 2\n2r test/assets/text_with_final_eol.txt\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        eprintln!("{output:?}");
+        assert!(output.contains("312"));
+    }
+
+    #[test]
     fn write_cmd_dispatch() {
         let input = b"a\none\n.\nw\nq\nq\n";
         let mut output = Vec::new();
@@ -2491,8 +2557,8 @@ mod tests {
         let mut output = Vec::new();
         let not_a_file = Some(Path::new("non-existant_file.txt"));
         let res = edit_cmd(&mut buffer, &mut output, not_a_file, None)
-            .expect_err("EditFileNotFound");
-        assert!(matches!(res, Error::EditFileNotFound(_)));
+            .expect_err("FileNotFound");
+        assert!(matches!(res, Error::FileNotFound(_)));
         assert_eq!(buffer.filename(), not_a_file);
         assert!(buffer.is_empty());
     }
@@ -2612,5 +2678,60 @@ mod tests {
         let out_text = str::from_utf8(&output[..]).unwrap();
         assert!(res.is_none());
         assert_eq!(out_text, "2\n");
+    }
+
+    #[test]
+    fn read_cmd_no_filename_error() {
+        let mut buffer = EditBuffer::new();
+        let res = read_cmd(&mut buffer, &mut Vec::new(), None, None)
+            .expect_err("no filename");
+        assert!(matches!(res, Error::NoFilename));
+    }
+
+    #[test]
+    fn read_cmd_reads_file() {
+        let mut buffer =
+            EditBuffer::from(vec!["one\n", "two", "three", "four"]);
+        buffer.set_current_line(2);
+        let orig = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "one\n",
+            "two",
+            "This is a test file with several lines of",
+            "text. It is for unit testing, so it's not long,",
+            "but it will suffice to test commands that",
+            "read",
+            "and",
+            "edit files. The lines",
+            "are of various lengths, and",
+            "end and begin with ",
+            "\"special\" characters (i.e., non-alpha characters).",
+            "Critically, it ends with a final line terminator.",
+            "three",
+            "four",
+        ]);
+        expected.set_current_line(12);
+        let mut output = Vec::new();
+        let filename1 = Some(Path::new(r"test/assets/text_with_final_eol.txt"));
+
+        let changes = read_cmd(&mut buffer, &mut output, None, filename1)
+            .expect("no error")
+            .expect("Some(ChangeSet)");
+        let out_text = str::from_utf8(&output[..]).unwrap();
+        assert!(
+            out_text.contains("10 lines") && out_text.contains("312 bytes")
+        );
+        buffer.push_undo(changes);
+
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
+
+        buffer.do_undo().expect("something to undo");
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        buffer.do_redo().expect("something to redo");
+        assert_eq!(buffer[..], expected[..]);
+        assert_eq!(buffer.current_line(), expected.current_line());
     }
 }
