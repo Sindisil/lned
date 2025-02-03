@@ -3,7 +3,7 @@ Acutally useful line editor -- similar to an extended *nix ed, though
 lned will not necessarily exactly duplicate _ed_ functionality in all
 cases. For example, the regex syntax supported will almost certainly
 be that of the Rust _regex_ crate, since I have no desire to implement
-POSIC basic regular expressions as part of this project.
+POSIX basic regular expressions as part of this project.
 
 My intent is to use the project to acomplish several goals:
 
