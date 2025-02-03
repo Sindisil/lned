@@ -9,6 +9,7 @@ use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
 use crossterm::terminal::ScrollUp;
 
+use crate::edit_buffer;
 use crate::edit_buffer::BufferIndex;
 use crate::edit_buffer::EditBuffer;
 
@@ -16,7 +17,7 @@ use crate::edit_buffer::EditBuffer;
 pub struct RenderContext {
     pub(crate) display_width: usize,
     pub(crate) display_height: usize,
-    pub(crate) cursor: Cursor,
+    pub(crate) cursor: BufferIndex,
     pub(crate) first_display_line: usize,
     pub(crate) first_buffer_line: usize,
     pub(crate) scroll_needed: usize,
@@ -43,7 +44,7 @@ impl RenderContext {
 
     /// Compute last line of viewport
     fn viewport_bottom(&self, buffer: &EditBuffer) -> usize {
-        if self.cursor.index.line == buffer.lines.len() - 1
+        if self.cursor.line == buffer.lines.len() - 1
             || (buffer.lines.len() - self.first_buffer_line)
                 <= (self.display_height - self.first_display_line)
         {
@@ -67,10 +68,22 @@ impl RenderContext {
         // convert values to u16 for crossterm
         let first_display_line = u16::try_from(self.first_display_line)
             .expect("first_display_line fits u16");
-        let cursor_column =
-            u16::try_from(self.cursor.column).expect("cursor column fits u16");
+        /*
+                let cursor_column =
+                    u16::try_from(self.cursor.column).expect("cursor column fits u16");
+                let cursor_line =
+                    u16::try_from(self.cursor.line).expect("cursor line fits u16");
+        */
+        let cursor_line = (self.cursor.line - self.first_buffer_line)
+            + self.first_display_line;
         let cursor_line =
-            u16::try_from(self.cursor.line).expect("cursor line fits u16");
+            u16::try_from(cursor_line).expect("cursor line fits u16");
+        let cursor_column = edit_buffer::str_width(
+            &buffer.lines[self.cursor.line][..self.cursor.offset],
+            0,
+        );
+        let cursor_column =
+            u16::try_from(cursor_column).expect("cursor column fits u16");
 
         if self.scroll_needed > 0 {
             let scroll_needed = u16::try_from(self.scroll_needed)
@@ -84,16 +97,17 @@ impl RenderContext {
             .queue(Clear(ClearType::FromCursorDown))?;
 
         for line in &buffer.lines[self.first_buffer_line..last_displayed] {
-            stdout.write_all(line.text.as_bytes())?;
+            stdout.write_all(line.as_bytes())?;
         }
 
         stdout.queue(MoveTo(cursor_column, cursor_line))?.queue(Show)?.flush()
     }
 
     pub fn adjust_viewport(&mut self, buffer: &EditBuffer) {
-        if self.cursor.line > self.viewport_bottom(buffer) {
-            let diff = self.cursor.line - self.viewport_bottom(buffer);
-            self.cursor.line = self.viewport_bottom(buffer);
+        let cursor_display_line =
+            self.cursor.line - self.first_buffer_line + self.first_display_line;
+        if cursor_display_line > self.viewport_bottom(buffer) {
+            let diff = cursor_display_line - self.viewport_bottom(buffer);
             if self.first_display_line == 0 {
                 self.first_buffer_line += diff;
             } else {
@@ -102,16 +116,14 @@ impl RenderContext {
                     self.first_display_line.saturating_sub(diff);
                 self.first_buffer_line += diff - self.scroll_needed;
             }
-        } else if self.cursor.line < self.viewport_top() {
-            let diff = self.viewport_top() - self.cursor.line;
-            self.cursor.line = self.viewport_top();
+        } else if cursor_display_line < self.viewport_top() {
+            let diff = self.viewport_top() - cursor_display_line;
             self.first_buffer_line =
                 self.first_buffer_line.saturating_sub(diff);
         }
         if buffer.lines.len() <= self.display_height {
             if self.first_buffer_line != 0 {
                 // lines above display
-                self.cursor.line += self.first_buffer_line;
                 self.first_buffer_line = 0;
             } else if self.display_height - self.first_display_line
                 < buffer.lines.len()
@@ -119,20 +131,10 @@ impl RenderContext {
                 // lines below display
                 self.scroll_needed = buffer.lines.len()
                     - (self.display_height - self.first_display_line);
-                self.cursor.line -= self.scroll_needed;
                 self.first_display_line -= self.scroll_needed;
             }
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Cursor {
-    // Horizontal coordinate in display buffer [0, display_width)
-    pub column: usize,
-    // Vertical coordinate in display buffer [0, display_height)
-    pub line: usize,
-    pub index: BufferIndex,
 }
 
 #[cfg(test)]
@@ -154,7 +156,7 @@ mod tests {
         let render_ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 6, line: 2, index: (2, 6).into() },
+            cursor: (2, 6).into(),
             ..Default::default()
         };
         assert_eq!(
@@ -183,7 +185,7 @@ mod tests {
         let render_ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 6, line: 4, index: (6, 6).into() },
+            cursor: (6, 6).into(),
             first_buffer_line: 2,
             ..Default::default()
         };
@@ -212,7 +214,7 @@ mod tests {
         let render_ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
         assert_eq!(
@@ -241,7 +243,7 @@ mod tests {
         let render_ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 5, line: 2, index: (3, 5).into() },
+            cursor: (3, 5).into(),
             first_buffer_line: 1,
             ..Default::default()
         };

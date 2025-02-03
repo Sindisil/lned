@@ -579,12 +579,10 @@ fn line_number_cmd(
 ) -> Option<ChangeSet> {
     match address {
         None => {
-            output.write_all(format!("{}\n", buffer.len()).as_bytes()).unwrap();
+            writeln!(output, "{}", buffer.len()).unwrap();
         }
         Some(address) => {
-            output
-                .write_all(format!("{}\n", address.end()).as_bytes())
-                .unwrap();
+            writeln!(output, "{}", address.end()).unwrap();
         }
     }
     None
@@ -624,7 +622,7 @@ fn list_cmd(
                 gr => gr,
             })
             .collect();
-        output.write_all(expanded.as_bytes()).unwrap();
+        output.write_all(format!("{expanded}").as_bytes()).unwrap();
     }
     output.flush().unwrap();
     Ok(None)
@@ -678,7 +676,7 @@ fn print_cmd(
 
     buffer.set_current_line(*span.end());
     for l in &buffer[span] {
-        output.write_all(l.as_bytes()).unwrap();
+        output.write_all(format!("{l}").as_bytes()).unwrap();
     }
     output.flush().unwrap();
     Ok(None)
@@ -2011,7 +2009,6 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        eprintln!("{output:?}");
         assert!(output.contains("\n2\n"));
         assert!(output.contains("\n4\n"));
     }
@@ -2056,7 +2053,6 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        eprintln!("{output:?}");
         assert!(output.contains("312"));
     }
 
@@ -2367,10 +2363,10 @@ mod tests {
             SubstitutionScope::Single(1),
         )
         .unwrap();
-        assert_eq!(buffer[2..4], [
-            "five six sev' eight\r\n",
-            "nine t' eleven twelve\r\n"
-        ]);
+        assert_eq!(
+            buffer[2..4],
+            ["five six sev' eight\r\n", "nine t' eleven twelve\r\n"]
+        );
     }
 
     #[test]
@@ -2391,11 +2387,14 @@ mod tests {
             SubstitutionScope::Single(2),
         )
         .unwrap();
-        assert_eq!(buffer[2..5], [
-            "five six seven eight\r\n",
-            "nine ten en (eleven) twelve\r\n",
-            "thirteen een (fourteen) fifteen sixteen\r\n"
-        ]);
+        assert_eq!(
+            buffer[2..5],
+            [
+                "five six seven eight\r\n",
+                "nine ten en (eleven) twelve\r\n",
+                "thirteen een (fourteen) fifteen sixteen\r\n"
+            ]
+        );
     }
 
     #[test]
@@ -2420,11 +2419,14 @@ mod tests {
         };
         assert!(!changes.is_empty());
         buffer.push_undo(changes);
-        assert_eq!(buffer[2..5], [
-            "five six seven eight\r\n",
-            "nine ten en (eleven) twelve\r\n",
-            "thirteen een (fourteen) fifteen sixteen\r\n"
-        ]);
+        assert_eq!(
+            buffer[2..5],
+            [
+                "five six seven eight\r\n",
+                "nine ten en (eleven) twelve\r\n",
+                "thirteen een (fourteen) fifteen sixteen\r\n"
+            ]
+        );
         let after = buffer.clone();
 
         buffer.do_undo().unwrap();
@@ -2440,9 +2442,10 @@ mod tests {
         let source = Address::span(3, 5);
         let destination = Address::line(5);
         transfer_cmd(&mut buffer, Some(source), destination).unwrap();
-        assert_eq!(&buffer[..], &[
-            "1\n", "2\n", "3\n", "4\n", "5\n", "3\n", "4\n", "5\n", "6\n"
-        ]);
+        assert_eq!(
+            &buffer[..],
+            &["1\n", "2\n", "3\n", "4\n", "5\n", "3\n", "4\n", "5\n", "6\n"]
+        );
         let destination = Address::line(4);
         let res = transfer_cmd(&mut buffer, Some(source), destination)
             .expect_err("should fail");

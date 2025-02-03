@@ -11,7 +11,6 @@ use crossterm::ExecutableCommand;
 use crossterm::cursor::{self, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::terminal;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::edit_buffer::BufferLine;
 use crate::edit_buffer::EditBuffer;
@@ -170,10 +169,10 @@ impl LineRead for LineReader {
         prompt: &'static str,
         buffer: &mut String,
     ) -> io::Result<usize> {
-        self.accept_line(buffer, &LineReaderOptions {
-            prompt: prompt.into(),
-            ..Default::default()
-        })
+        self.accept_line(
+            buffer,
+            &LineReaderOptions { prompt: prompt.into(), ..Default::default() },
+        )
     }
 
     fn read(
@@ -304,6 +303,7 @@ fn handle_key_event(
         KeyCode::Up => handle_up(buffer, render_ctx, history),
         KeyCode::Down => handle_down(buffer, render_ctx, history),
         KeyCode::Esc => handle_esc(buffer, render_ctx, history),
+        KeyCode::Tab => handle_char_input(buffer, render_ctx, '\t'),
         _ => ControlFlow::Continue(()),
     }
 }
@@ -407,30 +407,30 @@ fn handle_char_input(
     render_ctx: &mut RenderContext,
     c: char,
 ) -> ControlFlow<bool> {
-    let c_width = c.width().unwrap_or(0);
-
     // if char is zero width, but no previous chars exist to
     //  which it can  be combined, do nothing (i.e., don't accept
     // the input)
-    if c_width == 0 && render_ctx.cursor.index == buffer.input_start {
+    if (render_ctx.cursor == buffer.input_start
+        || buffer.lines[render_ctx.cursor.line][..render_ctx.cursor.offset]
+            .chars()
+            .last()
+            .is_some_and(|ch| ch == '\t'))
+        && edit_buffer::char_width(c, 0) == 0
+    {
         return ControlFlow::Continue(());
     }
 
     // insert new char at curser and let reflow sort it out
-    assert!(render_ctx.cursor.index.line <= buffer.len());
-    if render_ctx.cursor.index.line == buffer.len() {
+    assert!(render_ctx.cursor.line <= buffer.len());
+    if render_ctx.cursor.line == buffer.len() {
         buffer.lines.push(BufferLine::new());
     }
-    buffer.lines[render_ctx.cursor.index.line]
-        .text
-        .insert(render_ctx.cursor.index.offset, c);
-    buffer.lines[render_ctx.cursor.index.line].width += c_width;
-    render_ctx.cursor.index.offset += c.len_utf8();
-    render_ctx.cursor.column += c_width;
+    buffer.lines[render_ctx.cursor.line].insert(render_ctx.cursor.offset, c);
+    render_ctx.cursor.offset += c.len_utf8();
 
     // reflow from line before cursor, if it exists,
     // catching case where new char fits on previous line
-    buffer.reflow(render_ctx, render_ctx.cursor.index.line.saturating_sub(1));
+    buffer.reflow(render_ctx, render_ctx.cursor.line.saturating_sub(1));
 
     ControlFlow::Continue(())
 }
@@ -439,31 +439,23 @@ fn handle_backspace(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
 ) -> ControlFlow<bool> {
-    if render_ctx.cursor.index == buffer.input_start {
+    if render_ctx.cursor == buffer.input_start {
         return ControlFlow::Continue(());
     }
 
-    if render_ctx.cursor.index.offset == 0 {
-        render_ctx.cursor.index.line -= 1;
-        render_ctx.cursor.index.offset =
-            buffer.lines[render_ctx.cursor.index.line].len();
+    if render_ctx.cursor.offset == 0 {
         render_ctx.cursor.line -= 1;
-        render_ctx.cursor.column =
-            buffer.lines[render_ctx.cursor.index.line].width;
+        render_ctx.cursor.offset = buffer.lines[render_ctx.cursor.line].len();
     }
-    if let Some((i, c)) = buffer.lines[render_ctx.cursor.index.line].text
-        [..render_ctx.cursor.index.offset]
+    if let Some((i, _)) = buffer.lines[render_ctx.cursor.line]
+        [..render_ctx.cursor.offset]
         .char_indices()
         .next_back()
     {
-        buffer.lines[render_ctx.cursor.index.line].text.remove(i);
-        let removed_width = c.width().unwrap_or(0);
-
-        buffer.lines[render_ctx.cursor.index.line].width -= removed_width;
-        render_ctx.cursor.index.offset = i;
-        render_ctx.cursor.column -= removed_width;
+        buffer.lines[render_ctx.cursor.line].remove(i);
+        render_ctx.cursor.offset = i;
     }
-    buffer.reflow(render_ctx, render_ctx.cursor.index.line.saturating_sub(1));
+    buffer.reflow(render_ctx, render_ctx.cursor.line.saturating_sub(1));
     ControlFlow::Continue(())
 }
 
@@ -471,28 +463,23 @@ fn handle_left(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
 ) -> ControlFlow<bool> {
-    if render_ctx.cursor.index == buffer.input_start {
+    use unicode_width::UnicodeWidthChar;
+
+    if render_ctx.cursor == buffer.input_start {
         return ControlFlow::Continue(());
     }
 
-    if render_ctx.cursor.index.offset == 0 {
-        render_ctx.cursor.index.line -= 1;
-        render_ctx.cursor.index.offset =
-            buffer.lines[render_ctx.cursor.index.line].len();
-        render_ctx.cursor.column =
-            buffer.lines[render_ctx.cursor.index.line].width;
+    if render_ctx.cursor.offset == 0 {
         render_ctx.cursor.line -= 1;
+        render_ctx.cursor.offset = buffer.lines[render_ctx.cursor.line].len();
     }
 
-    if let Some((prev_idx, prev_width)) = buffer.lines
-        [render_ctx.cursor.index.line]
-        .text[..render_ctx.cursor.index.offset]
+    if let Some((prev_idx, _)) = buffer.lines[render_ctx.cursor.line]
+        [..render_ctx.cursor.offset]
         .char_indices()
-        .map(|(i, c)| (i, c.width().unwrap_or(0)))
-        .rfind(|(_, w)| *w > 0)
+        .rfind(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
     {
-        render_ctx.cursor.index.offset = prev_idx;
-        render_ctx.cursor.column -= prev_width;
+        render_ctx.cursor.offset = prev_idx;
     }
 
     render_ctx.adjust_viewport(buffer);
@@ -504,45 +491,38 @@ fn handle_right(
     render_ctx: &mut RenderContext,
 ) -> ControlFlow<bool> {
     // If aleady at end, nothing to do
-    if render_ctx.cursor.index
-        == (buffer.lines.len() - 1, buffer.lines.last().unwrap().text.len())
-            .into()
+    if render_ctx.cursor
+        == (buffer.lines.len() - 1, buffer.lines.last().unwrap().len()).into()
     {
         return ControlFlow::Continue(());
     }
 
-    let cursor_index = render_ctx.cursor.index;
-    let cur_char_width = buffer.lines[cursor_index.line].text
-        [cursor_index.offset..]
-        .chars()
-        .next()
-        .and_then(UnicodeWidthChar::width)
-        .unwrap();
-    let cur_char_index = buffer.lines[cursor_index.line].text
-        [cursor_index.offset..]
+    let width_before_next_cursor = edit_buffer::str_width(
+        &buffer.lines[render_ctx.cursor.line][..render_ctx.cursor.offset],
+        0,
+    );
+
+    if let Some((i, _)) = buffer.lines[render_ctx.cursor.line]
+        [render_ctx.cursor.offset..]
         .char_indices()
         .skip(1)
-        .find(|(_, c)| c.width().unwrap_or(0) > 0)
-        .map(|(i, _)| i);
-    if cur_char_index.is_some()
-        || (cursor_index.line == buffer.len() - 1
-            && render_ctx.cursor.column + cur_char_width
-                < render_ctx.display_width)
+        .find(|(_, c)| {
+            edit_buffer::char_width(*c, width_before_next_cursor) > 0
+        })
     {
-        render_ctx.cursor.column += cur_char_width;
-        if let Some(i) = cur_char_index {
-            render_ctx.cursor.index.offset += i;
-        } else {
-            render_ctx.cursor.index.offset =
-                buffer.lines[cursor_index.line].len();
-        }
+        // next cursor pos on this line
+        render_ctx.cursor.offset += i;
+    } else if render_ctx.cursor.line == buffer.len() - 1
+        && render_ctx.display_width - width_before_next_cursor > 0
+    {
+        // next cusor pos is at end of buffer
+        render_ctx.cursor.offset = buffer.lines[render_ctx.cursor.line].len();
     } else {
-        // no; move to first cell on next display line
+        // next cursor pos is on next line
         render_ctx.cursor.line += 1;
-        render_ctx.cursor.column = 0;
-        render_ctx.cursor.index.line += 1;
-        render_ctx.cursor.index.offset = 0;
+        render_ctx.cursor.offset = 0;
     }
+
     render_ctx.adjust_viewport(buffer);
     ControlFlow::Continue(())
 }
@@ -552,21 +532,19 @@ fn handle_delete(
     render_ctx: &mut RenderContext,
 ) -> ControlFlow<bool> {
     // if at end of buffer, nothing to do
-    if render_ctx.cursor.index != buffer.buffer_end() {
-        let (cur_line, cur_offset) = render_ctx.cursor.index.into();
-        let mut c_idx =
-            buffer.lines[cur_line].text[cur_offset..].char_indices();
-        let c_width =
-            c_idx.next().map(|(_, c)| c.width().unwrap_or(0)).unwrap();
-        let next_c_offset =
-            c_idx.find(|(_, c)| c.width().unwrap_or(0) > 0).map_or_else(
+    if render_ctx.cursor != buffer.buffer_end() {
+        use unicode_width::UnicodeWidthChar;
+
+        let (cur_line, cur_offset) = render_ctx.cursor.into();
+        let next_c_offset = buffer.lines[cur_line][cur_offset..]
+            .char_indices()
+            .skip(1)
+            .find(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
+            .map_or_else(
                 || buffer.lines[cur_line].len(),
                 |(i, _)| i + cur_offset,
             );
-        buffer.lines[cur_line]
-            .text
-            .replace_range(cur_offset..next_c_offset, "");
-        buffer.lines[cur_line].width -= c_width;
+        buffer.lines[cur_line].replace_range(cur_offset..next_c_offset, "");
         buffer.reflow(render_ctx, cur_line.saturating_sub(1));
     }
     ControlFlow::Continue(())
@@ -576,14 +554,9 @@ fn handle_home(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
 ) -> ControlFlow<bool> {
-    if render_ctx.cursor.index != buffer.input_start {
+    if render_ctx.cursor != buffer.input_start {
         render_ctx.first_buffer_line = 0;
-        render_ctx.cursor.index = buffer.input_start;
-        render_ctx.cursor.line =
-            render_ctx.first_display_line + render_ctx.cursor.index.line;
-        render_ctx.cursor.column = buffer.lines[render_ctx.cursor.index.line]
-            .text[..render_ctx.cursor.index.offset]
-            .width();
+        render_ctx.cursor = buffer.input_start;
         render_ctx.adjust_viewport(buffer);
     }
     ControlFlow::Continue(())
@@ -594,11 +567,8 @@ fn handle_end(
     render_ctx: &mut RenderContext,
 ) -> ControlFlow<bool> {
     let buffer_end = buffer.buffer_end();
-    if render_ctx.cursor.index < buffer_end {
-        render_ctx.cursor.line +=
-            buffer_end.line - render_ctx.cursor.index.line;
-        render_ctx.cursor.column = buffer.lines[buffer_end.line].width;
-        render_ctx.cursor.index = buffer_end;
+    if render_ctx.cursor < buffer_end {
+        render_ctx.cursor = buffer_end;
         buffer.reflow(render_ctx, buffer_end.line);
     }
     ControlFlow::Continue(())
@@ -612,8 +582,6 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use similar_asserts::assert_eq;
 
-    use crate::render_context::Cursor;
-
     fn make_buf(lines: &[&str], prompt: char) -> EditBuffer {
         let mut buf = EditBuffer { lines: Vec::new(), ..Default::default() };
         for &l in lines {
@@ -622,8 +590,7 @@ mod tests {
         buf.prompt_char_count = 1;
         buf.input_start = (0, prompt.len_utf8()).into();
         if let Some(l) = buf.lines.get_mut(0) {
-            l.text.insert(0, prompt);
-            l.width = l.text.width();
+            l.insert(0, prompt);
         }
         buf
     }
@@ -672,7 +639,7 @@ mod tests {
         let expected_ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 2, line: 0, index: (0, 4).into() },
+            cursor: (0, 4).into(),
             ..Default::default()
         };
         let event =
@@ -694,7 +661,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { line: 0, column: 1, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -719,7 +686,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { line: 0, column: 2, index: (0, 2).into() },
+            cursor: (0, 2).into(),
             ..Default::default()
         };
 
@@ -732,7 +699,7 @@ mod tests {
         let expected_ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { line: 0, column: 2, index: (0, 4).into() },
+            cursor: (0, 4).into(),
             ..Default::default()
         };
 
@@ -754,13 +721,10 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { line: 0, column: 2, index: (0, 2).into() },
+            cursor: (0, 2).into(),
             ..Default::default()
         };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { line: 0, column: 2, index: (0, 4).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 4).into(), ..ctx };
 
         let event = Event::Key(KeyEvent::new(
             KeyCode::Char('\u{0308}'),
@@ -774,10 +738,7 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let expected_buf = make_buf(&["ë🎸"], ':');
-        let expected_ctx = RenderContext {
-            cursor: Cursor { line: 0, column: 4, index: (0, 8).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 8).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -787,14 +748,56 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
         let expected_buf =
             EditBuffer { lines: vec![":ë🎸o".into()], ..buf.clone() };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { line: 0, column: 5, index: (0, 9).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
+    }
+
+    #[test]
+    fn char_input_with_tab() {
+        let mut buf = make_buf(&["a2345z"], ':');
+        let mut ctx = RenderContext {
+            display_width: 80,
+            display_height: 24,
+            cursor: (0, 6).into(),
+            ..Default::default()
+        };
+
+        let res = handle_event(
+            &mut buf,
+            &mut ctx,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        );
+        assert!(res.is_continue());
+        assert_eq!(*buf.lines[0], *":a2345\tz");
+        assert_eq!(buf.lines[0].width(), 9);
+        assert_eq!(ctx.cursor, (0, 7).into());
+
+        ctx.cursor = (0, 6).into();
+        let res = handle_event(
+            &mut buf,
+            &mut ctx,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::NONE)),
+        );
+        assert!(res.is_continue());
+        assert_eq!(*buf.lines[0], *":a23456\tz");
+        assert_eq!(buf.lines[0].width(), 9);
+        assert_eq!(ctx.cursor, (0, 7).into());
+
+        let res = handle_event(
+            &mut buf,
+            &mut ctx,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::NONE)),
+        );
+        assert!(res.is_continue());
+        assert_eq!(*buf.lines[0], *":a234567\tz");
+        assert_eq!(buf.lines[0].width(), 17);
+        assert_eq!(ctx.cursor, (0, 8).into());
     }
 
     #[test]
@@ -808,7 +811,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 8, line: 0, index: (0, 8).into() },
+            cursor: (0, 8).into(),
             ..Default::default()
         };
 
@@ -816,10 +819,7 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let expected_buf =
             EditBuffer { lines: vec![":1234567🎸".into()], ..buf.clone() };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 0, line: 1, index: (1, 0).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (1, 0).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -837,7 +837,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 0, line: 4, index: (1, 0).into() },
+            cursor: (1, 0).into(),
             first_display_line: 3,
             ..Default::default()
         };
@@ -866,7 +866,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
+            cursor: (0, 9).into(),
             ..Default::default()
         };
 
@@ -874,10 +874,7 @@ mod tests {
             lines: vec![":12345678".into(), "🎸".into()],
             ..buf.clone()
         };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 2, line: 1, index: (1, 4).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (1, 4).into(), ..ctx };
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
@@ -899,7 +896,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 8, line: 0, index: (0, 8).into() },
+            cursor: (0, 8).into(),
             ..Default::default()
         };
 
@@ -907,10 +904,7 @@ mod tests {
             lines: vec![":1234567🎸".into(), "89abc".into()],
             ..buf.clone()
         };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 0, line: 1, index: (1, 0).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (1, 0).into(), ..ctx };
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
@@ -933,7 +927,7 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_display_line: 3,
-            cursor: Cursor { column: 9, line: 4, index: (1, 11).into() },
+            cursor: (1, 11).into(),
             ..Default::default()
         };
         let expected_buf = EditBuffer {
@@ -942,7 +936,7 @@ mod tests {
         };
         let expected_ctx = RenderContext {
             first_display_line: 2,
-            cursor: Cursor { column: 0, line: 4, index: (2, 0).into() },
+            cursor: (2, 0).into(),
             scroll_needed: 1,
             ..ctx
         };
@@ -973,7 +967,7 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_buffer_line: 1,
-            cursor: Cursor { column: 9, line: 4, index: (5, 11).into() },
+            cursor: (5, 11).into(),
             ..Default::default()
         };
 
@@ -990,7 +984,7 @@ mod tests {
         };
         let expected_ctx = RenderContext {
             first_buffer_line: 2,
-            cursor: Cursor { column: 0, line: 4, index: (6, 0).into() },
+            cursor: (6, 0).into(),
             ..ctx
         };
 
@@ -1018,7 +1012,7 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_display_line: 3,
-            cursor: Cursor { column: 9, line: 3, index: (0, 9).into() },
+            cursor: (0, 9).into(),
             ..Default::default()
         };
 
@@ -1032,7 +1026,7 @@ mod tests {
         };
         let expected_ctx = RenderContext {
             first_display_line: 2,
-            cursor: Cursor { column: 0, line: 3, index: (1, 0).into() },
+            cursor: (1, 0).into(),
             scroll_needed: 1,
             ..ctx
         };
@@ -1064,7 +1058,7 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_buffer_line: 1,
-            cursor: Cursor { column: 9, line: 3, index: (4, 9).into() },
+            cursor: (4, 9).into(),
             ..Default::default()
         };
 
@@ -1082,7 +1076,7 @@ mod tests {
         };
         let expected_ctx = RenderContext {
             first_buffer_line: 2,
-            cursor: Cursor { column: 0, line: 3, index: (5, 0).into() },
+            cursor: (5, 0).into(),
             ..ctx
         };
         let event =
@@ -1103,16 +1097,13 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 2, line: 0, index: (0, 4).into() },
+            cursor: (0, 4).into(),
             ..Default::default()
         };
 
         let expected_buf =
             EditBuffer { lines: vec![":e".into()], ..buf.clone() };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 2, line: 0, index: (0, 2).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 2).into(), ..ctx };
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
@@ -1129,13 +1120,10 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 2, line: 0, index: (0, 2).into() },
+            cursor: (0, 2).into(),
             ..Default::default()
         };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 1).into(), ..ctx };
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
@@ -1151,14 +1139,11 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 3, line: 0, index: (0, 5).into() },
+            cursor: (0, 5).into(),
             ..Default::default()
         };
         let expected_buf = make_buf(&[""], ':');
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 1).into(), ..ctx };
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
@@ -1174,7 +1159,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -1195,14 +1180,11 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 2, line: 1, index: (1, 4).into() },
+            cursor: (1, 4).into(),
             ..Default::default()
         };
         let expected_buf = make_buf(&["123456789", ""], ':');
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
@@ -1221,15 +1203,12 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 10,
-            cursor: Cursor { column: 0, line: 1, index: (1, 0).into() },
+            cursor: (1, 0).into(),
             ..Default::default()
         };
 
         let expected_buf = make_buf(&["12345678"], ':');
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1240,7 +1219,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 0, line: 1, index: (1, 0).into() },
+            cursor: (1, 0).into(),
             ..Default::default()
         };
         let expected_buf = make_buf(&["12345678a", "eiou"], ':');
@@ -1268,7 +1247,7 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_buffer_line: 1,
-            cursor: Cursor { line: 1, column: 0, index: (2, 0).into() },
+            cursor: (2, 0).into(),
             ..Default::default()
         };
         let expected_buf = make_buf(
@@ -1284,7 +1263,7 @@ mod tests {
         );
         let expected_ctx = RenderContext {
             first_buffer_line: 0,
-            cursor: Cursor { line: 1, column: 9, index: (1, 9).into() },
+            cursor: (1, 9).into(),
             ..ctx
         };
 
@@ -1302,7 +1281,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -1323,32 +1302,23 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 6, line: 0, index: (0, 10).into() },
+            cursor: (0, 10).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 5, line: 0, index: (0, 9).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 3, line: 0, index: (0, 5).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 5).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 2, line: 0, index: (0, 2).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 2).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1363,14 +1333,14 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 0, line: 1, index: (1, 0).into() },
+            cursor: (1, 0).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 8, line: 0, index: (0, 8).into() },
+            cursor: (0, 8).into(),
             ..ctx
         };
 
@@ -1399,13 +1369,13 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_buffer_line: 1,
-            cursor: Cursor { column: 0, line: 1, index: (2, 0).into() },
+            cursor: (2, 0).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext {
             first_buffer_line: 0,
-            cursor: Cursor { column: 8, line: 1, index: (1, 8).into() },
+            cursor: (1, 8).into(),
             ..ctx
         };
 
@@ -1424,7 +1394,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -1444,14 +1414,11 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 0, line: 3, index: (3, 0).into() },
+            cursor: (3, 0).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 1).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1468,7 +1435,7 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_buffer_line: 2,
-            cursor: Cursor { column: 0, line: 1, index: (3, 0).into() },
+            cursor: (3, 0).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -1476,7 +1443,7 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_buffer_line: 0,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
@@ -1492,7 +1459,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 7, line: 0, index: (0, 7).into() },
+            cursor: (0, 7).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -1511,41 +1478,29 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 2, line: 0, index: (0, 2).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 2).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 3, line: 0, index: (0, 5).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 5).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 5, line: 0, index: (0, 9).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 6, line: 0, index: (0, 10).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 10).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1560,14 +1515,11 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { line: 0, column: 8, index: (0, 8).into() },
+            cursor: (0, 8).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            cursor: Cursor { line: 1, column: 0, index: (1, 0).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (1, 0).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1576,13 +1528,10 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { line: 1, column: 9, index: (1, 11).into() },
+            cursor: (1, 11).into(),
             ..Default::default()
         };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { line: 2, column: 0, index: (2, 0).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (2, 0).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1608,13 +1557,13 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { line: 3, column: 9, index: (3, 9).into() },
+            cursor: (3, 9).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext {
             first_buffer_line: 1,
-            cursor: Cursor { line: 3, column: 0, index: (4, 0).into() },
+            cursor: (4, 0).into(),
             ..ctx
         };
 
@@ -1646,7 +1595,7 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_buffer_line: 5,
-            cursor: Cursor { column: 0, line: 4, index: (9, 0).into() },
+            cursor: (9, 0).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -1679,14 +1628,11 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_buffer_line: 5,
-            cursor: Cursor { column: 5, line: 3, index: (8, 5).into() },
+            cursor: (8, 5).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 0, line: 4, index: (9, 0).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (9, 0).into(), ..ctx };
         let ret = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(ret.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1705,13 +1651,13 @@ mod tests {
             display_height: 5,
             first_buffer_line: 0,
             first_display_line: 3,
-            cursor: Cursor { column: 1, line: 3, index: buf.input_start },
+            cursor: buf.input_start,
             ..Default::default()
         };
 
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext {
-            cursor: Cursor { column: 0, line: 4, index: (4, 0).into() },
+            cursor: (4, 0).into(),
             first_display_line: 0,
             scroll_needed: 3,
             ..ctx
@@ -1744,12 +1690,12 @@ mod tests {
             display_width: 10,
             display_height: 5,
             first_buffer_line: 0,
-            cursor: Cursor { column: 1, line: 0, index: buf.input_start },
+            cursor: buf.input_start,
             ..Default::default()
         };
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext {
-            cursor: Cursor { column: 0, line: 4, index: (9, 0).into() },
+            cursor: (9, 0).into(),
             first_buffer_line: 5,
             ..ctx
         };
@@ -1767,7 +1713,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 7, line: 0, index: (0, 11).into() },
+            cursor: (0, 11).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -1786,7 +1732,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 2, line: 0, index: (0, 2).into() },
+            cursor: (0, 2).into(),
             ..Default::default()
         };
 
@@ -1818,15 +1764,12 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 0, line: 1, index: (1, 0).into() },
+            cursor: (1, 0).into(),
             ..Default::default()
         };
 
         let expected_buf = make_buf(&["12345678a", "bc"], ':');
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1844,7 +1787,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
+            cursor: (0, 9).into(),
             ..Default::default()
         };
 
@@ -1852,10 +1795,7 @@ mod tests {
             &["123456780", "1234567890", "1234567890", "123456789"],
             ':',
         );
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1880,14 +1820,14 @@ mod tests {
             display_width: 10,
             display_height: 10,
             first_display_line: 3,
-            cursor: Cursor { column: 3, line: 9, index: (6, 5).into() },
+            cursor: (6, 5).into(),
             ..Default::default()
         };
 
         let expected_ctx = RenderContext {
             display_height: 8,
             first_display_line: 1,
-            cursor: Cursor { column: 3, line: 7, index: (6, 5).into() },
+            cursor: (6, 5).into(),
             ..ctx
         };
         let expected_buf = buf.clone();
@@ -1899,7 +1839,7 @@ mod tests {
         let expected_ctx = RenderContext {
             display_height: 7,
             first_display_line: 0,
-            cursor: Cursor { column: 3, line: 6, index: (6, 5).into() },
+            cursor: (6, 5).into(),
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 7));
@@ -1910,7 +1850,7 @@ mod tests {
         let expected_ctx = RenderContext {
             display_height: 5,
             first_buffer_line: 2,
-            cursor: Cursor { column: 3, line: 4, index: (6, 5).into() },
+            cursor: (6, 5).into(),
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 5));
@@ -1937,7 +1877,7 @@ mod tests {
             display_width: 10,
             display_height: 10,
             first_display_line: 3,
-            cursor: Cursor { column: 1, line: 3, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
 
@@ -1945,7 +1885,7 @@ mod tests {
         let expected_ctx = RenderContext {
             display_height: 8,
             first_display_line: 1,
-            cursor: Cursor { column: 1, line: 1, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 8));
@@ -1956,7 +1896,7 @@ mod tests {
         let expected_ctx = RenderContext {
             display_height: 7,
             first_display_line: 0,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 7));
@@ -1964,11 +1904,8 @@ mod tests {
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
-        let expected_ctx = RenderContext {
-            display_height: 5,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
-            ..ctx
-        };
+        let expected_ctx =
+            RenderContext { display_height: 5, cursor: (0, 1).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 5));
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1993,7 +1930,7 @@ mod tests {
             display_width: 10,
             display_height: 10,
             first_display_line: 3,
-            cursor: Cursor { column: 1, line: 3, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
 
@@ -2032,7 +1969,7 @@ mod tests {
             display_width: 10,
             display_height: 10,
             first_display_line: 3,
-            cursor: Cursor { column: 9, line: 3, index: (0, 9).into() },
+            cursor: (0, 9).into(),
             ..Default::default()
         };
 
@@ -2054,11 +1991,8 @@ mod tests {
             input_start: (1, 3).into(),
             ..buf.clone()
         };
-        let expected_ctx = RenderContext {
-            display_width: 6,
-            cursor: Cursor { column: 3, line: 4, index: (1, 3).into() },
-            ..ctx
-        };
+        let expected_ctx =
+            RenderContext { display_width: 6, cursor: (1, 3).into(), ..ctx };
 
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
         assert!(res.is_continue());
@@ -2084,7 +2018,7 @@ mod tests {
             display_width: 10,
             display_height: 10,
             first_display_line: 3,
-            cursor: Cursor { column: 8, line: 9, index: (6, 10).into() },
+            cursor: (6, 10).into(),
             ..Default::default()
         };
 
@@ -2096,7 +2030,7 @@ mod tests {
             ':',
         );
         let expected_ctx = RenderContext {
-            cursor: Cursor { column: 1, line: 9, index: (11, 1).into() },
+            cursor: (11, 1).into(),
             first_display_line: 0,
             scroll_needed: 3,
             first_buffer_line: 2,
@@ -2130,7 +2064,7 @@ mod tests {
             display_width: 10,
             display_height: 6,
             first_buffer_line: 3,
-            cursor: Cursor { column: 8, line: 5, index: (8, 10).into() },
+            cursor: (8, 10).into(),
             ..Default::default()
         };
 
@@ -2140,7 +2074,7 @@ mod tests {
             first_display_line: 0,
             first_buffer_line: 0,
             display_height: 10,
-            cursor: Cursor { column: 8, line: 8, index: (8, 10).into() },
+            cursor: (8, 10).into(),
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
@@ -2168,7 +2102,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 6,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
 
@@ -2194,7 +2128,7 @@ mod tests {
             display_width: 6,
             display_height: 10,
             first_display_line: 0,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
+            cursor: (0, 1).into(),
             ..Default::default()
         };
 
@@ -2243,7 +2177,7 @@ mod tests {
             display_width: 6,
             display_height: 10,
             first_display_line: 0,
-            cursor: Cursor { column: 3, line: 1, index: (1, 3).into() },
+            cursor: (1, 3).into(),
             ..Default::default()
         };
 
@@ -2260,11 +2194,8 @@ mod tests {
             input_start: (0, 9).into(),
             ..buf.clone()
         };
-        let expected_ctx = RenderContext {
-            display_width: 10,
-            cursor: Cursor { column: 9, line: 0, index: (0, 9).into() },
-            ..ctx
-        };
+        let expected_ctx =
+            RenderContext { display_width: 10, cursor: (0, 9).into(), ..ctx };
         let res =
             handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
         assert!(res.is_continue());
@@ -2285,7 +2216,7 @@ mod tests {
             display_width: 6,
             display_height: 10,
             first_buffer_line: 2,
-            cursor: Cursor { column: 2, line: 9, index: (11, 2).into() },
+            cursor: (11, 2).into(),
             ..Default::default()
         };
 
@@ -2304,7 +2235,7 @@ mod tests {
         let expected_ctx = RenderContext {
             display_width: 10,
             first_buffer_line: 0,
-            cursor: Cursor { column: 9, line: 6, index: (6, 11).into() },
+            cursor: (6, 11).into(),
             ..ctx
         };
         let res =
@@ -2320,7 +2251,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 9, line: 0, index: (0, 13).into() },
+            cursor: (0, 13).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -2342,7 +2273,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 9, line: 0, index: (0, 13).into() },
+            cursor: (0, 13).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -2364,7 +2295,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 10,
-            cursor: Cursor { column: 9, line: 0, index: (0, 13).into() },
+            cursor: (0, 13).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -2387,7 +2318,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 9, line: 0, index: (0, 13).into() },
+            cursor: (0, 13).into(),
             ..Default::default()
         };
         let mut hs = Some(HistoryStack::new());
@@ -2413,7 +2344,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 3, line: 1, index: (1, 3).into() },
+            cursor: (1, 3).into(),
             ..Default::default()
         };
         let mut hs = Some(HistoryStack::new());
@@ -2438,7 +2369,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 3, line: 1, index: (1, 3).into() },
+            cursor: (1, 3).into(),
             ..Default::default()
         };
         let hs = HistoryStack {
@@ -2453,10 +2384,7 @@ mod tests {
             draft: Some("123456789abc".to_owned()),
         };
         let expected_hs = HistoryStack { index: 2, ..hs.clone() };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 4).into(), ..ctx };
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
@@ -2471,7 +2399,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 3, line: 0, index: (0, 3).into() },
+            cursor: (0, 3).into(),
             ..Default::default()
         };
         let mut buf = EditBuffer {
@@ -2486,10 +2414,7 @@ mod tests {
             index: 1,
         };
 
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 4).into(), ..ctx };
         let expected_buf =
             EditBuffer { lines: vec![":foo".into()], ..buf.clone() };
         let expected_hs = HistoryStack {
@@ -2510,7 +2435,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 3, line: 0, index: (0, 3).into() },
+            cursor: (0, 3).into(),
             ..Default::default()
         };
         let mut buf = EditBuffer {
@@ -2525,10 +2450,7 @@ mod tests {
             index: 1,
         };
 
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (0, 4).into(), ..ctx };
         let expected_buf =
             EditBuffer { lines: vec![":foo".into()], ..buf.clone() };
         let expected_hs = HistoryStack {
@@ -2570,7 +2492,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
+            cursor: (0, 4).into(),
             ..Default::default()
         };
         let hs = HistoryStack {
@@ -2598,7 +2520,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
+            cursor: (0, 4).into(),
             ..Default::default()
         };
         let hs = HistoryStack {
@@ -2625,7 +2547,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
+            cursor: (0, 4).into(),
             ..Default::default()
         };
         let hs = HistoryStack {
@@ -2652,7 +2574,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
+            cursor: (0, 4).into(),
             ..Default::default()
         };
         let mut buf = EditBuffer {
@@ -2666,10 +2588,7 @@ mod tests {
             edited: vec![None, None, None],
             index: 2,
         };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 3, line: 1, index: (1, 3).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (1, 3).into(), ..ctx };
         let expected_buf = EditBuffer {
             lines: vec![":123456789".into(), "abc".into()],
             draft: None,
@@ -2698,14 +2617,11 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 3, line: 0, index: (0, 3).into() },
+            cursor: (0, 3).into(),
             ..Default::default()
         };
         let expected_buf = make_buf(&["123456789", "abc"], ':');
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 3, line: 1, index: (1, 3).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (1, 3).into(), ..ctx };
         let expected_hs = HistoryStack {
             lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
             edited: vec![None, None, None],
@@ -2730,7 +2646,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { line: 0, column: 10, index: (0, 10).into() },
+            cursor: (0, 10).into(),
             ..Default::default()
         };
         let expected_buf = buf.clone();
@@ -2757,7 +2673,7 @@ mod tests {
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
-            cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
+            cursor: (0, 4).into(),
             ..Default::default()
         };
         let hs = HistoryStack {
@@ -2771,10 +2687,7 @@ mod tests {
             draft: None,
             ..buf.clone()
         };
-        let expected_ctx = RenderContext {
-            cursor: Cursor { column: 3, line: 1, index: (1, 3).into() },
-            ..ctx
-        };
+        let expected_ctx = RenderContext { cursor: (1, 3).into(), ..ctx };
         let expected_hs = HistoryStack { index: 3, ..hs.clone() };
         let mut hs = Some(hs);
         let res = handle_event(

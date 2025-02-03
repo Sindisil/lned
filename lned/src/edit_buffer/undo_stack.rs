@@ -34,7 +34,6 @@ pub struct Change {
     diffs: Vec<Diff>,
 }
 
-//#[derive(Debug, Clone)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Diff {
     Add(usize, Vec<String>),    // Add/Insert of lines

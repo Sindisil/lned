@@ -1,9 +1,11 @@
 use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::ops::ControlFlow;
+use std::ops::Deref;
+use std::ops::RangeBounds;
 
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-use crate::render_context::Cursor;
 use crate::render_context::RenderContext;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14,6 +16,19 @@ pub struct EditBuffer {
     pub(crate) draft: Option<String>,
 }
 
+pub fn char_width(ch: char, width_before: usize) -> usize {
+    if ch == '\t' {
+        8 - (width_before % 8)
+    } else {
+        use unicode_width::UnicodeWidthChar;
+        ch.width().unwrap_or(0)
+    }
+}
+
+pub fn str_width(s: &str, width_before: usize) -> usize {
+    s.chars().fold(0, |width, ch| width + char_width(ch, width + width_before))
+}
+
 impl EditBuffer {
     #[must_use]
     pub fn new() -> EditBuffer {
@@ -21,15 +36,11 @@ impl EditBuffer {
     }
 
     pub fn reset(&mut self, render_ctx: &mut RenderContext, prompt: &str) {
-        let prompt_line =
-            BufferLine { text: prompt.to_owned(), width: prompt.width() };
+        let mut prompt_line = BufferLine::new();
+        prompt_line.replace_range(.., prompt);
         self.input_start = (0, prompt_line.text.len()).into();
         self.prompt_char_count = prompt.chars().count();
-        render_ctx.cursor = Cursor {
-            column: prompt_line.width,
-            line: render_ctx.first_display_line,
-            index: self.input_start,
-        };
+        render_ctx.cursor = self.input_start;
         self.lines.splice(.., [prompt_line]);
         self.reflow(render_ctx, 0);
     }
@@ -94,13 +105,11 @@ impl EditBuffer {
                     tl_idx += 1;
                 }
                 Ordering::Equal => {
-                    if tl_idx == render_ctx.cursor.index.line
-                        && render_ctx.cursor.column >= render_ctx.display_width
+                    if tl_idx == render_ctx.cursor.line
+                        && render_ctx.cursor.offset == self.lines[tl_idx].len()
                     {
                         render_ctx.cursor.line += 1;
-                        render_ctx.cursor.column = 0;
-                        render_ctx.cursor.index.line += 1;
-                        render_ctx.cursor.index.offset = 0;
+                        render_ctx.cursor.offset = 0;
                     }
                     tl_idx += 1;
                 }
@@ -128,7 +137,7 @@ impl EditBuffer {
         let moved = self.lines[nl_idx].text.char_indices().try_fold(
             (0, 0),
             |(res_idx, cols_moved), (i, c)| {
-                let c_width = c.width().unwrap_or(0);
+                let c_width = char_width(c, cols_moved);
                 if render_ctx.display_width >= (tl_width + cols_moved + c_width)
                 {
                     ControlFlow::Continue((i + 1, cols_moved + c_width))
@@ -143,20 +152,17 @@ impl EditBuffer {
             }
         };
         if res_idx > 0 {
-            if render_ctx.cursor.index.line == nl_idx {
+            if render_ctx.cursor.line == nl_idx {
                 // if cursor was on next line, adjust cursor
-                if render_ctx.cursor.index.offset < res_idx
+                if render_ctx.cursor.offset < res_idx
                     || res_idx == self.lines[nl_idx].text.len()
                 {
                     // char at cursor moved to this line
                     render_ctx.cursor.line -= 1;
-                    render_ctx.cursor.column += tl_width;
-                    render_ctx.cursor.index.line -= 1;
-                    render_ctx.cursor.index.offset += self.lines[tl_idx].len();
+                    render_ctx.cursor.offset += self.lines[tl_idx].len();
                 } else {
                     // cursor still on next line
-                    render_ctx.cursor.index.offset -= res_idx;
-                    render_ctx.cursor.column -= cols_moved;
+                    render_ctx.cursor.offset -= res_idx;
                 }
             }
 
@@ -186,8 +192,7 @@ impl EditBuffer {
             && self.lines[tl_idx].width < render_ctx.display_width
         {
             self.lines.remove(nl_idx);
-            if render_ctx.cursor.index.line > tl_idx {
-                render_ctx.cursor.index.line -= 1;
+            if render_ctx.cursor.line > tl_idx {
                 render_ctx.cursor.line -= 1;
             }
         }
@@ -217,7 +222,7 @@ impl EditBuffer {
             .text
             .char_indices()
             .find(|(_, c)| {
-                let c_width = c.width().unwrap_or(0);
+                let c_width = char_width(*c, cols);
                 if render_ctx.display_width - cols < c_width {
                     true
                 } else {
@@ -232,19 +237,16 @@ impl EditBuffer {
         next.width += cols_moved;
         next.text.insert_str(0, this.text.drain(res_idx..).as_str());
 
-        if tl_idx == render_ctx.cursor.index.line
-            && res_idx <= render_ctx.cursor.index.offset
+        if tl_idx == render_ctx.cursor.line
+            && res_idx <= render_ctx.cursor.offset
         {
             // if this was the cursor line & char at cursor moved,
             // adjust cursor
             render_ctx.cursor.line += 1;
-            render_ctx.cursor.column -= this.width;
-            render_ctx.cursor.index.line += 1;
-            render_ctx.cursor.index.offset -= res_idx;
-        } else if render_ctx.cursor.index.line == tl_idx + 1 {
-            // if next line was cursor line, adjust cursor column
-            render_ctx.cursor.column += cols_moved;
-            render_ctx.cursor.index.offset += bytes_moved;
+            render_ctx.cursor.offset -= res_idx;
+        } else if render_ctx.cursor.line == tl_idx + 1 {
+            // if next line was cursor line, adjust cursor
+            render_ctx.cursor.offset += bytes_moved;
         }
 
         if tl_idx == self.input_start.line && res_idx <= self.input_start.offset
@@ -262,18 +264,13 @@ impl EditBuffer {
     pub fn set_input_text(
         &mut self,
         render_ctx: &mut RenderContext,
-        line: impl AsRef<str>,
+        text: impl AsRef<str>,
     ) {
-        let mut text = self.prompt();
-        self.input_start = (0, text.len()).into();
-        text.push_str(line.as_ref());
-        let width = text.width();
-        let cursor = Cursor {
-            column: width,
-            line: render_ctx.first_display_line,
-            index: (0, text.len()).into(),
-        };
-        self.lines.splice(.., [BufferLine { text, width }]);
+        let mut line = BufferLine::from(self.prompt().as_ref());
+        line.replace_range(line.len().., text.as_ref());
+        let cursor = (0, line.len()).into();
+        self.lines.clear();
+        self.lines.push(line);
         render_ctx.cursor = cursor;
         self.reflow(render_ctx, 0);
     }
@@ -300,25 +297,98 @@ impl Default for EditBuffer {
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct BufferLine {
-    pub(crate) text: String,
-    // Display width, in columns, including wide glyphs
-    pub(crate) width: usize,
+    // UTF8 encoded text content
+    text: String,
+    // Display width, in columns
+    width: usize,
+    // Number of tab ('\t') characters within _text_
+    tabs: usize,
 }
 
 impl BufferLine {
+    pub(crate) fn new() -> BufferLine {
+        BufferLine { ..Default::default() }
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.text.len()
     }
 
-    pub(crate) fn new() -> BufferLine {
-        BufferLine { text: String::new(), width: 0 }
+    #[cfg(test)]
+    pub(crate) fn width(&self) -> usize {
+        self.width
+    }
+
+    pub(crate) fn remove(&mut self, idx: usize) -> char {
+        let c = self.text.remove(idx);
+        self.update_width();
+        c
+    }
+
+    pub(crate) fn insert(&mut self, idx: usize, ch: char) {
+        self.text.insert(idx, ch);
+        if ch == '\t' {
+            self.tabs += 1;
+        }
+        self.update_width();
+    }
+
+    pub(crate) fn replace_range<R>(&mut self, range: R, replace_with: &str)
+    where
+        R: RangeBounds<usize>,
+        R: Debug,
+    {
+        self.tabs -= self.text
+            [(range.start_bound().cloned(), range.end_bound().cloned())]
+            .chars()
+            .filter(|c| *c == '\t')
+            .count();
+        self.tabs += replace_with.chars().filter(|c| *c == '\t').count();
+        self.text.replace_range(range, replace_with);
+        self.update_width();
+    }
+
+    fn update_width(&mut self) -> usize {
+        if self.tabs == 0 {
+            use unicode_width::UnicodeWidthStr;
+            self.width = self.text.width();
+            return self.width;
+        }
+
+        self.width = self.chars().fold(0, |acc, ch| acc + char_width(ch, acc));
+        self.width
     }
 }
 
 impl From<&str> for BufferLine {
     fn from(value: &str) -> BufferLine {
-        let width = value.width();
-        BufferLine { text: value.to_owned(), width }
+        let mut buf = BufferLine::new();
+        buf.replace_range(.., value);
+        buf
+    }
+}
+
+impl Deref for BufferLine {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.text
+    }
+}
+
+impl Display for BufferLine {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let mut cols = 0;
+        for c in self.chars() {
+            let c_width = char_width(c, cols);
+            if c == '\t' {
+                write!(f, "{}", &"        "[..c_width])?;
+            } else {
+                write!(f, "{c}")?;
+            }
+            cols += c_width;
+        }
+        Ok(())
     }
 }
 
