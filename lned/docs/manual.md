@@ -117,11 +117,11 @@ addr;   : addr;addr
 
 ## Print Suffixes
 
-Any command other than e, f, g, q, r, w, and ! may have an 'n' or 'p' added
-to their end. If this is the case, the command will be executed and then
-the new current line will be written as described under the 'n'
-(enumerate), and p (print) commands. Only one print suffix is supported per
-command.
+Any command other than e, f, g, q, r, w, and ! may have an 'l', 'n', or
+'p' added to their end. If this is the case, the command will be executed
+and then the new current line will be written as described under the
+'l' (list), 'n' (enumerate), or p (print) commands. Only one print suffix
+is supported per command.
 
 Note that, although the 'g' (global) command cannot itself have a print
 suffix applied, commands supplied to the global command can.
@@ -326,6 +326,25 @@ be set.
 
 Writes the line number of the addressed line to stdout.
 The current line number will be unchanged.
+
+### List ('l')
+
+#### Syntax
+
+(.)l
+
+#### Behavior
+
+The addressed lines are written to stdout with tab
+characters and end of line displayed visually. The
+last line written becomes the current line.
+
+A '$' character will be displayed at the end of each line,
+any '$' characters within the text will be backslash
+escaped (i.e., will display as '$').
+
+Each HT (horizontal tab) character within the text will
+be displayed as '\t'.
 
 ### Move ('m')
 

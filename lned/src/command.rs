@@ -27,6 +27,7 @@ pub enum Cmd {
     Insert(Option<Address>),
     Join(Option<Address>),
     LineNumber(Option<Address>),
+    List(Option<Address>),
     Move(Option<Address>, Address),
     Null(Option<Address>),
     Print(Option<Address>),
@@ -49,6 +50,7 @@ pub enum SubstitutionScope {
 pub enum PrintSuffix {
     Enumerate,
     Print,
+    List,
 }
 
 #[derive(Debug)]
@@ -332,6 +334,7 @@ impl Cmd {
             ),
             Some("i") => parse_no_args(&mut graphemes, Cmd::Insert(address)),
             Some("j") => parse_no_args(&mut graphemes, Cmd::Join(address)),
+            Some("l") => parse_no_args(&mut graphemes, Cmd::List(address)),
             Some("m") => parse_move_cmd(
                 &mut graphemes,
                 buffer,
@@ -369,13 +372,14 @@ impl Cmd {
     }
 }
 
-fn parse_print_suffix<'a>(
-    graphemes: &mut impl Iterator<Item = &'a str>,
+fn parse_print_suffix(
+    graphemes: &mut Peekable<Graphemes<'_>>,
 ) -> Result<Option<PrintSuffix>, Error> {
     let res = match graphemes.next() {
         None | Some("\n" | "\r\n") => Ok(None),
         Some("n") => Ok(Some(PrintSuffix::Enumerate)),
         Some("p") => Ok(Some(PrintSuffix::Print)),
+        Some("l") => Ok(Some(PrintSuffix::List)),
         _ => Err(Error::InvalidCmdSuffix),
     };
     if res.is_err() || res.as_ref().is_ok_and(Option::is_none) {
@@ -894,6 +898,13 @@ mod tests {
         let mut graphs = "n\r\n".graphemes(true).peekable();
         let res = parse_print_suffix(&mut graphs).unwrap();
         assert!(matches!(res, Some(PrintSuffix::Enumerate)));
+    }
+
+    #[test]
+    fn parse_print_suffix_l() {
+        let mut graphs = "l\r\n".graphemes(true).peekable();
+        let res = parse_print_suffix(&mut graphs).unwrap();
+        assert!(matches!(res, Some(PrintSuffix::List)));
     }
 
     #[test]
@@ -1918,6 +1929,14 @@ mod tests {
         let res =
             Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
         assert!(matches!(res, Some((Cmd::Join(None), None))));
+    }
+
+    #[test]
+    fn parse_list_cmd_no_addr() {
+        let mut input = "l\r\n".as_bytes();
+        let res =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
+        assert!(matches!(res, Some((Cmd::List(None), None))));
     }
 
     #[test]

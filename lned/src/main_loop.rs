@@ -5,6 +5,7 @@ use std::io::{self, BufReader, prelude::*};
 use std::path::Path;
 
 use regex::Regex;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli;
 use crate::command::{self, Address, Cmd, PrintSuffix, SubstitutionScope};
@@ -172,6 +173,11 @@ pub fn run(
                                 &mut output,
                                 cur_line_addr,
                             ),
+                            Some(PrintSuffix::List) => list_cmd(
+                                &mut buffer,
+                                &mut output,
+                                cur_line_addr,
+                            ),
                             None => Ok(None),
                         }
                     })
@@ -222,6 +228,7 @@ fn dispatch_cmd(
         Cmd::LineNumber(address) => {
             Ok(line_number_cmd(buffer, output, *address))
         }
+        Cmd::List(address) => list_cmd(buffer, output, *address),
         Cmd::Move(address, destination) => {
             move_cmd(buffer, *address, *destination)
         }
@@ -230,7 +237,9 @@ fn dispatch_cmd(
         Cmd::Quit => {
             quit_cmd(buffer, previous_cmd.as_ref()).inspect(|_| done = true)
         }
-        Cmd::Read(address, filename) => read_cmd(buffer, output, *address, filename.as_deref()),
+        Cmd::Read(address, filename) => {
+            read_cmd(buffer, output, *address, filename.as_deref())
+        }
         Cmd::Redo => buffer.do_redo().map(|()| None),
         Cmd::Substitute(address, pattern, replacement, scope) => {
             substitute_cmd(buffer, *address, pattern, replacement, *scope)
@@ -498,6 +507,9 @@ fn do_global_cmds(
                     PrintSuffix::Enumerate => {
                         enumerate_cmd(buffer, output, cur_line_addr)?;
                     }
+                    PrintSuffix::List => {
+                        list_cmd(buffer, output, cur_line_addr)?;
+                    }
                 }
             }
         }
@@ -570,10 +582,52 @@ fn line_number_cmd(
             output.write_all(format!("{}\n", buffer.len()).as_bytes()).unwrap();
         }
         Some(address) => {
-            output.write_all(format!("{}\n", address.end()).as_bytes()).unwrap();
+            output
+                .write_all(format!("{}\n", address.end()).as_bytes())
+                .unwrap();
         }
     }
     None
+}
+
+fn list_cmd(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    address: Option<Address>,
+) -> Result<Option<ChangeSet>, Error> {
+    let span = if let Some(addr) = address {
+        addr.into()
+    } else {
+        if buffer.current_line() == 0 {
+            return Err(Error::InvalidAddress);
+        }
+        buffer.current_line()..=buffer.current_line()
+    };
+
+    if *span.start() < 1
+        || *span.start() > buffer.len()
+        || *span.end() < 1
+        || *span.end() > buffer.len()
+    {
+        return Err(Error::InvalidAddress);
+    }
+
+    buffer.set_current_line(*span.end());
+    for l in &buffer[span] {
+        let expanded: String = l
+            .graphemes(true)
+            .map(|gr| match gr {
+                "\t" => "\\t",
+                "$" => "\\$",
+                "\n" => "$\n",
+                "\r\n" => "$\r\n",
+                gr => gr,
+            })
+            .collect();
+        output.write_all(expanded.as_bytes()).unwrap();
+    }
+    output.flush().unwrap();
+    Ok(None)
 }
 
 fn move_cmd(
@@ -887,7 +941,6 @@ mod tests {
     use std::str;
 
     use similar_asserts::assert_eq;
-    use unicode_segmentation::UnicodeSegmentation;
 
     struct BadWriter {}
 
@@ -1855,6 +1908,18 @@ mod tests {
     }
 
     #[test]
+    fn append_cmd_dispatch_l_print_sfx() {
+        let input = b"al\none\ntwo\nthree\n.\n2p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("two\n"));
+        assert!(output.contains("unwritten changes"));
+        assert!(!output.contains("one"));
+        assert!(output.contains("three$\n"));
+    }
+
+    #[test]
     fn delete_cmd_dispatch() {
         let input = b"a\none\ntwo\nthree\n.\n1,2d\np\nd\np\nq\nq\n";
         let mut output = Vec::new();
@@ -1929,6 +1994,15 @@ mod tests {
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("12\n3\n4\n"));
+    }
+
+    #[test]
+    fn list_cmd_dispatch() {
+        let input = b"a\n1\n2\n3\n4\n.\n1,2l\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("1$\n2$\n"));
     }
 
     #[test]
@@ -2733,5 +2807,60 @@ mod tests {
         buffer.do_redo().expect("something to redo");
         assert_eq!(buffer[..], expected[..]);
         assert_eq!(buffer.current_line(), expected.current_line());
+    }
+
+    #[test]
+    fn list_cmd_bad_addr() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut output = Vec::new();
+        let res = list_cmd(&mut buffer, &mut output, Some(Address::line(4)))
+            .expect_err("invalid addr");
+        assert!(matches!(res, Error::InvalidAddress));
+
+        buffer = EditBuffer::new();
+        let res =
+            list_cmd(&mut buffer, &mut output, None).expect_err("invalid addr");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn list_cmd_no_addr() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        list_cmd(&mut buffer, &mut output, None).unwrap();
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "2$\r\n");
+    }
+
+    #[test]
+    fn list_cmd_single_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        list_cmd(&mut buffer, &mut output, Some(Address::line(3))).unwrap();
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "3$\r\n");
+    }
+
+    #[test]
+    fn list_cmd_span() {
+        let mut output = Vec::new();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2\t2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        list_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "2\\t2$\r\n3$\r\n4$\r\n"
+        );
+    }
+
+    #[test]
+    fn list_cmd_sets_current_line() {
+        let mut output = Vec::new();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        list_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
+        assert_eq!(4, buffer.current_line());
     }
 }
