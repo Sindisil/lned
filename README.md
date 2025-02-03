@@ -38,9 +38,13 @@ has been scratched, I may instead go back to using some other editor
 (or perhaps even an IDE, though that seems less likely at this point).
 
 ## **Important Note**
-I'm making this PR public in case the code (or maybe even the editor)
-might be of some use to others. However, at the very least until
-_lned_ hits 1.0, I don't really intend it as a tool for others to
-depend upon, nor do I intend to take PRs, since either would limit the
-project's primary purpose. I will edit or remove this note if and when
-I change either policy.
+I'm making this repository public in case the code (or maybe even the
+editor) might be of some use to others. However, I don't really intend
+it as a tool for others to depend upon at this time, nor do I intend
+to take PRs, since either would limit the project's primary purpose.
+If, by some chance, anyone *does* use __lned__ (or at least try it),
+and they happen to find issues, they should feel free to open issues
+so I can consider addressing them.
+
+I will edit or remove this note if and when I change my mind on any
+of this.
