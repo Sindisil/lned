@@ -68,20 +68,18 @@ impl RenderContext {
         // convert values to u16 for crossterm
         let first_display_line = u16::try_from(self.first_display_line)
             .expect("first_display_line fits u16");
-        /*
-                let cursor_column =
-                    u16::try_from(self.cursor.column).expect("cursor column fits u16");
-                let cursor_line =
-                    u16::try_from(self.cursor.line).expect("cursor line fits u16");
-        */
         let cursor_line = (self.cursor.line - self.first_buffer_line)
             + self.first_display_line;
         let cursor_line =
             u16::try_from(cursor_line).expect("cursor line fits u16");
-        let cursor_column = edit_buffer::str_width(
-            &buffer.lines[self.cursor.line][..self.cursor.offset],
-            0,
-        );
+        let cursor_column = if self.cursor.offset == 0 {
+            0
+        } else {
+            edit_buffer::str_width(
+                &buffer.lines[self.cursor.line][..self.cursor.offset],
+                0,
+            )
+        };
         let cursor_column =
             u16::try_from(cursor_column).expect("cursor column fits u16");
 
