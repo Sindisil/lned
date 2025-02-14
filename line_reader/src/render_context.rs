@@ -95,7 +95,7 @@ impl RenderContext {
             .queue(Clear(ClearType::FromCursorDown))?;
 
         for line in &buffer.lines[self.first_buffer_line..last_displayed] {
-            stdout.write_all(line.as_bytes())?;
+            write!(stdout, "{line}")?;
         }
 
         stdout.queue(MoveTo(cursor_column, cursor_line))?.queue(Show)?.flush()

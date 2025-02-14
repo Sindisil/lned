@@ -381,9 +381,7 @@ fn enumerate_cmd(
     buffer.set_current_line(*span.end());
 
     for (i, l) in buffer[span].iter().enumerate() {
-        output
-            .write_all(format!("{:>width$}  {l}", start + i).as_bytes())
-            .unwrap();
+        print_line(output, &format!("{:>width$}  {l}", start + i));
     }
     output.flush().unwrap();
     Ok(None)
@@ -622,7 +620,7 @@ fn list_cmd(
                 gr => gr,
             })
             .collect();
-        output.write_all(expanded.as_bytes()).unwrap();
+        print_line(output, &expanded);
     }
     output.flush().unwrap();
     Ok(None)
@@ -676,10 +674,28 @@ fn print_cmd(
 
     buffer.set_current_line(*span.end());
     for l in &buffer[span] {
-        output.write_all(l.as_bytes()).unwrap();
+        print_line(output, l);
     }
     output.flush().unwrap();
     Ok(None)
+}
+
+fn print_line(output: &mut impl Write, line: &str) {
+    let mut cols = 0;
+    for c in line.chars() {
+        let c_width = if c == '\t' {
+            8 - (cols % 8)
+        } else {
+            use unicode_width::UnicodeWidthChar;
+            c.width().unwrap_or(0)
+        };
+        if c == '\t' {
+            write!(output, "{}", &"        "[..c_width]).unwrap();
+        } else {
+            write!(output, "{c}").unwrap();
+        }
+        cols += c_width;
+    }
 }
 
 /// Implements quit command.

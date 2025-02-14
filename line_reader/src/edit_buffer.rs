@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 use std::fmt::Debug;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::ops::ControlFlow;
 use std::ops::Deref;
 use std::ops::RangeBounds;
@@ -374,6 +376,21 @@ impl Deref for BufferLine {
     }
 }
 
+impl Display for BufferLine {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let mut cols = 0;
+        for c in self.chars() {
+            let c_width = char_width(c, cols);
+            if c == '\t' {
+                write!(f, "{}", &"        "[..c_width])?;
+            } else {
+                write!(f, "{c}")?;
+            }
+            cols += c_width;
+        }
+        Ok(())
+    }
+}
 
 // Location within edit buffer
 #[derive(Debug, Clone, Copy, Default)]

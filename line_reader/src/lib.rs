@@ -410,14 +410,30 @@ fn handle_char_input(
     // if char is zero width, but no previous chars exist to
     //  which it can  be combined, do nothing (i.e., don't accept
     // the input)
-    if (render_ctx.cursor == buffer.input_start
-        || buffer.lines[render_ctx.cursor.line][..render_ctx.cursor.offset]
+    if c != '\t' && edit_buffer::char_width(c, 0) == 0 {
+        let check_line = if render_ctx.cursor.offset > 0 {
+            render_ctx.cursor.line
+        } else {
+            render_ctx.cursor.line - 1
+        };
+        let check_start_offset = if check_line == buffer.input_start.line {
+            buffer.input_start.offset
+        } else {
+            0
+        };
+        let check_end_offset = if render_ctx.cursor.offset == 0 {
+            buffer.lines[check_line].len()
+        } else {
+            render_ctx.cursor.offset
+        };
+        if !buffer.lines[check_line][check_start_offset..check_end_offset]
             .chars()
-            .last()
-            .is_some_and(|ch| ch == '\t'))
-        && edit_buffer::char_width(c, 0) == 0
-    {
-        return ControlFlow::Continue(());
+            .rev()
+            .take_while(|c| *c != '\t')
+            .any(|c| edit_buffer::char_width(c, 0) > 0)
+        {
+            return ControlFlow::Continue(());
+        }
     }
 
     // insert new char at curser and let reflow sort it out

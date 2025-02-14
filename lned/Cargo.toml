@@ -8,6 +8,7 @@ edition = "2024"
 lexopt = "0.3.0"
 regex = "1.8.1"
 unicode-segmentation = "1.11.0"
+unicode-width = "0.2.0"
 wild = "2.1.0"
 line_reader = { path = "../line_reader" }
 
