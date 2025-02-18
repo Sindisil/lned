@@ -733,9 +733,7 @@ fn read_cmd(
         Address::line(buffer.current_line())
     };
 
-    if buffer.filename().is_none() && filename.is_some() {
-        buffer.set_filename(filename.map(ToOwned::to_owned));
-    }
+    // read shouldn't set the remembered filename
     let filename = filename.or(buffer.filename()).ok_or(Error::NoFilename)?;
 
     let file = File::open(filename);
