@@ -21,3 +21,4 @@ pedantic = "warn"
 
 [dev-dependencies]
 similar-asserts = "1.6.0"
+tempfile = "3.20.0"
