@@ -146,7 +146,7 @@ impl LineReader {
             }
         }
 
-        handle_end(&mut self.buffer, &mut render_ctx);
+        let _ = handle_end(&mut self.buffer, &mut render_ctx);
         render_ctx.repaint(&self.buffer)?;
         let mut stdout = io::stdout().lock();
         stdout.write_all(b"\r\n")?;
@@ -353,7 +353,7 @@ fn handle_down(
         );
     } else {
         buffer.set_from_draft(render_ctx);
-    };
+    }
 
     ControlFlow::Continue(())
 }
