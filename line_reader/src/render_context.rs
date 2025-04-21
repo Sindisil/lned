@@ -147,7 +147,7 @@ mod tests {
                 "0123456789".into(),
                 "012345".into(),
             ],
-            prompt_char_count: 1,
+            prompt: Some(':'),
             input_start: (0, 1).into(),
             draft: None,
         };
@@ -176,7 +176,7 @@ mod tests {
                 "0123456789".into(),
                 "012345".into(),
             ],
-            prompt_char_count: 1,
+            prompt: Some(':'),
             input_start: (0, 1).into(),
             draft: None,
         };
@@ -205,7 +205,7 @@ mod tests {
                 "0123456789".into(),
                 "012345".into(),
             ],
-            prompt_char_count: 1,
+            prompt: Some(':'),
             input_start: (0, 1).into(),
             draft: None,
         };
@@ -235,7 +235,7 @@ mod tests {
                 "012345".into(),
             ],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
+            prompt: Some(':'),
             draft: None,
         };
         let render_ctx = RenderContext {

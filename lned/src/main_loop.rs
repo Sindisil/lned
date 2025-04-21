@@ -932,7 +932,7 @@ fn write_lines(
             while bytes_written < bytes_to_write {
                 bytes_written = bytes_written
                     + destination
-                        .write(line[bytes_written..].as_bytes())
+                        .write(&line.as_bytes()[bytes_written..])
                         .map_err(|source| Error::WriteLines { source })?;
             }
             total_bytes_written += bytes_written;

@@ -2,7 +2,6 @@ mod edit_buffer;
 mod history_stack;
 mod render_context;
 
-use std::borrow::Cow;
 use std::io::{self, BufRead, Write};
 use std::ops::ControlFlow;
 use std::time::Duration;
@@ -26,7 +25,7 @@ pub trait LineRead {
     /// Will return `io::Error` if an error is encountered reading a line
     fn read_line(
         &mut self,
-        prompt: &'static str,
+        prompt: Option<char>,
         buffer: &mut String,
     ) -> io::Result<usize>;
 
@@ -48,7 +47,7 @@ pub struct LineReader {
 
 #[derive(Debug, Clone)]
 pub struct LineReaderOptions {
-    pub prompt: Cow<'static, str>,
+    pub prompt: Option<char>,
     pub history: bool,
 }
 
@@ -98,7 +97,7 @@ impl LineReader {
             display_height.into(),
             first_display_line.into(),
         );
-        self.buffer.reset(&mut render_ctx, &options.prompt);
+        self.buffer.reset(&mut render_ctx, options.prompt);
         terminal::enable_raw_mode()?;
         render_ctx.repaint(&self.buffer)?;
 
@@ -147,7 +146,7 @@ impl LineReader {
             }
         }
 
-        handle_end(&mut self.buffer, &mut render_ctx);
+        let _ = handle_end(&mut self.buffer, &mut render_ctx);
         render_ctx.repaint(&self.buffer)?;
         let mut stdout = io::stdout().lock();
         stdout.write_all(b"\r\n")?;
@@ -166,12 +165,12 @@ impl LineReader {
 impl LineRead for LineReader {
     fn read_line(
         &mut self,
-        prompt: &'static str,
+        prompt: Option<char>,
         buffer: &mut String,
     ) -> io::Result<usize> {
         self.accept_line(
             buffer,
-            &LineReaderOptions { prompt: prompt.into(), ..Default::default() },
+            &LineReaderOptions { prompt, ..Default::default() },
         )
     }
 
@@ -194,7 +193,7 @@ impl LineReaderOptions {
 
 impl Default for LineReaderOptions {
     fn default() -> Self {
-        LineReaderOptions { prompt: "".into(), history: true }
+        LineReaderOptions { prompt: None, history: true }
     }
 }
 
@@ -219,7 +218,7 @@ where
 {
     fn read_line(
         &mut self,
-        _prompt: &str,
+        _prompt: Option<char>,
         buffer: &mut String,
     ) -> io::Result<usize> {
         BufRead::read_line(self, buffer)
@@ -354,7 +353,7 @@ fn handle_down(
         );
     } else {
         buffer.set_from_draft(render_ctx);
-    };
+    }
 
     ControlFlow::Continue(())
 }
@@ -599,11 +598,14 @@ mod tests {
     use similar_asserts::assert_eq;
 
     fn make_buf(lines: &[&str], prompt: char) -> EditBuffer {
-        let mut buf = EditBuffer { lines: Vec::new(), ..Default::default() };
+        let mut buf = EditBuffer {
+            lines: Vec::new(),
+            prompt: Some(prompt),
+            ..Default::default()
+        };
         for &l in lines {
             buf.lines.push(l.into());
         }
-        buf.prompt_char_count = 1;
         buf.input_start = (0, prompt.len_utf8()).into();
         if let Some(l) = buf.lines.get_mut(0) {
             l.insert(0, prompt);
@@ -671,7 +673,6 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -696,7 +697,6 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":a".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -709,7 +709,6 @@ mod tests {
         let expected_buf = EditBuffer {
             lines: vec![":ä".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let expected_ctx = RenderContext {
@@ -821,7 +820,6 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":1234567".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -847,7 +845,6 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":12345678".into(), "🎸abc".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -876,7 +873,6 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":12345678".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -906,7 +902,6 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":123456789".into(), "abc".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -936,7 +931,6 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":12345678".into(), "🎸2345678".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -976,7 +970,6 @@ mod tests {
                 "🎸2345678".into(),
             ],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -1021,7 +1014,6 @@ mod tests {
                 "🎸2345678".into(),
             ],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -1067,7 +1059,6 @@ mod tests {
                 "012345678".into(),
             ],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -1107,7 +1098,6 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":ë".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -1977,7 +1967,6 @@ mod tests {
                 "0123456789".into(),
                 "äbcdefgh".into(),
             ],
-            prompt_char_count: 9,
             input_start: (0, 9).into(),
             ..Default::default()
         };
@@ -2186,7 +2175,6 @@ mod tests {
                 "h".into(),
             ],
             input_start: (1, 3).into(),
-            prompt_char_count: 9,
             ..Default::default()
         };
         let mut ctx = RenderContext {
@@ -2396,7 +2384,7 @@ mod tests {
         let expected_buf = EditBuffer {
             lines: vec![":baz".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
+            prompt: Some(':'),
             draft: Some("123456789abc".to_owned()),
         };
         let expected_hs = HistoryStack { index: 2, ..hs.clone() };
@@ -2421,7 +2409,7 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":ba".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
+            prompt: Some(':'),
             draft: Some("123456789abc".to_owned()),
         };
         let hs = HistoryStack {
@@ -2457,7 +2445,7 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":ba".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
+            prompt: Some(':'),
             draft: Some("123456789abc".to_owned()),
         };
         let hs = HistoryStack {
@@ -2595,7 +2583,7 @@ mod tests {
         };
         let mut buf = EditBuffer {
             lines: vec![":baz".into()],
-            prompt_char_count: 1,
+            prompt: Some(':'),
             input_start: (0, 1).into(),
             draft: Some("123456789abc".to_owned()),
         };
@@ -2683,7 +2671,7 @@ mod tests {
         let mut buf = EditBuffer {
             lines: vec![":foo".into()],
             input_start: (0, 1).into(),
-            prompt_char_count: 1,
+            prompt: Some(':'),
             draft: Some("123456789abc".to_owned()),
         };
         let mut ctx = RenderContext {
