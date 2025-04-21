@@ -11,7 +11,7 @@ use crate::render_context::RenderContext;
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditBuffer {
     pub(crate) lines: Vec<BufferLine>,
-    pub(crate) prompt_char_count: usize,
+    pub(crate) prompt: Option<char>,
     pub(crate) input_start: BufferIndex,
     pub(crate) draft: Option<String>,
 }
@@ -35,23 +35,20 @@ impl EditBuffer {
         EditBuffer { ..Default::default() }
     }
 
-    pub fn reset(&mut self, render_ctx: &mut RenderContext, prompt: &str) {
+    pub fn reset(
+        &mut self,
+        render_ctx: &mut RenderContext,
+        prompt: Option<char>,
+    ) {
         let mut prompt_line = BufferLine::new();
-        prompt_line.replace_range(.., prompt);
+        self.prompt = prompt;
+        if let Some(ch) = prompt {
+            prompt_line.push(ch);
+        }
         self.input_start = (0, prompt_line.text.len()).into();
-        self.prompt_char_count = prompt.chars().count();
         render_ctx.cursor = self.input_start;
         self.lines.splice(.., [prompt_line]);
         self.reflow(render_ctx, 0);
-    }
-
-    #[must_use]
-    pub fn prompt(&self) -> String {
-        self.lines
-            .iter()
-            .flat_map(|l| l.text.chars())
-            .take(self.prompt_char_count)
-            .collect()
     }
 
     pub fn len(&self) -> usize {
@@ -75,7 +72,7 @@ impl EditBuffer {
             self.lines
                 .iter()
                 .flat_map(|l| l.text.chars())
-                .skip(self.prompt_char_count),
+                .skip(self.prompt.is_some().into()),
         );
     }
 
@@ -83,7 +80,7 @@ impl EditBuffer {
         self.lines
             .iter()
             .flat_map(|l| l.text.chars())
-            .skip(self.prompt_char_count)
+            .skip(self.prompt.is_some().into())
     }
 
     /// Reflow buffer lines to fit `display_width`, and
@@ -266,8 +263,11 @@ impl EditBuffer {
         render_ctx: &mut RenderContext,
         text: impl AsRef<str>,
     ) {
-        let mut line = BufferLine::from(self.prompt().as_ref());
-        line.replace_range(line.len().., text.as_ref());
+        let mut line = BufferLine::new();
+        if let Some(ch) = self.prompt {
+            line.push(ch);
+        }
+        line.push_str(text.as_ref());
         let cursor = (0, line.len()).into();
         self.lines.clear();
         self.lines.push(line);
@@ -288,7 +288,7 @@ impl Default for EditBuffer {
     fn default() -> EditBuffer {
         EditBuffer {
             lines: Vec::new(),
-            prompt_char_count: 0,
+            prompt: None,
             input_start: (0, 0).into(),
             draft: None,
         }
@@ -323,6 +323,20 @@ impl BufferLine {
         let c = self.text.remove(idx);
         self.update_width();
         c
+    }
+
+    pub(crate) fn push(&mut self, ch: char) {
+        self.text.push(ch);
+        if ch == '\t' {
+            self.tabs += 1;
+        }
+        self.update_width();
+    }
+
+    pub(crate) fn push_str(&mut self, str: &str) {
+        self.tabs += str.chars().filter(|c| *c == '\t').count();
+        self.text.push_str(str);
+        self.update_width();
     }
 
     pub(crate) fn insert(&mut self, idx: usize, ch: char) {

@@ -5,7 +5,7 @@ use line_reader::LineReader;
 fn main() {
     let mut line = String::new();
     let mut reader = LineReader::new();
-    let res = reader.read_line(":", &mut line);
+    let res = reader.read_line(Some(':'), &mut line);
     match res {
         Err(e) => eprintln!("{e}"),
         Ok(bytes_read) => {

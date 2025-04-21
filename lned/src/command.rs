@@ -317,7 +317,7 @@ impl Cmd {
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
         let cmd_read_options =
-            LineReaderOptions { prompt: ":".into(), ..Default::default() };
+            LineReaderOptions { prompt: Some(':'), ..Default::default() };
         let mut line = String::with_capacity(120);
         input
             .read(&mut line, &cmd_read_options)
@@ -569,7 +569,7 @@ pub(crate) fn parse_substitute_cmd(
     }
 
     let line_read_options =
-        LineReaderOptions { prompt: "".into(), ..Default::default() };
+        LineReaderOptions { prompt: None, ..Default::default() };
     let mut line = String::new();
     let (cmd, sfx) = loop {
         input
@@ -800,7 +800,7 @@ fn parse_global_command_list(
     // to read in rest of command list
     if more_lines {
         let line_read_options =
-            LineReaderOptions { prompt: "".into(), ..Default::default() };
+            LineReaderOptions { prompt: None, ..Default::default() };
         let mut line = String::new();
         while more_lines {
             input
