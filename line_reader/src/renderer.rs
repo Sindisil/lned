@@ -14,7 +14,7 @@ use crate::edit_buffer::BufferIndex;
 use crate::edit_buffer::EditBuffer;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct RenderContext {
+pub struct Renderer {
     pub(crate) display_width: usize,
     pub(crate) display_height: usize,
     pub(crate) cursor: BufferIndex,
@@ -23,13 +23,13 @@ pub struct RenderContext {
     pub(crate) scroll_needed: usize,
 }
 
-impl RenderContext {
+impl Renderer {
     pub fn new(
         display_width: usize,
         display_height: usize,
         first_display_line: usize,
-    ) -> RenderContext {
-        RenderContext {
+    ) -> Renderer {
+        Renderer {
             display_width,
             display_height,
             first_display_line,
@@ -151,17 +151,17 @@ mod tests {
             input_start: (0, 1).into(),
             draft: None,
         };
-        let render_ctx = RenderContext {
+        let renderer = Renderer {
             display_width: 10,
             display_height: 5,
             cursor: (2, 6).into(),
             ..Default::default()
         };
         assert_eq!(
-            render_ctx.viewport_bottom(&buffer),
-            render_ctx.display_height - 1
+            renderer.viewport_bottom(&buffer),
+            renderer.display_height - 1
         );
-        assert_eq!(render_ctx.viewport_top(), 0);
+        assert_eq!(renderer.viewport_top(), 0);
     }
 
     #[test]
@@ -180,16 +180,16 @@ mod tests {
             input_start: (0, 1).into(),
             draft: None,
         };
-        let render_ctx = RenderContext {
+        let renderer = Renderer {
             display_width: 10,
             display_height: 5,
             cursor: (6, 6).into(),
             first_buffer_line: 2,
             ..Default::default()
         };
-        let vp_bottom = render_ctx.viewport_bottom(&buffer);
-        let vp_top = render_ctx.viewport_top();
-        assert_eq!(vp_bottom, render_ctx.display_height - 1);
+        let vp_bottom = renderer.viewport_bottom(&buffer);
+        let vp_top = renderer.viewport_top();
+        assert_eq!(vp_bottom, renderer.display_height - 1);
         assert_eq!(vp_top, 1);
     }
 
@@ -209,17 +209,17 @@ mod tests {
             input_start: (0, 1).into(),
             draft: None,
         };
-        let render_ctx = RenderContext {
+        let renderer = Renderer {
             display_width: 10,
             display_height: 5,
             cursor: (0, 1).into(),
             ..Default::default()
         };
         assert_eq!(
-            render_ctx.viewport_bottom(&buffer),
-            render_ctx.display_height - 2
+            renderer.viewport_bottom(&buffer),
+            renderer.display_height - 2
         );
-        assert_eq!(render_ctx.viewport_top(), 0);
+        assert_eq!(renderer.viewport_top(), 0);
     }
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
             prompt: Some(':'),
             draft: None,
         };
-        let render_ctx = RenderContext {
+        let renderer = Renderer {
             display_width: 10,
             display_height: 5,
             cursor: (3, 5).into(),
@@ -246,9 +246,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            render_ctx.viewport_bottom(&buffer),
-            render_ctx.display_height - 2
+            renderer.viewport_bottom(&buffer),
+            renderer.display_height - 2
         );
-        assert_eq!(render_ctx.viewport_top(), 1);
+        assert_eq!(renderer.viewport_top(), 1);
     }
 }
