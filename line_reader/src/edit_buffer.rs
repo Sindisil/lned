@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use std::ops::Deref;
 use std::ops::RangeBounds;
 
-use crate::renderer::Renderer;
+use crate::renderer::View;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EditBuffer {
@@ -37,7 +37,7 @@ impl EditBuffer {
 
     pub fn reset(
         &mut self,
-        render_renderer: &mut Renderer,
+        view: &mut View,
         prompt: Option<char>,
     ) {
         let mut prompt_line = BufferLine::new();
@@ -46,9 +46,9 @@ impl EditBuffer {
             prompt_line.push(ch);
         }
         self.input_start = (0, prompt_line.text.len()).into();
-        render_renderer.cursor = self.input_start;
+        view.cursor = self.input_start;
         self.lines.splice(.., [prompt_line]);
-        self.reflow(render_renderer, 0);
+        self.reflow(view, 0);
     }
 
     pub fn len(&self) -> usize {
@@ -86,38 +86,38 @@ impl EditBuffer {
     /// Reflow buffer lines to fit `display_width`, and
     /// snap cursor location to within viewport.
     /// Also might result in setting scroll needed.
-    pub fn reflow(&mut self, render_renderer: &mut Renderer, start: usize) {
+    pub fn reflow(&mut self, view: &mut View, start: usize) {
         let mut tl_idx = start;
         while tl_idx < self.lines.len() {
-            match self.lines[tl_idx].width.cmp(&render_renderer.display_width) {
+            match self.lines[tl_idx].width.cmp(&view.display_width) {
                 Ordering::Less => {
                     if self
-                        .try_fill_from_next(render_renderer, tl_idx)
+                        .try_fill_from_next(view, tl_idx)
                         .is_none()
                         || self.lines[tl_idx].width
-                            == render_renderer.display_width
+                            == view.display_width
                     {
                         tl_idx += 1;
                     }
                 }
                 Ordering::Greater => {
-                    self.move_overflow_to_next(render_renderer, tl_idx);
+                    self.move_overflow_to_next(view, tl_idx);
                     tl_idx += 1;
                 }
                 Ordering::Equal => {
-                    if tl_idx == render_renderer.cursor.line
-                        && render_renderer.cursor.offset
+                    if tl_idx == view.cursor.line
+                        && view.cursor.offset
                             == self.lines[tl_idx].len()
                     {
-                        render_renderer.cursor.line += 1;
-                        render_renderer.cursor.offset = 0;
+                        view.cursor.line += 1;
+                        view.cursor.offset = 0;
                     }
                     tl_idx += 1;
                 }
             }
         }
 
-        render_renderer.adjust_viewport(self);
+        view.adjust_viewport(self);
     }
 
     // attempt to fill this line, up to but not beyond,
@@ -126,7 +126,7 @@ impl EditBuffer {
     // moved char), or None if no chars moved
     fn try_fill_from_next(
         &mut self,
-        render_renderer: &mut Renderer,
+        view: &mut View,
         tl_idx: usize,
     ) -> Option<(usize, usize)> {
         if tl_idx == self.lines.len() - 1 {
@@ -139,7 +139,7 @@ impl EditBuffer {
             (0, 0),
             |(res_idx, cols_moved), (i, c)| {
                 let c_width = char_width(c, cols_moved);
-                if render_renderer.display_width
+                if view.display_width
                     >= (tl_width + cols_moved + c_width)
                 {
                     ControlFlow::Continue((i + 1, cols_moved + c_width))
@@ -154,17 +154,17 @@ impl EditBuffer {
             }
         };
         if res_idx > 0 {
-            if render_renderer.cursor.line == nl_idx {
+            if view.cursor.line == nl_idx {
                 // if cursor was on next line, adjust cursor
-                if render_renderer.cursor.offset < res_idx
+                if view.cursor.offset < res_idx
                     || res_idx == self.lines[nl_idx].text.len()
                 {
                     // char at cursor moved to this line
-                    render_renderer.cursor.line -= 1;
-                    render_renderer.cursor.offset += self.lines[tl_idx].len();
+                    view.cursor.line -= 1;
+                    view.cursor.offset += self.lines[tl_idx].len();
                 } else {
                     // cursor still on next line
-                    render_renderer.cursor.offset -= res_idx;
+                    view.cursor.offset -= res_idx;
                 }
             }
 
@@ -191,11 +191,11 @@ impl EditBuffer {
         }
 
         if self.lines[nl_idx].text.is_empty()
-            && self.lines[tl_idx].width < render_renderer.display_width
+            && self.lines[tl_idx].width < view.display_width
         {
             self.lines.remove(nl_idx);
-            if render_renderer.cursor.line > tl_idx {
-                render_renderer.cursor.line -= 1;
+            if view.cursor.line > tl_idx {
+                view.cursor.line -= 1;
             }
         }
 
@@ -207,10 +207,10 @@ impl EditBuffer {
 
     fn move_overflow_to_next(
         &mut self,
-        render_renderer: &mut Renderer,
+        view: &mut View,
         tl_idx: usize,
     ) {
-        assert!(self.lines[tl_idx].width > render_renderer.display_width);
+        assert!(self.lines[tl_idx].width > view.display_width);
         // check to see if there's a next_line & push one if not
         if tl_idx == self.lines.len() - 1 {
             self.lines.push(BufferLine::new());
@@ -225,7 +225,7 @@ impl EditBuffer {
             .char_indices()
             .find(|(_, c)| {
                 let c_width = char_width(*c, cols);
-                if render_renderer.display_width - cols < c_width {
+                if view.display_width - cols < c_width {
                     true
                 } else {
                     cols += c_width;
@@ -239,16 +239,16 @@ impl EditBuffer {
         next.width += cols_moved;
         next.text.insert_str(0, this.text.drain(res_idx..).as_str());
 
-        if tl_idx == render_renderer.cursor.line
-            && res_idx <= render_renderer.cursor.offset
+        if tl_idx == view.cursor.line
+            && res_idx <= view.cursor.offset
         {
             // if this was the cursor line & char at cursor moved,
             // adjust cursor
-            render_renderer.cursor.line += 1;
-            render_renderer.cursor.offset -= res_idx;
-        } else if render_renderer.cursor.line == tl_idx + 1 {
+            view.cursor.line += 1;
+            view.cursor.offset -= res_idx;
+        } else if view.cursor.line == tl_idx + 1 {
             // if next line was cursor line, adjust cursor
-            render_renderer.cursor.offset += bytes_moved;
+            view.cursor.offset += bytes_moved;
         }
 
         if tl_idx == self.input_start.line && res_idx <= self.input_start.offset
@@ -265,7 +265,7 @@ impl EditBuffer {
 
     pub fn set_input_text(
         &mut self,
-        render_renderer: &mut Renderer,
+        view: &mut View,
         text: impl AsRef<str>,
     ) {
         let mut line = BufferLine::new();
@@ -276,14 +276,14 @@ impl EditBuffer {
         let cursor = (0, line.len()).into();
         self.lines.clear();
         self.lines.push(line);
-        render_renderer.cursor = cursor;
-        self.reflow(render_renderer, 0);
+        view.cursor = cursor;
+        self.reflow(view, 0);
     }
 
-    pub fn set_from_draft(&mut self, render_renderer: &mut Renderer) {
+    pub fn set_from_draft(&mut self, view: &mut View) {
         if let Some(draft) = self.draft.take() {
             if draft.chars().ne(self.input_chars()) {
-                self.set_input_text(render_renderer, draft);
+                self.set_input_text(view, draft);
             }
         }
     }
