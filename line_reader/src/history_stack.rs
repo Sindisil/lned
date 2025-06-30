@@ -30,21 +30,21 @@ impl HistoryStack {
             None => None,
             Some(Entry { line, edited: None }) => Some(line.as_str()),
             Some(Entry { line: _, edited }) => {
-                edited.as_ref().map(|v| v.as_str())
+                edited.as_ref().map(String::as_str)
             }
         }
     }
 
     /// Return next newest history line. If at top of stack, return draft,
     /// if there is one, or None if not.
-    pub fn next_newer(&mut self, current: String) -> Option<&str> {
+    pub fn next_newer(&mut self, current: &str) -> Option<&str> {
         if self.index == self.entries.len() {
             self.draft = None;
             return None;
         }
 
         if self.entries[self.index].line != current {
-            self.entries[self.index].edited = Some(current);
+            self.entries[self.index].edited = Some(current.to_owned());
         }
         self.index += 1;
         if self.index == self.entries.len() {
@@ -53,11 +53,11 @@ impl HistoryStack {
         }
         // Return next newer history (edited if it exists).
         let entry = &self.entries[self.index];
-        entry.edited.as_deref().or_else(|| Some(entry.line.as_str()))
+        entry.edited.as_deref().or(Some(entry.line.as_str()))
     }
 
     /// Return next oldest history line, or None if at bottom of stack.
-    pub fn next_older(&mut self, current: String) -> Option<&str> {
+    pub fn next_older(&mut self, current: &str) -> Option<&str> {
         if self.index == 0 {
             // Nothing to do if already at bottom of stack.
             return None;
@@ -65,17 +65,15 @@ impl HistoryStack {
 
         if self.index == self.entries.len() {
             // Not yet viewing history; save `current` as `draft`.
-            self.draft = Some(current);
-        } else {
-            if self.entries[self.index].line != current {
-                self.entries[self.index].edited = Some(current);
-            }
+            self.draft = Some(current.to_owned());
+        } else if self.entries[self.index].line != current {
+            self.entries[self.index].edited = Some(current.to_owned());
         }
 
         // Return next older history (edited if it exists)
         self.index -= 1;
         let entry = &self.entries[self.index];
-        entry.edited.as_deref().or_else(|| Some(entry.line.as_str()))
+        entry.edited.as_deref().or(Some(entry.line.as_str()))
     }
 
     /// Rewind stack to top, discarding draft text and any
@@ -98,7 +96,7 @@ struct HistoryStackBuilder {
 }
 
 #[cfg(test)]
-pub(crate) mod test {
+pub(crate) mod tests {
     use super::*;
 
     #[derive(Debug, Default)]
@@ -119,7 +117,7 @@ pub(crate) mod test {
         }
 
         pub fn with_draft(&mut self, draft: Option<&str>) -> &mut Self {
-            self.draft = draft.map(|s| s.to_owned());
+            self.draft = draft.map(ToOwned::to_owned);
             self
         }
 

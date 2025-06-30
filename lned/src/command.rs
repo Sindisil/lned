@@ -298,7 +298,7 @@ impl Cmd {
         buf: &mut Vec<String>,
     ) -> Result<usize, io::Error> {
         let text_read_options =
-            LineReaderOptions { history: false, ..Default::default() };
+            LineReaderOptions { prompt: None, history: false };
         buf.clear();
         loop {
             let mut line = String::new();
@@ -317,7 +317,7 @@ impl Cmd {
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
         let cmd_read_options =
-            LineReaderOptions { prompt: Some(':'), ..Default::default() };
+            LineReaderOptions { prompt: Some(':'), history: true };
         let mut line = String::with_capacity(120);
         input
             .read(&mut line, &cmd_read_options)
@@ -568,8 +568,7 @@ pub(crate) fn parse_substitute_cmd(
         )));
     }
 
-    let line_read_options =
-        LineReaderOptions { prompt: None, ..Default::default() };
+    let line_read_options = LineReaderOptions { prompt: None, history: false };
     let mut line = String::new();
     let (cmd, sfx) = loop {
         input
@@ -800,7 +799,7 @@ fn parse_global_command_list(
     // to read in rest of command list
     if more_lines {
         let line_read_options =
-            LineReaderOptions { prompt: None, ..Default::default() };
+            LineReaderOptions { prompt: None, history: false };
         let mut line = String::new();
         while more_lines {
             input
