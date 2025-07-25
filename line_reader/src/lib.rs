@@ -1,23 +1,20 @@
-mod edit_buffer;
 mod history_stack;
-mod render_context;
+mod renderer;
 
 use std::io::{self, BufRead, Write};
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use crossterm::ExecutableCommand;
-use crossterm::cursor::{self, Show};
+use crossterm::cursor::{self};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::terminal;
 
-use crate::edit_buffer::BufferLine;
-use crate::edit_buffer::EditBuffer;
-use crate::history_stack::HistoryStack;
-use crate::render_context::RenderContext;
+use unicode_width::UnicodeWidthChar;
 
-// Public structs, enums, and traits
-///////////
+use crate::history_stack::HistoryStack;
+use crate::renderer::Coord2D;
+use crate::renderer::DimWH;
+use crate::renderer::View;
 
 pub trait LineRead {
     /// # Errors
@@ -39,39 +36,20 @@ pub trait LineRead {
     ) -> io::Result<usize>;
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct LineReader {
-    buffer: EditBuffer,
     history: Option<HistoryStack>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct LineReaderOptions {
     pub prompt: Option<char>,
     pub history: bool,
 }
 
-// Non-public structs, enums, and traits
-///////////////
-
-// public functions
-////////
-
 #[must_use]
 pub fn native_eol() -> &'static str {
     if std::env::consts::FAMILY == "windows" { "\r\n" } else { "\n" }
-}
-
-// Non-public functions
-////////
-
-// impls for LineReader
-////////
-
-impl Default for LineReader {
-    fn default() -> LineReader {
-        LineReader { buffer: EditBuffer::new(), history: None }
-    }
 }
 
 impl LineReader {
@@ -86,20 +64,13 @@ impl LineReader {
         output_buffer: &mut String,
         options: &LineReaderOptions,
     ) -> io::Result<usize> {
-        // ensure terminal is reset to cooked w/visible cursor
-        let _terminal_session = TerminalSession {};
-        // reset for new input
-        let (display_width, display_height) = terminal::size()?;
+        let term_size: DimWH = terminal::size()?.into();
         let (_, first_display_line) = cursor::position()?;
 
-        let mut render_ctx = RenderContext::new(
-            display_width.into(),
-            display_height.into(),
-            first_display_line.into(),
-        );
-        self.buffer.reset(&mut render_ctx, options.prompt);
+        // View has Drop impl to ensure terminal reset to cooked
+        // and cursor not hidden.
+        let mut view = View::new(term_size, first_display_line, options.prompt);
         terminal::enable_raw_mode()?;
-        render_ctx.repaint(&self.buffer)?;
 
         // instantiate and/or get history stack, if necessary
         let history = if options.history {
@@ -109,53 +80,21 @@ impl LineReader {
             &mut None
         };
 
-        let mut res = ControlFlow::Continue(());
-        while res.is_continue() {
-            let event = match event::read()? {
-                Event::Resize(mut x, mut y) => {
-                    let c_pos = cursor::position()?;
-                    let mut cursor_line: usize = c_pos.1.into();
-                    while let Ok(true) = event::poll(Duration::from_millis(50))
-                    {
-                        if let Event::Resize(x1, y1) = event::read()? {
-                            (x, y) = (x1, y1);
-                            let c_pos = cursor::position()?;
-                            cursor_line = c_pos.1.into();
-                        }
-                    }
-                    if cursor_line > render_ctx.cursor.line {
-                        render_ctx.first_display_line +=
-                            cursor_line - render_ctx.cursor.line;
-                    } else {
-                        render_ctx.first_display_line -=
-                            render_ctx.cursor.line - cursor_line;
-                    }
-                    render_ctx.cursor.line = cursor_line;
-                    Event::Resize(x, y)
-                }
-                event => event,
-            };
-            res = handle_event(
-                &mut self.buffer,
-                &mut render_ctx,
-                history.as_mut(),
-                &event,
-            );
-            if !matches!(event, Event::Resize(..)) {
-                render_ctx.repaint(&self.buffer)?;
-            }
+        let mut input_buffer = String::with_capacity(80);
+
+        while pump_event(&mut input_buffer, &mut view, history.as_mut())?
+            .is_continue()
+        {
+            view.repaint(&input_buffer)?;
         }
 
-        let _ = handle_end(&mut self.buffer, &mut render_ctx);
-        render_ctx.repaint(&self.buffer)?;
+        let _ = handle_end(&input_buffer, &mut view);
         let mut stdout = io::stdout().lock();
         stdout.write_all(b"\r\n")?;
         stdout.flush()?;
 
         let prev_bytes = output_buffer.len();
-        if let Some(true) = res.break_value() {
-            output_buffer.extend(self.buffer.input_chars());
-        }
+        output_buffer.push_str(&input_buffer);
         output_buffer.push_str(native_eol());
         Ok(output_buffer.len() - prev_bytes)
     }
@@ -183,35 +122,6 @@ impl LineRead for LineReader {
     }
 }
 
-// impls for LineReaderOptions
-impl LineReaderOptions {
-    #[must_use]
-    pub fn new() -> Self {
-        LineReaderOptions { ..Default::default() }
-    }
-}
-
-impl Default for LineReaderOptions {
-    fn default() -> Self {
-        LineReaderOptions { prompt: None, history: true }
-    }
-}
-
-// impls for RenderContext
-////////
-
-struct TerminalSession {}
-impl Drop for TerminalSession {
-    #[cfg(not(tarpaulin_include))]
-    fn drop(&mut self) {
-        let _ = terminal::disable_raw_mode();
-        let _ = io::stdout().execute(Show);
-    }
-}
-
-// impls of LineRead
-////////
-
 impl<T> LineRead for T
 where
     T: BufRead,
@@ -233,359 +143,220 @@ where
     }
 }
 
+#[cfg(not(tarpaulin_include))]
+fn pump_event(
+    buffer: &mut String,
+    view: &mut View,
+    history: Option<&mut HistoryStack>,
+) -> io::Result<ControlFlow<()>> {
+    let event = event::read()?;
+    handle_event(buffer, view, history, &event)
+}
+
+    #[cfg(not(tarpaulin_include))]
 fn handle_event(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
+    buffer: &mut String,
+    view: &mut View,
     history: Option<&mut HistoryStack>,
     event: &Event,
-) -> ControlFlow<bool> {
+) -> io::Result<ControlFlow<()>> {
     match event {
-        Event::Key(event) if event.kind == KeyEventKind::Press => {
-            handle_key_event(buffer, render_ctx, history, event)
+        Event::Key(event) => {
+            if event.kind == KeyEventKind::Press {
+                Ok(handle_key_event(buffer, view, history, event))
+            } else {
+                Ok(ControlFlow::Continue(()))
+            }
         }
-        Event::Resize(x, y) => handle_resize_event(buffer, render_ctx, *x, *y),
-        _ => ControlFlow::Continue(()),
+        &Event::Resize(mut w, mut h) => {
+            while let Ok(true) = event::poll(Duration::from_millis(50)) {
+                if let Event::Resize(w1, h1) = event::read()? {
+                    (w, h) = (w1, h1);
+                }
+            }
+            let cursor_position: Coord2D = cursor::position()?.into();
+            Ok(handle_resize(buffer, view, DimWH(w, h), cursor_position))
+        }
+        Event::FocusGained
+        | Event::FocusLost
+        | Event::Mouse(_)
+        | Event::Paste(_) => Ok(ControlFlow::Continue(())),
     }
 }
 
-fn handle_resize_event(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
-    x: u16,
-    y: u16,
-) -> ControlFlow<bool> {
-    let old_width = render_ctx.display_width;
-    let old_height = render_ctx.display_height;
-    render_ctx.display_width = x.into();
-    render_ctx.display_height = y.into();
-
-    if render_ctx.display_width != old_width {
-        buffer.reflow(render_ctx, 0);
-    } else if render_ctx.display_height != old_height {
-        render_ctx.adjust_viewport(buffer);
-    }
-    if render_ctx.display_height < old_height {
-        let h_diff = old_height - render_ctx.display_height;
-        render_ctx.scroll_needed =
-            render_ctx.scroll_needed.saturating_sub(h_diff);
-    }
+fn handle_resize(
+    buffer: &str,
+    view: &mut View,
+    size: DimWH,
+    cursor_position: Coord2D,
+) -> ControlFlow<()> {
+    view.resize(size, cursor_position, buffer);
     ControlFlow::Continue(())
 }
 
 fn handle_key_event(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
+    buffer: &mut String,
+    view: &mut View,
     history: Option<&mut HistoryStack>,
     event: &KeyEvent,
-) -> ControlFlow<bool> {
+) -> ControlFlow<()> {
     match event.code {
         KeyCode::Enter => {
             if let Some(history) = history {
                 history.rewind();
                 if !buffer.is_empty()
-                    && history.last().is_none_or(|(last, _)| {
-                        last.chars().ne(buffer.input_chars())
-                    })
+                    && history.last().is_none_or(|last| last != buffer)
                 {
-                    history.push(buffer.input_chars().collect());
+                    history.push(buffer.clone());
                 }
             }
-            ControlFlow::Break(true)
+            ControlFlow::Break(())
         }
-        KeyCode::Left => handle_left(buffer, render_ctx),
-        KeyCode::Right => handle_right(buffer, render_ctx),
-        KeyCode::Home => handle_home(buffer, render_ctx),
-        KeyCode::End => handle_end(buffer, render_ctx),
-        KeyCode::Backspace => handle_backspace(buffer, render_ctx),
-        KeyCode::Delete => handle_delete(buffer, render_ctx),
-        KeyCode::Char(c) => handle_char_input(buffer, render_ctx, c),
-        KeyCode::Up => handle_up(buffer, render_ctx, history),
-        KeyCode::Down => handle_down(buffer, render_ctx, history),
-        KeyCode::Esc => handle_esc(buffer, render_ctx, history),
-        KeyCode::Tab => handle_char_input(buffer, render_ctx, '\t'),
+        KeyCode::Left => handle_left(buffer, view),
+        KeyCode::Right => handle_right(buffer, view),
+        KeyCode::Home => handle_home(view),
+        KeyCode::End => handle_end(buffer, view),
+        KeyCode::Backspace => handle_backspace(buffer, view),
+        KeyCode::Delete => handle_delete(buffer, view),
+        KeyCode::Char(c) => handle_char_input(buffer, view, c),
+        KeyCode::Up => handle_up(buffer, view, history),
+        KeyCode::Down => handle_down(buffer, view, history),
+        KeyCode::Esc => handle_esc(buffer, view, history),
+        KeyCode::Tab => handle_char_input(buffer, view, '\t'),
         _ => ControlFlow::Continue(()),
     }
 }
 
 fn handle_esc(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
+    buffer: &mut String,
+    view: &mut View,
     history: Option<&mut HistoryStack>,
-) -> ControlFlow<bool> {
-    buffer.set_from_draft(render_ctx);
-    if let Some(history) = history {
-        history.rewind();
+) -> ControlFlow<()> {
+    if let Some(draft) = history.and_then(HistoryStack::rewind) {
+        buffer.replace_range(.., &draft);
+        view.set_insertion_point(buffer.len());
     }
     ControlFlow::Continue(())
 }
 
 fn handle_down(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
+    buffer: &mut String,
+    view: &mut View,
     history: Option<&mut HistoryStack>,
-) -> ControlFlow<bool> {
-    let Some(history) = history else {
-        return ControlFlow::Continue(());
-    };
-    if let Some((cur_a, &mut ref mut cur_e)) = history.current() {
-        // If buffer differs from current edited (if any) or else
-        // current accepted history, copy buffer to edited.
-        if buffer
-            .input_chars()
-            .ne(cur_e.as_ref().map_or_else(|| cur_a.chars(), |e| e.chars()))
-        {
-            let edited = cur_e.get_or_insert_with(String::new);
-            edited.clear();
-            edited.extend(buffer.input_chars());
-        }
-    } else {
-        // Not viewing history, nothing to do
-        return ControlFlow::Continue(());
-    }
-
-    // Advance to next newer history.
-    // If there is none, take draft to load buffer
-    // Otherwise load buffer edited, if any, or accepted.
-    if let Some((ah, eh)) = history.next_newer() {
-        buffer.set_input_text(
-            render_ctx,
-            eh.as_ref().map_or(ah, |eh| eh.as_str()),
-        );
-    } else {
-        buffer.set_from_draft(render_ctx);
+) -> ControlFlow<()> {
+    if let Some(history_line) = history.and_then(|h| h.next_newer(buffer)) {
+        buffer.replace_range(.., history_line);
+        view.set_insertion_point(buffer.len());
     }
 
     ControlFlow::Continue(())
 }
 
 fn handle_up(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
+    buffer: &mut String,
+    view: &mut View,
     history: Option<&mut HistoryStack>,
-) -> ControlFlow<bool> {
-    let Some(history) = history else {
-        return ControlFlow::Continue(());
-    };
-    // If no older history to view, nothing to do
-    if !history.is_at_bottom() {
-        if history.is_at_top() {
-            // If not viewing history, save buffer to draft
-            buffer.save_draft();
-        } else {
-            // Otherwise, if buffer differs from current
-            // edited (if any) or else current accepted
-            // history, save buffer to current edited
-            // history.
-            let (cur_a, cur_e) = history
-                .current()
-                .expect("should be neither at_top or at_bottom");
-            if buffer
-                .input_chars()
-                .ne(cur_e.as_ref().map_or_else(|| cur_a.chars(), |e| e.chars()))
-            {
-                let edited = cur_e.get_or_insert_with(String::new);
-                edited.clear();
-                edited.extend(buffer.input_chars());
-            }
-        }
-        // Advance to next older history and load
-        // buffer from edited, if any, or else accepted.
-        let (accepted, edited) = history
-            .next_older()
-            .expect("shouldn't be either at_top or at_bottom");
-        buffer.set_input_text(
-            render_ctx,
-            edited.as_ref().map_or(accepted, |e| e.as_str()),
-        );
+) -> ControlFlow<()> {
+    if let Some(line) = history.and_then(|h| h.next_older(buffer)) {
+        buffer.replace_range(.., line);
+        view.set_insertion_point(buffer.len());
     }
+
     ControlFlow::Continue(())
 }
 
 fn handle_char_input(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
+    buffer: &mut String,
+    view: &mut View,
     c: char,
-) -> ControlFlow<bool> {
+) -> ControlFlow<()> {
     // if char is zero width, but no previous chars exist to
     //  which it can  be combined, do nothing (i.e., don't accept
     // the input)
-    if c != '\t' && edit_buffer::char_width(c, 0) == 0 {
-        let check_line = if render_ctx.cursor.offset > 0 {
-            render_ctx.cursor.line
-        } else {
-            render_ctx.cursor.line - 1
-        };
-        let check_start_offset = if check_line == buffer.input_start.line {
-            buffer.input_start.offset
-        } else {
-            0
-        };
-        let check_end_offset = if render_ctx.cursor.offset == 0 {
-            buffer.lines[check_line].len()
-        } else {
-            render_ctx.cursor.offset
-        };
-        if !buffer.lines[check_line][check_start_offset..check_end_offset]
+    if c != '\t'
+        && c.width().unwrap_or(0) == 0
+        && !buffer[..view.insertion_point()]
             .chars()
             .rev()
             .take_while(|c| *c != '\t')
-            .any(|c| edit_buffer::char_width(c, 0) > 0)
-        {
-            return ControlFlow::Continue(());
-        }
-    }
-
-    // insert new char at curser and let reflow sort it out
-    assert!(render_ctx.cursor.line <= buffer.len());
-    if render_ctx.cursor.line == buffer.len() {
-        buffer.lines.push(BufferLine::new());
-    }
-    buffer.lines[render_ctx.cursor.line].insert(render_ctx.cursor.offset, c);
-    render_ctx.cursor.offset += c.len_utf8();
-
-    // reflow from line before cursor, if it exists,
-    // catching case where new char fits on previous line
-    buffer.reflow(render_ctx, render_ctx.cursor.line.saturating_sub(1));
-
-    ControlFlow::Continue(())
-}
-
-fn handle_backspace(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
-    if render_ctx.cursor == buffer.input_start {
+            .any(|c| c.width().unwrap_or(0) > 0)
+    {
         return ControlFlow::Continue(());
     }
 
-    if render_ctx.cursor.offset == 0 {
-        render_ctx.cursor.line -= 1;
-        render_ctx.cursor.offset = buffer.lines[render_ctx.cursor.line].len();
-    }
-    if let Some((i, _)) = buffer.lines[render_ctx.cursor.line]
-        [..render_ctx.cursor.offset]
-        .char_indices()
-        .next_back()
-    {
-        buffer.lines[render_ctx.cursor.line].remove(i);
-        render_ctx.cursor.offset = i;
-    }
-    buffer.reflow(render_ctx, render_ctx.cursor.line.saturating_sub(1));
+    buffer.insert(view.insertion_point(), c);
+    view.set_insertion_point(view.insertion_point() + c.len_utf8());
+
     ControlFlow::Continue(())
 }
 
-fn handle_left(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
-    use unicode_width::UnicodeWidthChar;
-
-    if render_ctx.cursor == buffer.input_start {
-        return ControlFlow::Continue(());
-    }
-
-    if render_ctx.cursor.offset == 0 {
-        render_ctx.cursor.line -= 1;
-        render_ctx.cursor.offset = buffer.lines[render_ctx.cursor.line].len();
-    }
-
-    if let Some((prev_idx, _)) = buffer.lines[render_ctx.cursor.line]
-        [..render_ctx.cursor.offset]
-        .char_indices()
-        .rfind(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
+fn handle_backspace(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
+    if view.insertion_point() != 0
+        && let Some((i, _)) =
+            buffer[..view.insertion_point()].char_indices().next_back()
     {
-        render_ctx.cursor.offset = prev_idx;
+        buffer.remove(i);
+        view.set_insertion_point(i);
     }
 
-    render_ctx.adjust_viewport(buffer);
     ControlFlow::Continue(())
 }
 
-fn handle_right(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
+fn handle_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
+    if view.insertion_point() != 0
+        && let Some((prev_idx, _)) = buffer[..view.insertion_point()]
+            .char_indices()
+            .rfind(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
+    {
+        view.set_insertion_point(prev_idx);
+    }
+
+    ControlFlow::Continue(())
+}
+
+fn handle_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
     // If aleady at end, nothing to do
-    if render_ctx.cursor
-        == (buffer.lines.len() - 1, buffer.lines.last().unwrap().len()).into()
-    {
-        return ControlFlow::Continue(());
-    }
-
-    let width_before_next_cursor = edit_buffer::str_width(
-        &buffer.lines[render_ctx.cursor.line][..render_ctx.cursor.offset],
-        0,
-    );
-
-    if let Some((i, _)) = buffer.lines[render_ctx.cursor.line]
-        [render_ctx.cursor.offset..]
-        .char_indices()
-        .skip(1)
-        .find(|(_, c)| {
-            edit_buffer::char_width(*c, width_before_next_cursor) > 0
-        })
-    {
-        // next cursor pos on this line
-        render_ctx.cursor.offset += i;
-    } else if render_ctx.cursor.line == buffer.len() - 1
-        && render_ctx.display_width - width_before_next_cursor > 0
-    {
-        // next cusor pos is at end of buffer
-        render_ctx.cursor.offset = buffer.lines[render_ctx.cursor.line].len();
-    } else {
-        // next cursor pos is on next line
-        render_ctx.cursor.line += 1;
-        render_ctx.cursor.offset = 0;
-    }
-
-    render_ctx.adjust_viewport(buffer);
-    ControlFlow::Continue(())
-}
-
-fn handle_delete(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
-    // if at end of buffer, nothing to do
-    if render_ctx.cursor != buffer.buffer_end() {
-        use unicode_width::UnicodeWidthChar;
-
-        let (cur_line, cur_offset) = render_ctx.cursor.into();
-        let next_c_offset = buffer.lines[cur_line][cur_offset..]
+    if view.insertion_point() != buffer.len() {
+        let next_idx = buffer[view.insertion_point()..]
             .char_indices()
             .skip(1)
             .find(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
-            .map_or_else(
-                || buffer.lines[cur_line].len(),
-                |(i, _)| i + cur_offset,
-            );
-        buffer.lines[cur_line].replace_range(cur_offset..next_c_offset, "");
-        buffer.reflow(render_ctx, cur_line.saturating_sub(1));
+            .map_or_else(|| buffer.len(), |(i, _)| i + view.insertion_point());
+        view.set_insertion_point(next_idx);
     }
+
     ControlFlow::Continue(())
 }
 
-fn handle_home(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
-    if render_ctx.cursor != buffer.input_start {
-        render_ctx.first_buffer_line = 0;
-        render_ctx.cursor = buffer.input_start;
-        render_ctx.adjust_viewport(buffer);
+fn handle_delete(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
+    // if at end of buffer, nothing to do
+    let cur_idx = view.insertion_point();
+    if cur_idx != buffer.len() {
+        let next_idx = buffer[view.insertion_point()..]
+            .char_indices()
+            .skip(1)
+            .find(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
+            .map_or_else(|| buffer.len(), |(i, _)| i + view.insertion_point());
+        buffer.replace_range(view.insertion_point()..next_idx, "");
+        view.invalidate();
     }
+
     ControlFlow::Continue(())
 }
 
-fn handle_end(
-    buffer: &mut EditBuffer,
-    render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
-    let buffer_end = buffer.buffer_end();
-    if render_ctx.cursor < buffer_end {
-        render_ctx.cursor = buffer_end;
-        buffer.reflow(render_ctx, buffer_end.line);
+fn handle_home(view: &mut View) -> ControlFlow<()> {
+    if view.insertion_point() != 0 {
+        view.set_insertion_point(0);
     }
+
+    ControlFlow::Continue(())
+}
+
+fn handle_end(buffer: &str, view: &mut View) -> ControlFlow<()> {
+    if view.insertion_point() != buffer.len() {
+        view.set_insertion_point(buffer.len());
+    }
+
     ControlFlow::Continue(())
 }
 
@@ -593,2116 +364,986 @@ fn handle_end(
 #[allow(clippy::unicode_not_nfc)]
 mod tests {
     use super::*;
+    use crate::history_stack::tests::HistoryStackBuilder;
+    use crate::renderer::tests::ViewBuilder;
 
     use crossterm::event::KeyModifiers;
     use similar_asserts::assert_eq;
 
-    fn make_buf(lines: &[&str], prompt: char) -> EditBuffer {
-        let mut buf = EditBuffer {
-            lines: Vec::new(),
-            prompt: Some(prompt),
-            ..Default::default()
-        };
-        for &l in lines {
-            buf.lines.push(l.into());
-        }
-        buf.input_start = (0, prompt.len_utf8()).into();
-        if let Some(l) = buf.lines.get_mut(0) {
-            l.insert(0, prompt);
-        }
-        buf
-    }
-
     #[test]
     fn unimplemented_event_ignored() {
-        let mut buf = EditBuffer::new();
-        let mut ctx = RenderContext::new(10, 5, 0);
-        let event = Event::FocusLost;
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        let mut buf = String::new();
+        let expected_buf = buf.clone();
+
+        let mut view = ViewBuilder::new().build();
+        let expected_view = view.clone();
+
+        let res =
+            handle_event(&mut buf, &mut view, None, &Event::FocusLost).unwrap();
+
         assert!(res.is_continue());
+        assert_eq!(buf, expected_buf);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn unimplemented_key_event_ignored() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        let mut buf = String::new();
+        let expected_buf = buf.clone();
+
+        let mut view = ViewBuilder::new().build();
+        let expected_view = view.clone();
+
         let res = handle_event(
-            &mut EditBuffer::new(),
-            &mut RenderContext::new(10, 5, 0),
+            &mut buf,
+            &mut view,
             None,
-            &event,
-        );
+            &Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
+        assert_eq!(buf, expected_buf);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn enter_breaks_input_loop() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let res = handle_event(
-            &mut EditBuffer::new(),
-            &mut RenderContext::new(10, 5, 0),
+            &mut String::new(),
+            &mut ViewBuilder::new().build(),
             None,
-            &event,
-        );
-        assert!(matches!(res, ControlFlow::Break(true)));
+            &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        )
+        .unwrap();
+        assert!(res.is_break());
     }
 
     #[test]
     fn char_input_non_0w_inserts() {
-        let mut buf = EditBuffer::new();
-        let mut ctx = RenderContext::new(10, 5, 0);
-        let expected_buf =
-            EditBuffer { lines: vec!["🎸".into()], ..Default::default() };
-        let expected_ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 4).into(),
-            ..Default::default()
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        let mut buf = String::new();
+        let expected_buf = "🎸";
+
+        let mut view = ViewBuilder::new().with_insertion_point(0).build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE)),
+        )
+        .unwrap();
+
+        assert!(res.is_continue(),);
+        assert_eq!(&buf, expected_buf);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
     }
 
     #[test]
     fn char_input_0w_requires_base_char() {
-        let mut buf = EditBuffer {
-            lines: vec![":".into()],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
-        let expected_buf = buf.clone();
-        let expected_ctx = ctx;
+        let mut buf = String::with_capacity(80);
 
-        let event = Event::Key(KeyEvent::new(
-            KeyCode::Char('\u{0308}'),
-            KeyModifiers::NONE,
-        ));
-
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        let mut buf = EditBuffer {
-            lines: vec![":a".into()],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 2).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = EditBuffer {
-            lines: vec![":ä".into()],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let expected_ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 4).into(),
-            ..Default::default()
-        };
-
-        let event = Event::Key(KeyEvent::new(
-            KeyCode::Char('\u{0308}'),
-            KeyModifiers::NONE,
-        ));
-
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn char_input_before_eol_moves_cursor_char_width() {
-        let mut buf = make_buf(&["e"], ':');
-        let expected_buf = make_buf(&["ë"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 2).into(),
-            ..Default::default()
-        };
-        let expected_ctx = RenderContext { cursor: (0, 4).into(), ..ctx };
-
-        let event = Event::Key(KeyEvent::new(
-            KeyCode::Char('\u{0308}'),
-            KeyModifiers::NONE,
-        ));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let expected_buf = make_buf(&["ë🎸"], ':');
-        let expected_ctx = RenderContext { cursor: (0, 8).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
-        let expected_buf =
-            EditBuffer { lines: vec![":ë🎸o".into()], ..buf.clone() };
-        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn char_input_with_tab() {
-        let mut buf = make_buf(&["a2345z"], ':');
-        let mut ctx = RenderContext {
-            display_width: 80,
-            display_height: 24,
-            cursor: (0, 6).into(),
-            ..Default::default()
-        };
+        let mut vb = ViewBuilder::new();
+        let mut view = vb.build();
+        let expected_view = view.clone();
 
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
             None,
-            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        );
-        assert!(res.is_continue());
-        assert_eq!(*buf.lines[0], *":a2345\tz");
-        assert_eq!(buf.lines[0].width(), 9);
-        assert_eq!(ctx.cursor, (0, 7).into());
+            &Event::Key(KeyEvent::new(
+                KeyCode::Char('\u{0308}'),
+                KeyModifiers::NONE,
+            )),
+        )
+        .unwrap();
 
-        ctx.cursor = (0, 6).into();
-        let res = handle_event(
-            &mut buf,
-            &mut ctx,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::NONE)),
-        );
         assert!(res.is_continue());
-        assert_eq!(*buf.lines[0], *":a23456\tz");
-        assert_eq!(buf.lines[0].width(), 9);
-        assert_eq!(ctx.cursor, (0, 7).into());
+        assert!(buf.is_empty());
+        assert_eq!(view, expected_view);
+
+        buf.push('a');
+        let expected_buf = "ä";
+
+        let mut view = vb.with_insertion_point(buf.len()).build();
 
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
             None,
-            &Event::Key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::NONE)),
-        );
-        assert!(res.is_continue());
-        assert_eq!(*buf.lines[0], *":a234567\tz");
-        assert_eq!(buf.lines[0].width(), 17);
-        assert_eq!(ctx.cursor, (0, 8).into());
-    }
-
-    #[test]
-    fn char_input_to_eol_wraps_cursor_to_next_line_start() {
-        let mut buf = EditBuffer {
-            lines: vec![":1234567".into()],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 8).into(),
-            ..Default::default()
-        };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let expected_buf =
-            EditBuffer { lines: vec![":1234567🎸".into()], ..buf.clone() };
-        let expected_ctx = RenderContext { cursor: (1, 0).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn char_input_append_to_previous_line_if_fits() {
-        let mut buf = EditBuffer {
-            lines: vec![":12345678".into(), "🎸abc".into()],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (1, 0).into(),
-            first_display_line: 3,
-            ..Default::default()
-        };
-        let expected_buf = EditBuffer {
-            lines: vec![":123456789".into(), "🎸abc".into()],
-            ..buf.clone()
-        };
-        let expected_ctx = ctx;
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn char_input_char_too_wide_at_end_wraps_to_next_line() {
-        let mut buf = EditBuffer {
-            lines: vec![":12345678".into()],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 9).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = EditBuffer {
-            lines: vec![":12345678".into(), "🎸".into()],
-            ..buf.clone()
-        };
-        let expected_ctx = RenderContext { cursor: (1, 4).into(), ..ctx };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+            &Event::Key(KeyEvent::new(
+                KeyCode::Char('\u{0308}'),
+                KeyModifiers::NONE,
+            )),
+        )
+        .unwrap();
 
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn char_input_past_eol_wraps_input_to_next_line_start() {
-        let mut buf = EditBuffer {
-            lines: vec![":123456789".into(), "abc".into()],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 8).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = EditBuffer {
-            lines: vec![":1234567🎸".into(), "89abc".into()],
-            ..buf.clone()
-        };
-        let expected_ctx = RenderContext { cursor: (1, 0).into(), ..ctx };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn char_input_at_end_of_small_buffer_moving_cursor_beyond_bottom() {
-        let mut buf = EditBuffer {
-            lines: vec![":12345678".into(), "🎸2345678".into()],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_display_line: 3,
-            cursor: (1, 11).into(),
-            ..Default::default()
-        };
-        let expected_buf = EditBuffer {
-            lines: vec![":12345678".into(), "🎸2345678a".into()],
-            ..buf.clone()
-        };
-        let expected_ctx = RenderContext {
-            first_display_line: 2,
-            cursor: (2, 0).into(),
-            scroll_needed: 1,
-            ..ctx
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn char_input_at_end_of_large_buffer_moving_cursor_beyond_bottom() {
-        let mut buf = EditBuffer {
-            lines: vec![
-                ":123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "012345678".into(),
-                "🎸2345678".into(),
-            ],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 1,
-            cursor: (5, 11).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = EditBuffer {
-            lines: vec![
-                ":123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "012345678".into(),
-                "🎸2345678a".into(),
-            ],
-            ..buf.clone()
-        };
-        let expected_ctx = RenderContext {
-            first_buffer_line: 2,
-            cursor: (6, 0).into(),
-            ..ctx
-        };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn char_input_within_small_buffer_extending_below_display() {
-        let mut buf = EditBuffer {
-            lines: vec![
-                ":123456789".into(),
-                "012345678".into(),
-                "🎸2345678".into(),
-            ],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_display_line: 3,
-            cursor: (0, 9).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = EditBuffer {
-            lines: vec![
-                ":12345678a".into(),
-                "9012345678".into(),
-                "🎸2345678".into(),
-            ],
-            ..buf.clone()
-        };
-        let expected_ctx = RenderContext {
-            first_display_line: 2,
-            cursor: (1, 0).into(),
-            scroll_needed: 1,
-            ..ctx
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn char_input_within_large_buffer_extending_beyond_display() {
-        let mut buf = EditBuffer {
-            lines: vec![
-                ":123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "012345678".into(),
-            ],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 1,
-            cursor: (4, 9).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = EditBuffer {
-            lines: vec![
-                ":123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "012345678a".into(),
-                "9012345678".into(),
-                "9012345678".into(),
-            ],
-            ..buf.clone()
-        };
-        let expected_ctx = RenderContext {
-            first_buffer_line: 2,
-            cursor: (5, 0).into(),
-            ..ctx
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!((buf, ctx), (expected_buf, expected_ctx));
+        assert_eq!(&buf, expected_buf);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
     }
 
     #[test]
     fn backspace_0w() {
-        let mut buf = EditBuffer {
-            lines: vec![":ë".into()],
-            input_start: (0, 1).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 4).into(),
-            ..Default::default()
-        };
+        let mut buf = "AëZ".to_owned();
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len() - 1).build();
 
-        let expected_buf =
-            EditBuffer { lines: vec![":e".into()], ..buf.clone() };
-        let expected_ctx = RenderContext { cursor: (0, 2).into(), ..ctx };
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+        )
+        .unwrap();
 
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, "AeZ");
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 2);
     }
 
     #[test]
     fn backspace_1w() {
-        let mut buf = make_buf(&["e"], ':');
-        let expected_buf = make_buf(&[""], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 2).into(),
-            ..Default::default()
-        };
-        let expected_ctx = RenderContext { cursor: (0, 1).into(), ..ctx };
+        let mut buf = "AeZ".to_owned();
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len() - 1).build();
 
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, "AZ");
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 1);
     }
 
     #[test]
     fn backspace_2w() {
-        let mut buf = make_buf(&["🎸"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 5).into(),
-            ..Default::default()
-        };
-        let expected_buf = make_buf(&[""], ':');
-        let expected_ctx = RenderContext { cursor: (0, 1).into(), ..ctx };
+        let mut buf = "a🎸z".to_owned();
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len() - 1).build();
 
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, "az");
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 1);
     }
 
     #[test]
-    fn backspace_input_start() {
-        let mut buf = make_buf(&[""], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
+    fn backspace_at_input_start_does_nothing() {
+        let mut buf = "input text".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
 
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let mut view = ViewBuilder::new().with_insertion_point(0).build();
+        let expected_view = view.clone();
 
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn backspace_to_column_0_wraps_if_room_on_preceding_line() {
-        let mut buf = make_buf(&["12345678", "🎸9"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (1, 4).into(),
-            ..Default::default()
-        };
-        let expected_buf = make_buf(&["123456789", ""], ':');
-        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn backspace_from_column_0_wraps_if_room_on_preceding_line() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-
-        // base case
-        let mut buf = make_buf(&["123456789", ""], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 10,
-            cursor: (1, 0).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = make_buf(&["12345678"], ':');
-        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        // zero len char at preceding line end
-        let mut buf = make_buf(&["12345678ä", "eiou"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (1, 0).into(),
-            ..Default::default()
-        };
-        let expected_buf = make_buf(&["12345678a", "eiou"], ':');
-        let expected_ctx = ctx;
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn backspace_moving_cursor_above_top_pans_buffer() {
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 1,
-            cursor: (2, 0).into(),
-            ..Default::default()
-        };
-        let expected_buf = make_buf(
-            &[
-                "123456789",
-                "0123456780",
-                "1234567890",
-                "1234567890",
-                "1234567890",
-                "123",
-            ],
-            ':',
-        );
-        let expected_ctx = RenderContext {
-            first_buffer_line: 0,
-            cursor: (1, 9).into(),
-            ..ctx
-        };
-
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn left_from_input_start_does_nothing() {
-        let mut buf = make_buf(&["12345"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
+        let mut buf = "12345".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+
+        let mut view = ViewBuilder::new().with_insertion_point(0).build();
+        let expected_view = view.clone();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn left_moves_cursor_to_preceding_base_char() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let mut buf = make_buf(&["aë🎸iou"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 10).into(),
-            ..Default::default()
-        };
+        let mut buf = "aë🎸iou".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+
+        let mut vb = ViewBuilder::new();
+
+        let mut view = vb.with_insertion_point(8).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+        )
+        .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 4);
 
-        let expected_ctx = RenderContext { cursor: (0, 5).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        let mut view = vb.with_insertion_point(4).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+        )
+        .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 1);
 
-        let expected_ctx = RenderContext { cursor: (0, 2).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        let mut view = vb.with_insertion_point(1).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+        )
+        .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn left_from_column_0_moves_cursor_to_last_base_char_on_preceding_line() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let mut buf = make_buf(&["12345678", "🎸abc"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (1, 0).into(),
-            ..Default::default()
-        };
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 8).into(),
-            ..ctx
-        };
-
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn left_moving_cursor_above_top_pans_buffer_down_one_line() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "012345678",
-                "🎸23456789",
-                "0123456789",
-                "012345678",
-                "🎸abc",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 1,
-            cursor: (2, 0).into(),
-            ..Default::default()
-        };
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            first_buffer_line: 0,
-            cursor: (1, 8).into(),
-            ..ctx
-        };
-
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 0);
     }
 
     #[test]
     fn home_from_input_start_does_nothing() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-        let mut buf =
-            make_buf(&["123456789", "0123456789", "012345678", "🎸abcd"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
+        let mut buf = "input text".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+
+        let mut view = ViewBuilder::new().with_insertion_point(0).build();
+        let expected_view = view.clone();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn home_moves_cursor_to_input_start() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-        let mut buf =
-            make_buf(&["123456789", "0123456789", "012345678", "🎸abcd"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (3, 0).into(),
-            ..Default::default()
-        };
+        let mut buf = "input text".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = RenderContext { cursor: (0, 1).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+
+        let mut vb = ViewBuilder::new();
+        let mut view = vb.with_insertion_point(5).build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 0);
     }
 
     #[test]
-    fn home_moving_cursor_above_top_pans_buffer() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
-        let mut buf =
-            make_buf(&["123456789", "0123456789", "012345678", "🎸abcd"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 2,
-            cursor: (3, 0).into(),
-            ..Default::default()
-        };
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 0,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-    #[test]
     fn right_at_buffer_end_does_nothing() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let mut buf = make_buf(&["123456"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 7).into(),
-            ..Default::default()
-        };
+        let mut buf = "input text".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len()).build();
+        let expected_view = view.clone();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn right_moves_cursor_to_next_base_char_until_end() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let mut buf = make_buf(&["aë🎸o"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
+        let mut buf = "aë🎸o".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = RenderContext { cursor: (0, 2).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+
+        let mut vb = ViewBuilder::new();
+        let mut view = vb.build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        )
+        .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 1);
 
-        let expected_ctx = RenderContext { cursor: (0, 5).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        let mut view = vb.with_insertion_point(1).build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        )
+        .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 4);
 
-        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        let mut view = vb.with_insertion_point(4).build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 8);
 
-        let expected_ctx = RenderContext { cursor: (0, 10).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        let mut view = vb.with_insertion_point(8).build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn right_from_last_base_char_moves_to_next_column_0() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let mut buf = make_buf(&["12345678", "🎸23456789", ""], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 8).into(),
-            ..Default::default()
-        };
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext { cursor: (1, 0).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (1, 11).into(),
-            ..Default::default()
-        };
-        let expected_ctx = RenderContext { cursor: (2, 0).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn right_past_bottom_of_large_buffer_pans_buffer_up() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let mut buf = make_buf(
-            &[
-                "1234567ö",
-                "🎸23456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "abc",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (3, 9).into(),
-            ..Default::default()
-        };
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            first_buffer_line: 1,
-            cursor: (4, 0).into(),
-            ..ctx
-        };
-
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 9);
     }
 
     #[test]
     fn end_at_buffer_end_does_nothing() {
-        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 5,
-            cursor: (9, 0).into(),
-            ..Default::default()
-        };
+        let mut buf = "buffer text".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
-        let ret = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(ret.is_continue());
+
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len()).build();
+        let expected_view = view.clone();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
+        assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn end_moves_cursor_to_buffer_end() {
-        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 5,
-            cursor: (8, 5).into(),
-            ..Default::default()
-        };
+        let mut buf = "buffer text".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = RenderContext { cursor: (9, 0).into(), ..ctx };
-        let ret = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(ret.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
 
-    #[test]
-    fn end_past_display_bottom_in_small_buffer_scrolls_up() {
-        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        let mut buf = make_buf(
-            &["123456789", "0123456789", "0123456789", "0123456789", ""],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 0,
-            first_display_line: 3,
-            cursor: buf.input_start,
-            ..Default::default()
-        };
+        let mut view = ViewBuilder::new().with_insertion_point(3).build();
 
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            cursor: (4, 0).into(),
-            first_display_line: 0,
-            scroll_needed: 3,
-            ..ctx
-        };
-        let ret = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(ret.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
+        )
+        .unwrap();
 
-    #[test]
-    fn end_past_display_bottom_in_large_buffer_pans_up() {
-        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            first_buffer_line: 0,
-            cursor: buf.input_start,
-            ..Default::default()
-        };
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            cursor: (9, 0).into(),
-            first_buffer_line: 5,
-            ..ctx
-        };
-        let ret = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(ret.is_continue());
+        assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
     }
 
     #[test]
     fn delete_at_buffer_end_does_nothing() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-        let mut buf = make_buf(&["aë🎸io"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 11).into(),
-            ..Default::default()
-        };
+        let mut buf = "aë🎸io".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
+
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len()).build();
+        let expected_view = view.clone();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn delete_removes_chars_from_cursor_to_next_base_char() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-        let mut buf = make_buf(&["aë🎸io"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 2).into(),
-            ..Default::default()
-        };
+        let mut buf = "aë🎸io".to_owned();
 
-        let expected_buf = make_buf(&["a🎸io"], ':');
-        let expected_ctx = ctx;
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        let mut view = ViewBuilder::new().with_insertion_point(1).build();
 
-        let expected_buf = make_buf(&["aio"], ':');
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        let expected_buf = make_buf(&["ao"], ':');
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn delete_at_line_start_wraps_to_previous_if_new_first_char_fits() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-        let mut buf = make_buf(&["12345678", "🎸abc"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (1, 0).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = make_buf(&["12345678a", "bc"], ':');
-        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn delete_reflows_buffer_from_new_cursor_line() {
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
-        let mut buf = make_buf(
-            &["123456789", "0123456789", "0123456789", "0123456789"],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 9).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = make_buf(
-            &["123456780", "1234567890", "1234567890", "123456789"],
-            ':',
-        );
-        let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_height_smaller_cursor_is_at_end() {
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "012345678",
-                "🎸23456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "äbc",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 10,
-            first_display_line: 3,
-            cursor: (6, 5).into(),
-            ..Default::default()
-        };
-
-        let expected_ctx = RenderContext {
-            display_height: 8,
-            first_display_line: 1,
-            cursor: (6, 5).into(),
-            ..ctx
-        };
-        let expected_buf = buf.clone();
-        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 8));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        let expected_ctx = RenderContext {
-            display_height: 7,
-            first_display_line: 0,
-            cursor: (6, 5).into(),
-            ..ctx
-        };
-        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 7));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        let expected_ctx = RenderContext {
-            display_height: 5,
-            first_buffer_line: 2,
-            cursor: (6, 5).into(),
-            ..ctx
-        };
-        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 5));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_height_smaller_cursor_at_start() {
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "012345678",
-                "🎸23456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "äbc",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 10,
-            first_display_line: 3,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            display_height: 8,
-            first_display_line: 1,
-            cursor: (0, 1).into(),
-            ..ctx
-        };
-        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 8));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        let expected_ctx = RenderContext {
-            display_height: 7,
-            first_display_line: 0,
-            cursor: (0, 1).into(),
-            ..ctx
-        };
-        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 7));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-
-        let expected_ctx =
-            RenderContext { display_height: 5, cursor: (0, 1).into(), ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 5));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_width_smaller_cursor_at_start() {
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "012345678",
-                "🎸23456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "äbcdefgh",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 10,
-            first_display_line: 3,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = make_buf(
-            &[
-                "12345", "678901", "234567", "8🎸234", "567890", "123456",
-                "789012", "345678", "901234", "56789ä", "bcdefg", "h",
-            ],
-            ':',
-        );
-        let expected_ctx = RenderContext { display_width: 6, ..ctx };
-
-        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_width_smaller_cursor_at_start_lg_prompt() {
-        let mut buf = EditBuffer {
-            lines: vec![
-                "lgprompt:9".into(),
-                "012345678".into(),
-                "🎸23456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "äbcdefgh".into(),
-            ],
-            input_start: (0, 9).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 10,
-            first_display_line: 3,
-            cursor: (0, 9).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = EditBuffer {
-            lines: vec![
-                "lgprom".into(),
-                "pt:901".into(),
-                "234567".into(),
-                "8🎸234".into(),
-                "567890".into(),
-                "123456".into(),
-                "789012".into(),
-                "345678".into(),
-                "901234".into(),
-                "56789ä".into(),
-                "bcdefg".into(),
-                "h".into(),
-            ],
-            input_start: (1, 3).into(),
-            ..buf.clone()
-        };
-        let expected_ctx =
-            RenderContext { display_width: 6, cursor: (1, 3).into(), ..ctx };
-
-        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_width_smaller_cursor_is_at_end() {
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "012345678",
-                "🎸23456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "äbcdefgh",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 10,
-            first_display_line: 3,
-            cursor: (6, 10).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = make_buf(
-            &[
-                "12345", "678901", "234567", "8🎸234", "567890", "123456",
-                "789012", "345678", "901234", "56789ä", "bcdefg", "h",
-            ],
-            ':',
-        );
-        let expected_ctx = RenderContext {
-            cursor: (11, 1).into(),
-            first_display_line: 0,
-            scroll_needed: 3,
-            first_buffer_line: 2,
-            display_width: 6,
-            ..ctx
-        };
-
-        let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_height_larger_cursor_is_at_end() {
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "012345678",
-                "🎸23456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "äbcdefgh",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 6,
-            first_buffer_line: 3,
-            cursor: (8, 10).into(),
-            ..Default::default()
-        };
-
-        let event = Event::Resize(10, 10);
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext {
-            first_display_line: 0,
-            first_buffer_line: 0,
-            display_height: 10,
-            cursor: (8, 10).into(),
-            ..ctx
-        };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_height_larger_cursor_at_start() {
-        let mut buf = make_buf(
-            &[
-                "123456789",
-                "012345678",
-                "🎸23456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "äbcdefgh",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 6,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
-
-        let event = Event::Resize(10, 10);
-        let expected_buf = buf.clone();
-        let expected_ctx = RenderContext { display_height: 10, ..ctx };
-        let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_width_larger_cursor_at_start() {
-        let mut buf = make_buf(
-            &[
-                "12345", "678901", "234567", "8🎸234", "567890", "123456",
-                "789012", "345678", "901234", "56789ä", "bcdefg", "h",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 6,
-            display_height: 10,
-            first_display_line: 0,
-            cursor: (0, 1).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = make_buf(
-            &[
-                "123456789",
-                "012345678",
-                "🎸23456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "äbcdefgh",
-            ],
-            ':',
-        );
-        let expected_ctx = RenderContext { display_width: 10, ..ctx };
-        let res =
-            handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_width_larger_cursor_at_start_lg_prompt() {
-        let mut buf = EditBuffer {
-            lines: vec![
-                "lgprom".into(),
-                "pt:901".into(),
-                "234567".into(),
-                "8🎸234".into(),
-                "567890".into(),
-                "123456".into(),
-                "789012".into(),
-                "345678".into(),
-                "901234".into(),
-                "56789ä".into(),
-                "bcdefg".into(),
-                "h".into(),
-            ],
-            input_start: (1, 3).into(),
-            ..Default::default()
-        };
-        let mut ctx = RenderContext {
-            display_width: 6,
-            display_height: 10,
-            first_display_line: 0,
-            cursor: (1, 3).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = EditBuffer {
-            lines: vec![
-                "lgprompt:9".into(),
-                "012345678".into(),
-                "🎸23456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "äbcdefgh".into(),
-            ],
-            input_start: (0, 9).into(),
-            ..buf.clone()
-        };
-        let expected_ctx =
-            RenderContext { display_width: 10, cursor: (0, 9).into(), ..ctx };
-        let res =
-            handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn resize_width_larger_cursor_is_at_end() {
-        let mut buf = make_buf(
-            &[
-                "12345", "678901", "234567", "8🎸234", "567890", "123456",
-                "789012", "345678", "901234", "56789ä", "bcdefg", "hi",
-            ],
-            ':',
-        );
-        let mut ctx = RenderContext {
-            display_width: 6,
-            display_height: 10,
-            first_buffer_line: 2,
-            cursor: (11, 2).into(),
-            ..Default::default()
-        };
-
-        let expected_buf = make_buf(
-            &[
-                "123456789",
-                "012345678",
-                "🎸23456789",
-                "0123456789",
-                "0123456789",
-                "0123456789",
-                "äbcdefghi",
-            ],
-            ':',
-        );
-        let expected_ctx = RenderContext {
-            display_width: 10,
-            first_buffer_line: 0,
-            cursor: (6, 11).into(),
-            ..ctx
-        };
-        let res =
-            handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
-        assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
-    }
-
-    #[test]
-    fn up_nop_if_empty_history() {
-        let mut buf = make_buf(&["abcdëf🎸"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 13).into(),
-            ..Default::default()
-        };
-        let expected_buf = buf.clone();
-        let expected_ctx = ctx;
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buf, "a🎸io");
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 1);
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
+        assert!(res.is_continue());
+        assert_eq!(&buf, "aio");
+
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 1);
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buf, "ao");
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), 1);
+    }
+
+    #[test]
+    fn up_nop_if_no_history() {
+        let mut buf = "abcdëf🎸".to_owned();
+        let expected_buf = buf.clone();
+
+        let mut view = ViewBuilder::new().build();
+        let expected_view = view.clone();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
             None,
             &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
-        );
-        assert!(res.is_continue());
+        )
+        .unwrap();
+
+        assert!(res.is_continue(),);
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
-    fn down_nop_if_empty_history() {
-        let mut buf = make_buf(&["abcdëf🎸"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 13).into(),
-            ..Default::default()
-        };
+    fn down_nop_if_no_history() {
+        let mut buf = "abcdëf🎸".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
+
+        let mut view = ViewBuilder::new().build();
+        let expected_view = view.clone();
+
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
             None,
             &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
-        );
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
-    fn esc_nop_if_empty_history() {
-        let mut buf = make_buf(&["abcdëf🎸"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 10,
-            cursor: (0, 13).into(),
-            ..Default::default()
-        };
+    fn esc_nop_if_no_history() {
+        let mut buf = "abcdëf🎸".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
+
+        let mut view = ViewBuilder::new().build();
+        let expected_view = view.clone();
+
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
             None,
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        );
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn down_nop_when_not_viewing_history() {
-        let mut buf = make_buf(&["abcdëf🎸"], ':');
-        buf.draft = Some("abcdë🎸".to_owned());
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 13).into(),
-            ..Default::default()
-        };
-        let mut hs = Some(HistoryStack::new());
+        let mut buf = "abcdëf🎸".to_owned();
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
+
+        let mut view = ViewBuilder::new().build();
+        let expected_view = view.clone();
+
+        let mut hs = Some(HistoryStack::new());
         let expected_hs = hs.clone();
+
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
             hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
-        );
+        )
+        .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
         assert_eq!(hs, expected_hs);
     }
 
     #[test]
     fn enter_adds_non_empty_input_to_history() {
-        let mut buf = make_buf(&["123456789", "abc"], ':');
-        buf.draft = Some("abc".to_owned());
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (1, 3).into(),
-            ..Default::default()
-        };
+        let mut buf = "123456789abc".to_owned();
+        let mut view = ViewBuilder::new().build();
+
         let mut hs = Some(HistoryStack::new());
-        let expected_hs = HistoryStack {
-            lines: vec!["123456789abc".to_owned()],
-            edited: vec![None],
-            index: 1,
-        };
+        let expected_hs = HistoryStackBuilder::new()
+            .with_entries(&[("123456789abc", None)])
+            .with_index(1)
+            .build();
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
             hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        );
+        )
+        .unwrap();
         assert!(res.is_break());
         assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
     fn up_editing_input_saves_input_and_views_most_recent_history() {
-        let mut buf = make_buf(&["123456789", "abc"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (1, 3).into(),
-            ..Default::default()
-        };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 3,
-        };
-        let expected_buf = EditBuffer {
-            lines: vec![":baz".into()],
-            input_start: (0, 1).into(),
-            prompt: Some(':'),
-            draft: Some("123456789abc".to_owned()),
-        };
-        let expected_hs = HistoryStack { index: 2, ..hs.clone() };
-        let expected_ctx = RenderContext { cursor: (0, 4).into(), ..ctx };
-        let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let mut hs = Some(hs);
-        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        let mut buf = "123456789abc".to_owned();
+        let expected_buf = "baz";
+
+        let mut view = ViewBuilder::new().build();
+
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder.with_draft(Some("123456789abc"));
+        let mut hs = Some(
+            hs_builder
+                .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+                .with_index(3)
+                .build(),
+        );
+        let expected_hs = hs_builder.with_index(2).build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            hs.as_mut(),
+            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, expected_buf);
         assert_eq!(hs.unwrap(), expected_hs);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
     }
 
     #[test]
     fn up_editing_history_saves_edited_and_views_next_older_history() {
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 3).into(),
-            ..Default::default()
-        };
-        let mut buf = EditBuffer {
-            lines: vec![":ba".into()],
-            input_start: (0, 1).into(),
-            prompt: Some(':'),
-            draft: Some("123456789abc".to_owned()),
-        };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 1,
-        };
+        let mut buf = "ba".to_owned();
+        let expected_buf = "foo";
 
-        let expected_ctx = RenderContext { cursor: (0, 4).into(), ..ctx };
-        let expected_buf =
-            EditBuffer { lines: vec![":foo".into()], ..buf.clone() };
-        let expected_hs = HistoryStack {
-            index: 0,
-            edited: vec![None, Some("ba".to_owned()), None],
-            ..hs.clone()
-        };
-        let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let mut hs = Some(hs);
-        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        let mut view = ViewBuilder::new().build();
+
+        let mut hs_builder = HistoryStackBuilder::new();
+        let mut hs = Some(
+            hs_builder
+                .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+                .with_index(1)
+                .with_draft(Some("123456789abc"))
+                .build(),
+        );
+        let expected_hs = hs_builder
+            .with_entries(&[("foo", None), ("bar", Some("ba")), ("baz", None)])
+            .with_index(0)
+            .build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            hs.as_mut(),
+            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
+        assert_eq!(&buf, expected_buf);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
     }
+
     #[test]
     fn accepting_history_item_resets_history_stack() {
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 3).into(),
-            ..Default::default()
-        };
-        let mut buf = EditBuffer {
-            lines: vec![":ba".into()],
-            input_start: (0, 1).into(),
-            prompt: Some(':'),
-            draft: Some("123456789abc".to_owned()),
-        };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 1,
-        };
+        let mut buf = "ba".to_owned();
+        let expected_buf = "foo";
 
-        let expected_ctx = RenderContext { cursor: (0, 4).into(), ..ctx };
-        let expected_buf =
-            EditBuffer { lines: vec![":foo".into()], ..buf.clone() };
-        let expected_hs = HistoryStack {
-            index: 0,
-            edited: vec![None, Some("ba".to_owned()), None],
-            ..hs.clone()
-        };
-        let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let mut hs = Some(hs);
-        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        let mut view = ViewBuilder::new().build();
+
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_draft(Some("123456789abc"));
+        let mut hs = Some(hs_builder.with_index(1).build());
+        let expected_hs = hs_builder
+            .with_entries(&[("foo", None), ("bar", Some("ba")), ("baz", None)])
+            .with_index(0)
+            .build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            hs.as_mut(),
+            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, expected_buf);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
         assert_eq!(hs.as_ref(), Some(&expected_hs));
 
-        let expected_hs = HistoryStack {
-            lines: vec![
-                "foo".to_owned(),
-                "bar".to_owned(),
-                "baz".to_owned(),
-                "foo".to_owned(),
-            ],
-            edited: vec![None, None, None, None],
-            index: 4,
-        };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        let expected_hs = hs_builder
+            .with_entries(&[
+                ("foo", None),
+                ("bar", None),
+                ("baz", None),
+                ("foo", None),
+            ])
+            .with_index(4)
+            .with_draft(None)
+            .build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            hs.as_mut(),
+            &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_break());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, expected_buf);
         assert_eq!(hs.as_ref(), Some(&expected_hs));
     }
 
     #[test]
     fn up_viewing_history_views_next_oldest_history() {
-        let mut buf = make_buf(&["baz"], ':');
-        buf.draft = Some("123456789abc".to_owned());
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 4).into(),
-            ..Default::default()
-        };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 2,
-        };
-        let expected_buf =
-            EditBuffer { lines: vec![":bar".into()], ..buf.clone() };
-        let expected_ctx = ctx;
-        let expected_hs = HistoryStack { index: 1, ..hs.clone() };
-        let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let mut hs = Some(hs);
-        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        let mut buf = "baz".to_owned();
+        let expected_buf = "bar";
+
+        let mut view = ViewBuilder::new().build();
+
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_draft(Some("123456789abc"));
+        let expected_hs = hs_builder.with_index(1).build();
+        let mut hs = Some(hs_builder.with_index(2).build());
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            hs.as_mut(),
+            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, expected_buf);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
         assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
     fn up_viewing_history_nop_after_oldest_history() {
-        let mut buf = make_buf(&["foo"], ':');
-        buf.draft = Some("123456789abc".to_owned());
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 4).into(),
-            ..Default::default()
-        };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 0,
-        };
+        let mut buf = "foo".to_owned();
+
+        let mut view = ViewBuilder::new().build();
+
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_draft(Some("123456789abc"));
+        let expected_hs = hs_builder.with_index(0).build();
+        let mut hs = Some(hs_builder.build());
+
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
-        let expected_hs = hs.clone();
-        let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
-        let mut hs = Some(hs);
-        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        let expected_view = view.clone();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            hs.as_mut(),
+            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
         assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
     fn down_viewing_history_views_next_newest_history() {
-        let mut buf = make_buf(&["foo"], ':');
-        buf.draft = Some("123456789abc".to_owned());
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 4).into(),
-            ..Default::default()
-        };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 0,
-        };
-        let expected_buf =
-            EditBuffer { lines: vec![":bar".into()], ..buf.clone() };
-        let expected_ctx = ctx;
-        let expected_hs = HistoryStack { index: 1, ..hs.clone() };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let mut hs = Some(hs);
-        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        let mut buf = "foo".to_owned();
+        let expected_buf = "bar";
+
+        let mut view = ViewBuilder::new().build();
+
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_draft(Some("123456789abc"));
+        let expected_hs = hs_builder.with_index(1).build();
+        let mut hs = Some(hs_builder.with_index(0).build());
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            hs.as_mut(),
+            &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, expected_buf);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
         assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
     fn down_from_newest_history_returns_to_editing_draft() {
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 4).into(),
-            ..Default::default()
-        };
-        let mut buf = EditBuffer {
-            lines: vec![":baz".into()],
-            prompt: Some(':'),
-            input_start: (0, 1).into(),
-            draft: Some("123456789abc".to_owned()),
-        };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 2,
-        };
-        let expected_ctx = RenderContext { cursor: (1, 3).into(), ..ctx };
-        let expected_buf = EditBuffer {
-            lines: vec![":123456789".into(), "abc".into()],
-            draft: None,
-            ..buf.clone()
-        };
-        let expected_hs = HistoryStack { index: 3, ..hs.clone() };
-        let event =
-            Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let mut hs = Some(hs);
-        let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
+        let draft = "123456789abc";
+
+        let mut buf = "baz".to_owned();
+        let expected_buf = draft;
+
+        let mut view = ViewBuilder::new().build();
+
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder.with_entries(&[("foo", None), ("bar", None), ("baz", None)]);
+        let expected_hs =
+            hs_builder.with_index(3).with_draft(Some(draft)).build();
+        let mut hs = Some(hs_builder.with_index(2).build());
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            hs.as_mut(),
+            &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, expected_buf);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
         assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
     fn esc_editing_history_edits_draft() {
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 0,
-        };
-        let mut buf = make_buf(&["fo"], ':');
-        buf.draft = Some("123456789abc".to_owned());
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 3).into(),
-            ..Default::default()
-        };
-        let expected_buf = make_buf(&["123456789", "abc"], ':');
-        let expected_ctx = RenderContext { cursor: (1, 3).into(), ..ctx };
-        let expected_hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 3,
-        };
-        let mut hs = Some(hs);
+        let mut hs_builder = HistoryStackBuilder::new();
+        let expected_hs = hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_index(3)
+            .build();
+        let mut hs = Some(
+            hs_builder.with_draft(Some("123456789abc")).with_index(0).build(),
+        );
+
+        let expected_buf = "123456789abc";
+        let mut buf = "fo".to_owned();
+
+        let mut view = ViewBuilder::new().build();
+
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
             hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        );
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, expected_buf);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
         assert_eq!(hs.unwrap(), expected_hs);
     }
 
     #[test]
     fn esc_nop_when_editing_input() {
-        let mut buf = make_buf(&["some text"], ':');
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 10).into(),
-            ..Default::default()
-        };
+        let mut buf = "some text".to_owned();
+        let mut view = ViewBuilder::new().build();
+
         let expected_buf = buf.clone();
-        let expected_ctx = ctx;
+        let expected_view = view.clone();
+
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
             None,
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        );
+        )
+        .unwrap();
+
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(view, expected_view);
     }
 
     #[test]
     fn esc_viewing_history_after_editing_input_edits_input() {
-        let mut buf = EditBuffer {
-            lines: vec![":foo".into()],
-            input_start: (0, 1).into(),
-            prompt: Some(':'),
-            draft: Some("123456789abc".to_owned()),
-        };
-        let mut ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: (0, 4).into(),
-            ..Default::default()
-        };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 0,
-        };
+        let mut buf = "foo".to_owned();
+        let mut view = ViewBuilder::new().build();
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder.with_entries(&[("foo", None), ("bar", None), ("baz", None)]);
+        let hs =
+            hs_builder.with_draft(Some("123456789abc")).with_index(0).build();
 
-        let expected_buf = EditBuffer {
-            lines: vec![":123456789".into(), "abc".into()],
-            draft: None,
-            ..buf.clone()
-        };
-        let expected_ctx = RenderContext { cursor: (1, 3).into(), ..ctx };
-        let expected_hs = HistoryStack { index: 3, ..hs.clone() };
+        let expected_buf = "123456789abc";
+        let expected_hs = hs_builder.with_index(3).with_draft(None).build();
+
         let mut hs = Some(hs);
         let res = handle_event(
             &mut buf,
-            &mut ctx,
+            &mut view,
             hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        );
+        )
+        .unwrap();
+
         assert!(res.is_continue());
-        assert_eq!(buf, expected_buf);
-        assert_eq!(ctx, expected_ctx);
+        assert_eq!(&buf, expected_buf);
+        assert_eq!(view.insertion_point(), expected_buf.len());
+        assert!(!view.is_valid());
         assert_eq!(hs.unwrap(), expected_hs);
+    }
+
+    #[test]
+    fn resize_with_no_change_does_nothing() {
+        let size = DimWH(10, 5);
+        let cursor_pos = Coord2D(11, 0);
+
+        let buf = "buffer text".to_owned();
+
+        let mut view = ViewBuilder::new()
+            .with_size(size)
+            .with_insertion_point(buf.len())
+            .with_cursor_position(cursor_pos)
+            .build();
+        let expected_view = view.clone();
+
+        let res = handle_resize(&buf, &mut view, size, cursor_pos);
+
+        assert!(res.is_continue());
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn resize_saves_values_and_revalidates() {
+        let buf =
+            "0123456789012345678901234567890123456789012345678".to_owned();
+
+        let mut vb = ViewBuilder::new();
+        let mut view = vb
+            .with_insertion_point(buf.len())
+            .with_size(DimWH(80, 24))
+            .with_cursor_position(Coord2D(buf.len().try_into().unwrap(), 23))
+            .with_first_display_line(23)
+            .build();
+
+        let expected_view = vb
+            .with_size(DimWH(10, 5))
+            .with_first_display_line(0)
+            .with_cursor_position(Coord2D(0, 4))
+            .with_visible_chars(9..buf.len())
+            .build();
+        let res = handle_resize(&buf, &mut view, DimWH(10, 5), Coord2D(0, 4));
+
+        assert!(res.is_continue());
+        assert!(view.is_valid());
+        assert_eq!(view, expected_view);
     }
 }
