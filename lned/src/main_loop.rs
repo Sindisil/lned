@@ -131,15 +131,15 @@ pub fn run(
     let mut previous_cmd: Option<Cmd> = None;
     let mut previous_pattern: Option<regex::Regex> = None;
 
-    if let Some(file) = &args.file {
-        if let Err(e) = edit_cmd(
+    if let Some(file) = &args.file
+        && let Err(e) = edit_cmd(
             &mut buffer,
             &mut output,
             Some(file),
             previous_cmd.as_ref(),
-        ) {
-            writeln!(output, "{e}").unwrap();
-        }
+        )
+    {
+        writeln!(output, "{e}").unwrap();
     }
 
     // Accept and process commands until fatal error or exit
@@ -381,7 +381,8 @@ fn enumerate_cmd(
     buffer.set_current_line(*span.end());
 
     for (i, l) in buffer[span].iter().enumerate() {
-        print_line(output, &format!("{:>width$}  {l}", start + i));
+        write!(output, "{:>width$}  ", start + i).unwrap();
+        print_line(output, l);
     }
     output.flush().unwrap();
     Ok(None)
@@ -1052,7 +1053,7 @@ mod tests {
         ]);
         buffer.set_current_line(2);
         enumerate_cmd(&mut buffer, &mut output, None).unwrap();
-        assert_eq!(&output[..], b" 2  2\r\n", "output line 2");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), " 2  2\r\n");
     }
 
     #[test]
