@@ -153,7 +153,7 @@ fn pump_event(
     handle_event(buffer, view, history, &event)
 }
 
-    #[cfg(not(tarpaulin_include))]
+#[cfg(not(tarpaulin_include))]
 fn handle_event(
     buffer: &mut String,
     view: &mut View,

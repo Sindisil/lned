@@ -437,7 +437,8 @@ pub(crate) mod tests {
                       9012345678\
                       9012345678\
                       9012345678\
-                      9012345678";
+                      9012345678"
+            .to_owned();
 
         let mut vb = ViewBuilder::new();
 
