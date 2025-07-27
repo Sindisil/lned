@@ -2118,7 +2118,7 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("address to large"));
+        assert!(output.contains("address too large"));
         assert!(output.contains("unwritten changes"));
     }
 
