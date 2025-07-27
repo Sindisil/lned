@@ -74,6 +74,7 @@ pub enum Error {
     MissingDestination,
     RepeatedSubstitutionScope,
     MissingPatternDelimiter,
+    AddressTooLarge,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -86,6 +87,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
             Error::Unknown(_)
+            | Error::AddressTooLarge
             | Error::UnexpectedAddress
             | Error::OffsetTooLarge
             | Error::OffsetTooSmall
@@ -142,6 +144,9 @@ impl Display for Error {
             Error::MissingPatternDelimiter => {
                 write!(f, "missing pattern delimiter")
             }
+            Error::AddressTooLarge => {
+                write!(f, "address too large")
+            }
         }
     }
 }
@@ -194,7 +199,7 @@ impl Address {
                     graphemes.next();
                     left = Some(match right {
                         Some(r) if r > buffer.len() => {
-                            return Err(Error::InvalidAddress);
+                            return Err(Error::AddressTooLarge);
                         }
                         Some(r) => {
                             buffer.set_current_line(r);
@@ -271,8 +276,9 @@ impl Address {
 
         if let Some(right) = right {
             let left = left.map_or(right, |l| l);
-            //            if left > right {
-            if left > right || left > buffer.len() || right > buffer.len() {
+            if right > buffer.len() {
+                Err(Error::AddressTooLarge)
+            } else if left > right || left > buffer.len() {
                 Err(Error::InvalidAddress)
             } else {
                 Ok(Some(Address::span(left, right)))
@@ -1355,7 +1361,7 @@ mod tests {
         assert_eq!(buffer.current_line(), 6);
         let res = Address::eval(&mut input, &mut buffer, &mut None)
             .expect_err("invalid address");
-        assert!(matches!(res, Error::InvalidAddress));
+        assert!(matches!(res, Error::AddressTooLarge));
     }
 
     #[test]
@@ -1435,9 +1441,9 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None)
-            .expect_err("InvalidAddress");
+            .expect_err("AddressTooLarge");
         assert_eq!(input.next(), Some("p"));
-        assert!(matches!(res, Error::InvalidAddress));
+        assert!(matches!(res, Error::AddressTooLarge));
 
         let mut input = "-p\n".graphemes(true).peekable();
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);

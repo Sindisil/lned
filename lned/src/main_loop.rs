@@ -1664,7 +1664,7 @@ mod tests {
         };
         assert!(matches!(
             *source,
-            Error::ReadGlobalCmd { source: command::Error::InvalidAddress }
+            Error::ReadGlobalCmd { source: command::Error::AddressTooLarge }
         ));
         let Some(changes) = changes else {
             panic!("changes was None!");
@@ -2118,7 +2118,7 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("invalid address"));
+        assert!(output.contains("address to large"));
         assert!(output.contains("unwritten changes"));
     }
 
