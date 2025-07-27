@@ -161,15 +161,6 @@ impl View {
             0
         };
 
-        let mut new_cursor_position = Coord2D(
-            prompt_width
-                + str_width(
-                    &buffer[buf_lines[ip_buf_line].start..self.insertion_point],
-                    prompt_width,
-                ),
-            self.cursor_position.1,
-        );
-
         let lines_to_bottom =
             usize::from(self.size.1 - 1 - self.first_display_line);
 
@@ -178,7 +169,14 @@ impl View {
             .position(|l| l.contains(&self.visible_chars.start))
             .expect("visible_chars are in the buffer");
 
-        if first_visible_line + lines_to_bottom < ip_buf_line {
+        let new_cursor_x = prompt_width
+            + str_width(
+                &buffer[buf_lines[ip_buf_line].start..self.insertion_point],
+                prompt_width,
+            );
+
+        let new_cursor_y = if first_visible_line + lines_to_bottom < ip_buf_line
+        {
             // insertion_point below display
             let delta = ip_buf_line - (first_visible_line + lines_to_bottom);
             scroll_lines = u16::try_from(cmp::min(
@@ -187,13 +185,17 @@ impl View {
             ))
             .expect("scroll_lines fits u16");
             self.first_display_line -= scroll_lines;
-            new_cursor_position.1 = self.size.1 - 1;
+            self.size.1 - 1
         } else if ip_buf_line < first_visible_line {
             // Only possible if first_display_line was 0
-            new_cursor_position.1 = 0;
             first_visible_line = ip_buf_line;
-        }
-        self.cursor_position = new_cursor_position;
+            0
+        } else {
+            self.first_display_line
+                + u16::try_from(ip_buf_line - first_visible_line)
+                    .expect("new cursor y fits u16")
+        };
+        self.cursor_position = Coord2D(new_cursor_x, new_cursor_y);
 
         let last_visible_line = cmp::min(
             buf_lines.len() - 1,
@@ -487,6 +489,32 @@ pub(crate) mod tests {
         let scroll_lines = view.update(&buffer);
 
         assert_eq!(scroll_lines, None);
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn update_backspace_past_column_0() {
+        let buffer = "12345678".to_owned();
+        let mut vb = ViewBuilder::new();
+
+        let mut view = vb
+            .with_size(DimWH(10, 5))
+            .with_prompt(Some(':'))
+            .with_insertion_point(buffer.len())
+            .with_cursor_position(Coord2D(0, 4))
+            .with_first_display_line(3)
+            .with_visible_chars(0..buffer.len())
+            .with_state(ViewState::Invalid)
+            .build();
+
+        let expected_view = vb
+            .with_cursor_position(Coord2D(9, 3))
+            .with_state(ViewState::Valid)
+            .build();
+
+        let scroll_lines = view.update(&buffer);
+
+        assert_eq!(scroll_lines, Some(0));
         assert_eq!(view, expected_view);
     }
 
