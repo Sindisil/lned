@@ -271,7 +271,8 @@ impl Address {
 
         if let Some(right) = right {
             let left = left.map_or(right, |l| l);
-            if left > right {
+            //            if left > right {
+            if left > right || left > buffer.len() || right > buffer.len() {
                 Err(Error::InvalidAddress)
             } else {
                 Ok(Some(Address::span(left, right)))
@@ -1126,12 +1127,12 @@ mod tests {
 
     #[test]
     fn eval_simple_number_addr() {
-        let mut cmd_line = "42d\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut cmd_line = "5d\n".graphemes(true).peekable();
         let address =
-            Address::eval(&mut cmd_line, &mut EditBuffer::new(), &mut None)
-                .unwrap();
+            Address::eval(&mut cmd_line, &mut buffer, &mut None).unwrap();
         assert_eq!(cmd_line.next(), Some("d"));
-        assert_eq!(address, Some(Address::line(42)));
+        assert_eq!(address, Some(Address::line(5)));
     }
 
     #[test]
@@ -1292,18 +1293,20 @@ mod tests {
 
     #[test]
     fn eval_simple_comma_addr() {
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let mut input = "1,2p\n".graphemes(true).peekable();
-        let res = Address::eval(&mut input, &mut EditBuffer::new(), &mut None)
-            .unwrap();
+        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(res, Some(Address::span(1, 2)));
         assert_eq!(input.next(), Some("p"));
     }
 
     #[test]
     fn eval_leading_comma_addr() {
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         let mut input = ",4p\r\n".graphemes(true).peekable();
-        let res = Address::eval(&mut input, &mut EditBuffer::new(), &mut None)
-            .unwrap();
+        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
         assert_eq!(res, Some(Address::span(1, 4)));
     }
@@ -1431,9 +1434,10 @@ mod tests {
         let mut input = "+10p\n".graphemes(true).peekable();
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
+        let res = Address::eval(&mut input, &mut buffer, &mut None)
+            .expect_err("InvalidAddress");
         assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address::line(13)));
+        assert!(matches!(res, Error::InvalidAddress));
 
         let mut input = "-p\n".graphemes(true).peekable();
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
@@ -1902,12 +1906,14 @@ mod tests {
 
     #[test]
     fn parse_transfer_cmd_with_destination() {
-        let mut cmd_line = " 13\n".graphemes(true).peekable();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut cmd_line = " 4\n".graphemes(true).peekable();
         let addr = Address::span(1, 2);
-        let dest = Address::line(13);
+        let dest = Address::line(4);
         let res = parse_transfer_cmd(
             &mut cmd_line,
-            &mut EditBuffer::new(),
+            &mut buffer,
             &mut None,
             Some(addr),
         )
@@ -1919,12 +1925,13 @@ mod tests {
 
     #[test]
     fn parse_transfer_cmd_no_addr() {
-        let mut input = "t42\n".as_bytes();
-        let res =
-            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut input = "t2\n".as_bytes();
+        let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
         assert!(matches!(
             res,
-            Some((Cmd::Transfer(None, Address { start: 42, end: 42 }), None))
+            Some((Cmd::Transfer(None, Address { start: 2, end: 2 }), None))
         ));
     }
 
@@ -1938,7 +1945,7 @@ mod tests {
             &mut None,
             Some(addr),
         )
-        .expect_err("shoudl fail");
+        .expect_err("should fail");
         assert!(matches!(res, Error::MissingDestination));
     }
 
@@ -1974,16 +1981,14 @@ mod tests {
 
     #[test]
     fn parse_move_cmd_with_destination() {
-        let mut cmd_line = " 13\n".graphemes(true).peekable();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut cmd_line = " 5\n".graphemes(true).peekable();
         let addr = Address::span(1, 2);
-        let dest = Address::line(13);
-        let res = parse_move_cmd(
-            &mut cmd_line,
-            &mut EditBuffer::new(),
-            &mut None,
-            Some(addr),
-        )
-        .unwrap();
+        let dest = Address::line(5);
+        let res =
+            parse_move_cmd(&mut cmd_line, &mut buffer, &mut None, Some(addr))
+                .unwrap();
         assert!(
             matches!(res, Some((Cmd::Move(Some(a), t), None)) if a == addr && t == dest)
         );
@@ -1991,12 +1996,13 @@ mod tests {
 
     #[test]
     fn parse_move_cmd_no_addr() {
-        let mut input = "m42\n".as_bytes();
-        let res =
-            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut input = "m4\n".as_bytes();
+        let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
         assert!(matches!(
             res,
-            Some((Cmd::Move(None, Address { start: 42, end: 42 }), None))
+            Some((Cmd::Move(None, Address { start: 4, end: 4 }), None))
         ));
     }
 

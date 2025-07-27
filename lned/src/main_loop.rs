@@ -632,6 +632,9 @@ fn move_cmd(
     mut address: Option<Address>,
     destination: Address,
 ) -> Result<Option<ChangeSet>, Error> {
+    if destination.end() > buffer.len() {
+        return Err(Error::InvalidAddress);
+    }
     let source =
         address.get_or_insert_with(|| Address::line(buffer.current_line()));
     if destination.end() >= source.start() && destination.end() < source.end() {
@@ -857,6 +860,9 @@ fn transfer_cmd(
     mut address: Option<Address>,
     destination: Address,
 ) -> Result<Option<ChangeSet>, Error> {
+    if destination.end() > buffer.len() {
+        return Err(Error::InvalidAddress);
+    }
     let source =
         address.get_or_insert_with(|| Address::line(buffer.current_line()));
     if destination.end() >= source.start() && destination.end() < source.end() {
@@ -1656,7 +1662,10 @@ mod tests {
         ) else {
             panic!("should have returned GlobalCmdErrorStop");
         };
-        assert!(matches!(*source, Error::InvalidAddress));
+        assert!(matches!(
+            *source,
+            Error::ReadGlobalCmd { source: command::Error::InvalidAddress }
+        ));
         let Some(changes) = changes else {
             panic!("changes was None!");
         };
@@ -2465,15 +2474,19 @@ mod tests {
     }
 
     #[test]
+    fn transfer_cmd_destination_invalid() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let source = Address::span(3, 5);
+        let destination = Address::line(7);
+        let res = transfer_cmd(&mut buffer, Some(source), destination)
+            .expect_err("should fail");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
     fn transfer_cmd_destination_intersects_source_give_error() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
         let source = Address::span(3, 5);
-        let destination = Address::line(5);
-        transfer_cmd(&mut buffer, Some(source), destination).unwrap();
-        assert_eq!(
-            &buffer[..],
-            &["1\n", "2\n", "3\n", "4\n", "5\n", "3\n", "4\n", "5\n", "6\n"]
-        );
         let destination = Address::line(4);
         let res = transfer_cmd(&mut buffer, Some(source), destination)
             .expect_err("should fail");
@@ -2754,6 +2767,16 @@ mod tests {
     fn join_cmd_default_on_last_line() {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let res = join_cmd(&mut buffer, None).expect_err("should fail");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn move_cmd_destination_invalid() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let source = Address::span(3, 5);
+        let destination = Address::line(7);
+        let res = move_cmd(&mut buffer, Some(source), destination)
+            .expect_err("should fail");
         assert!(matches!(res, Error::InvalidAddress));
     }
 
