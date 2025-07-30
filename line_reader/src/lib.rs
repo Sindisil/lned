@@ -82,6 +82,7 @@ impl LineReader {
 
         let mut input_buffer = String::with_capacity(80);
 
+        view.repaint(&input_buffer)?;
         while pump_event(&mut input_buffer, &mut view, history.as_mut())?
             .is_continue()
         {
