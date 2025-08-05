@@ -199,7 +199,8 @@ impl View {
 
         let last_visible_line = cmp::min(
             buf_lines.len() - 1,
-            first_visible_line + usize::from(self.size.1 - 1),
+            first_visible_line
+                + usize::from(self.size.1 - 1 - self.first_display_line),
         );
         self.visible_chars.start = buf_lines[first_visible_line].start;
         self.visible_chars.end = buf_lines[last_visible_line].end
