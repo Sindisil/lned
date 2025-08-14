@@ -152,7 +152,7 @@ checksum = "cd945864f07fe9f5371a27ad7b52a172b4b499999f1d97574c9fa68373937e12"
 
 [[package]]
 name = "lned"
-version = "0.5.0"
+version = "0.6.0-alpha"
 dependencies = [
  "lexopt",
  "line_reader",

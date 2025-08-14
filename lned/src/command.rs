@@ -4,6 +4,7 @@ use std::io::{self};
 use std::iter::Peekable;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use regex::Regex;
 use unicode_segmentation::Graphemes;
@@ -14,6 +15,9 @@ use line_reader::LineReaderOptions;
 
 use crate::edit_buffer::EditBuffer;
 use crate::iter_utils::Peeking;
+
+pub static INDENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([[:blank:]]*)").expect("indent regex"));
 
 #[derive(Debug)]
 pub enum Cmd {
@@ -303,9 +307,13 @@ impl Cmd {
     pub fn read_input_lines(
         input: &mut impl LineRead,
         buf: &mut Vec<String>,
+        indent: &str,
     ) -> Result<usize, io::Error> {
-        let text_read_options =
-            LineReaderOptions { prompt: None, history: false };
+        let mut text_read_options = LineReaderOptions {
+            prompt: None,
+            indent: indent.to_owned(),
+            history: false,
+        };
         buf.clear();
         loop {
             let mut line = String::new();
@@ -313,6 +321,13 @@ impl Cmd {
             if n == 0 || line == ".\n" || line == ".\r\n" {
                 return Ok(buf.len());
             }
+            text_read_options.indent.replace_range(
+                ..,
+                INDENT
+                    .captures(&line)
+                    .and_then(|c| c.get(1))
+                    .map_or("", |m| m.as_str()),
+            );
             buf.push(line);
         }
     }
@@ -323,8 +338,11 @@ impl Cmd {
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
-        let cmd_read_options =
-            LineReaderOptions { prompt: Some(':'), history: true };
+        let cmd_read_options = LineReaderOptions {
+            prompt: Some(':'),
+            history: true,
+            ..Default::default()
+        };
         let mut line = String::with_capacity(120);
         input
             .read(&mut line, &cmd_read_options)
@@ -575,7 +593,11 @@ pub(crate) fn parse_substitute_cmd(
         )));
     }
 
-    let line_read_options = LineReaderOptions { prompt: None, history: false };
+    let line_read_options = LineReaderOptions {
+        prompt: None,
+        history: false,
+        ..Default::default()
+    };
     let mut line = String::new();
     let (cmd, sfx) = loop {
         input
@@ -802,11 +824,12 @@ fn parse_global_command_list(
     // noting and unescaping escaped EOL.
     let mut more_lines = parse_global_command_line(cmd_line, &mut commands)?;
 
-    // if the EOL was escaped, use read_input_lines()
-    // to read in rest of command list
     if more_lines {
-        let line_read_options =
-            LineReaderOptions { prompt: None, history: false };
+        let line_read_options = LineReaderOptions {
+            prompt: None,
+            history: false,
+            ..Default::default()
+        };
         let mut line = String::new();
         while more_lines {
             input

@@ -5,7 +5,10 @@
 mod undo_stack;
 
 use std::cmp::{self, Ordering};
-use std::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
+use std::ops::{
+    Index, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
+    RangeToInclusive,
+};
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
@@ -92,6 +95,25 @@ impl Index<RangeFrom<usize>> for EditBuffer {
     fn index(&self, index: RangeFrom<usize>) -> &Self::Output {
         assert!(index.start > 0, "Invalid range");
         &self.text[index.start - 1..]
+    }
+}
+
+impl Index<RangeTo<usize>> for EditBuffer {
+    type Output = [String];
+
+    #[inline]
+    fn index(&self, index: RangeTo<usize>) -> &Self::Output {
+        assert!(index.end > 0, "Invalid range");
+        &self.text[..index.end - 1]
+    }
+}
+
+impl Index<RangeToInclusive<usize>> for EditBuffer {
+    type Output = [String];
+
+    #[inline]
+    fn index(&self, index: RangeToInclusive<usize>) -> &Self::Output {
+        &self.text[..index.end]
     }
 }
 

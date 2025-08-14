@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, prelude::*};
+use std::ops::RangeInclusive;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -291,7 +292,7 @@ pub fn run(
     Ok(())
 }
 
-fn write_backtrace(output: &mut impl Write, mut err: &(dyn std::error::Error)) {
+fn write_backtrace(output: &mut impl Write, mut err: &dyn std::error::Error) {
     if err.source().is_none() {
         return;
     }
@@ -385,8 +386,15 @@ fn append_cmd(
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(LnedError::InvalidAddress);
     }
+    let indent = buffer
+        [..=address.map_or_else(|| buffer.current_line(), |a| a.end())]
+        .iter()
+        .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
+        .and_then(|l| command::INDENT.captures(l))
+        .and_then(|c| c.get(1))
+        .map_or("", |m| m.as_str());
     let mut lines = Vec::new();
-    Cmd::read_input_lines(input, &mut lines)
+    Cmd::read_input_lines(input, &mut lines, indent)
         .map_err(|source| LnedError::ReadLines { source })?;
     Ok(buffer.do_append(address, lines))
 }
@@ -399,9 +407,24 @@ fn change_cmd(
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(LnedError::InvalidAddress);
     }
+    let to_change = address.map_or_else(
+        || Address::line(buffer.current_line().max(1)),
+        |a| Address::span(a.start().max(1), a.end().max(1)),
+    );
+    let indent = buffer[RangeInclusive::from(to_change)]
+        .iter()
+        .find(|l| l.contains(|c: char| !c.is_whitespace()))
+        .or_else(|| {
+            buffer[..to_change.start()]
+                .iter()
+                .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
+        })
+        .and_then(|l| command::INDENT.captures(l))
+        .and_then(|c| c.get(1))
+        .map_or("", |m| m.as_str());
 
     let mut lines = Vec::new();
-    Cmd::read_input_lines(input, &mut lines)
+    Cmd::read_input_lines(input, &mut lines, indent)
         .map_err(|source| LnedError::ReadLines { source })?;
     Ok(Some(buffer.do_change(address, lines)))
 }
@@ -666,8 +689,15 @@ fn insert_cmd(
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(LnedError::InvalidAddress);
     }
+    let indent = buffer
+        [address.map_or_else(|| buffer.current_line().max(1), |a| a.end())..]
+        .iter()
+        .find(|l| l.contains(|c: char| !c.is_whitespace()))
+        .and_then(|l| command::INDENT.captures(l))
+        .and_then(|c| c.get(1))
+        .map_or("", |m| m.as_str());
     let mut lines = Vec::new();
-    Cmd::read_input_lines(input, &mut lines)
+    Cmd::read_input_lines(input, &mut lines, indent)
         .map_err(|source| LnedError::ReadLines { source })?;
     Ok(buffer.do_insert(address, lines))
 }
@@ -1203,7 +1233,8 @@ fn write_lines(
 mod tests {
     use super::*;
 
-    use crate::cli::CmdArgs;
+    use cli::CmdArgs;
+    use line_reader::LineReaderOptions;
     use std::path::PathBuf;
     use std::str;
 
@@ -1226,6 +1257,33 @@ mod tests {
     impl Read for BadReader {
         fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
             Err(io::Error::from(io::ErrorKind::Other))
+        }
+    }
+
+    struct IndentReader {
+        input: VecDeque<String>,
+    }
+
+    impl<const N: usize> From<&[&str; N]> for IndentReader {
+        fn from(value: &[&str; N]) -> Self {
+            IndentReader {
+                input: value.as_slice().iter().map(|&s| s.to_owned()).collect(),
+            }
+        }
+    }
+
+    impl LineRead for IndentReader {
+        fn read(
+            &mut self,
+            buffer: &mut String,
+            options: &LineReaderOptions,
+        ) -> io::Result<usize> {
+            let input = self.input.pop_front().unwrap_or_default();
+            if !input.is_empty() {
+                buffer.push_str(&options.indent);
+                buffer.push_str(&input);
+            }
+            Ok(input.len())
         }
     }
 
@@ -2919,6 +2977,22 @@ mod tests {
     }
 
     #[test]
+    fn append_cmd_autoindents() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "    two", "three"]);
+        let mut input = IndentReader::from(&["indented\n", "    further\n"]);
+        let expected = [
+            "one\n",
+            "    two\n",
+            "    indented\n",
+            "        further\n",
+            "three\n",
+        ];
+        let _ = append_cmd(&mut buffer, &mut input, Some(Address::line(2)))
+            .expect("lines appended");
+        assert_eq!(&buffer[..], expected);
+    }
+
+    #[test]
     fn insert_cmd_past_end_gives_error_before_input() {
         let mut buffer = EditBuffer::new();
         let mut input = "one\n.\n".as_bytes();
@@ -2935,6 +3009,21 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let res = delete_cmd(&mut buffer, None).expect_err("invalid address");
         assert!(matches!(res, LnedError::InvalidAddress));
+    }
+    #[test]
+    fn insert_cmd_autoindents() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "    two", "three"]);
+        let mut input = IndentReader::from(&["indented\n", "    further\n"]);
+        let expected = [
+            "one\n",
+            "    indented\n",
+            "        further\n",
+            "    two\n",
+            "three\n",
+        ];
+        let _ = insert_cmd(&mut buffer, &mut input, Some(Address::line(2)))
+            .expect("lines inserted");
+        assert_eq!(&buffer[..], expected);
     }
 
     #[test]
@@ -3039,6 +3128,67 @@ mod tests {
         )
         .expect_err("illegal address");
         assert!(matches!(res, LnedError::InvalidAddress));
+    }
+
+    #[test]
+    fn change_cmd_autoindents() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\n",
+            "\n",
+            "\n",
+            "    two",
+            "three",
+            "    four",
+            "        five",
+            "\n",
+            "\n",
+            "\n",
+            "    six",
+        ]);
+        let mut input = IndentReader::from(&["replacing blanks\n"]);
+        let expected = [
+            "one\n",
+            "\n",
+            "\n",
+            "    two\n",
+            "three\n",
+            "    four\n",
+            "        five\n",
+            "        replacing blanks\n",
+            "    six\n",
+        ];
+        let _ = change_cmd(&mut buffer, &mut input, Some(Address::span(8, 10)))
+            .expect("blanks replaced");
+        assert_eq!(&buffer[..], expected);
+
+        let mut input = IndentReader::from(&["indented\n", "    further\n"]);
+        let expected = [
+            "one\n",
+            "    indented\n",
+            "        further\n",
+            "    four\n",
+            "        five\n",
+            "        replacing blanks\n",
+            "    six\n",
+        ];
+        let _ = change_cmd(&mut buffer, &mut input, Some(Address::span(2, 5)))
+            .expect("lines changed");
+        assert_eq!(&buffer[..], expected);
+
+        let mut input = IndentReader::from(&["second"]);
+        let expected = [
+            "second\n",
+            "one\n",
+            "    indented\n",
+            "        further\n",
+            "    four\n",
+            "        five\n",
+            "        replacing blanks\n",
+            "    six\n",
+        ];
+        let _ = change_cmd(&mut buffer, &mut input, Some(Address::line(0)))
+            .expect("line changed");
+        assert_eq!(&buffer[..], expected);
     }
 
     #[test]

@@ -20,15 +20,6 @@ pub trait LineRead {
     /// # Errors
     ///
     /// Will return `io::Error` if an error is encountered reading a line
-    fn read_line(
-        &mut self,
-        prompt: Option<char>,
-        buffer: &mut String,
-    ) -> io::Result<usize>;
-
-    /// # Errors
-    ///
-    /// Will return `io::Error` if an error is encountered reading a line
     fn read(
         &mut self,
         buffer: &mut String,
@@ -44,6 +35,7 @@ pub struct LineReader {
 #[derive(Debug, Default, Clone)]
 pub struct LineReaderOptions {
     pub prompt: Option<char>,
+    pub indent: String,
     pub history: bool,
 }
 
@@ -82,6 +74,11 @@ impl LineReader {
 
         let mut input_buffer = String::with_capacity(80);
 
+        if !&options.indent.is_empty() {
+            input_buffer.push_str(&options.indent);
+            view.set_insertion_point(input_buffer.len());
+        }
+
         view.repaint(&input_buffer)?;
         while pump_event(&mut input_buffer, &mut view, history.as_mut())?
             .is_continue()
@@ -103,17 +100,6 @@ impl LineReader {
 
 #[cfg(not(tarpaulin_include))]
 impl LineRead for LineReader {
-    fn read_line(
-        &mut self,
-        prompt: Option<char>,
-        buffer: &mut String,
-    ) -> io::Result<usize> {
-        self.accept_line(
-            buffer,
-            &LineReaderOptions { prompt, ..Default::default() },
-        )
-    }
-
     fn read(
         &mut self,
         buffer: &mut String,
@@ -127,14 +113,6 @@ impl<T> LineRead for T
 where
     T: BufRead,
 {
-    fn read_line(
-        &mut self,
-        _prompt: Option<char>,
-        buffer: &mut String,
-    ) -> io::Result<usize> {
-        BufRead::read_line(self, buffer)
-    }
-
     fn read(
         &mut self,
         buffer: &mut String,
