@@ -6,7 +6,7 @@ edition = "2024"
 
 
 [dependencies]
-crossterm = "0.28.0"
+crossterm = "0.29.0"
 unicode-width = "0.2.0"
 
 [lints.rust]

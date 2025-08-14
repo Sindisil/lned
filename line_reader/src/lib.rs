@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use std::time::Duration;
 
 use crossterm::cursor::{self};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal;
 
 use unicode_width::UnicodeWidthChar;
@@ -141,7 +141,7 @@ fn handle_event(
 ) -> io::Result<ControlFlow<()>> {
     match event {
         Event::Key(event) => {
-            if event.kind == KeyEventKind::Press {
+            if event.is_press() {
                 Ok(handle_key_event(buffer, view, history, event))
             } else {
                 Ok(ControlFlow::Continue(()))
@@ -193,8 +193,18 @@ fn handle_key_event(
         }
         KeyCode::Left => handle_left(buffer, view),
         KeyCode::Right => handle_right(buffer, view),
-        KeyCode::Home => handle_home(view),
-        KeyCode::End => handle_end(buffer, view),
+        KeyCode::Home if event.modifiers == KeyModifiers::NONE => {
+            handle_home(view)
+        }
+        KeyCode::Home if event.modifiers == KeyModifiers::CONTROL => {
+            handle_delete_to_start(buffer, view)
+        }
+        KeyCode::End if event.modifiers == KeyModifiers::NONE => {
+            handle_end(buffer, view)
+        }
+        KeyCode::End if event.modifiers == KeyModifiers::CONTROL => {
+            handle_delete_to_end(buffer, view)
+        }
         KeyCode::Backspace => handle_backspace(buffer, view),
         KeyCode::Delete => handle_delete(buffer, view),
         KeyCode::Char(c) => handle_char_input(buffer, view, c),
@@ -323,6 +333,32 @@ fn handle_delete(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
+fn handle_delete_to_start(
+    buffer: &mut String,
+    view: &mut View,
+) -> ControlFlow<()> {
+    // if at start of buffer, nothing to do
+    if view.insertion_point() != 0 {
+        buffer.replace_range(..view.insertion_point(), "");
+        view.set_insertion_point(0);
+    }
+
+    ControlFlow::Continue(())
+}
+
+fn handle_delete_to_end(
+    buffer: &mut String,
+    view: &mut View,
+) -> ControlFlow<()> {
+    // if at end of buffer, nothing to do
+    if view.insertion_point() != buffer.len() {
+        buffer.replace_range(view.insertion_point().., "");
+        view.set_insertion_point(buffer.len());
+    }
+
+    ControlFlow::Continue(())
+}
+
 fn handle_home(view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() != 0 {
         view.set_insertion_point(0);
@@ -344,6 +380,7 @@ fn handle_end(buffer: &str, view: &mut View) -> ControlFlow<()> {
 mod tests {
     use super::*;
     use crate::history_stack::tests::HistoryStackBuilder;
+    use crate::renderer::ViewState;
     use crate::renderer::tests::ViewBuilder;
 
     use crossterm::event::KeyModifiers;
@@ -851,6 +888,92 @@ mod tests {
         assert_eq!(&buf, "ao");
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), 1);
+    }
+
+    #[test]
+    fn delete_to_start_at_start_is_nop() {
+        let mut buf = "aë🎸io".to_owned();
+        let mut view = ViewBuilder::new()
+            .with_insertion_point(0)
+            .with_state(ViewState::Valid)
+            .build();
+        let expected_buf = buf.clone();
+        let expected_view = view.clone();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(buf, expected_buf);
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn delete_to_start_removes_chars_before_cursor() {
+        let mut buf = "aë🎸io".to_owned();
+        let expected_buf = "io";
+        let mut view = ViewBuilder::new()
+            .with_insertion_point(8)
+            .with_state(ViewState::Valid)
+            .build();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(&buf, expected_buf);
+        assert_eq!(view.insertion_point(), 0);
+    }
+
+    #[test]
+    fn delete_to_end_at_end_is_nop() {
+        let mut buf = "aë🎸io".to_owned();
+        let mut view = ViewBuilder::new()
+            .with_insertion_point(buf.len())
+            .with_state(ViewState::Valid)
+            .build();
+        let expected_buf = buf.clone();
+        let expected_view = view.clone();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(buf, expected_buf);
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn delete_to_end_removes_chars_from_cursor_to_end() {
+        let mut buf = "aë🎸io".to_owned();
+        let mut view = ViewBuilder::new()
+            .with_insertion_point(4)
+            .with_state(ViewState::Valid)
+            .build();
+        let expected_buf = "aë".to_owned();
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(buf, expected_buf);
+        assert!(!view.is_valid());
+        assert_eq!(view.insertion_point(), expected_buf.len());
     }
 
     #[test]
