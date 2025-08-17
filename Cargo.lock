@@ -198,6 +198,7 @@ dependencies = [
  "lexopt",
  "line_reader",
  "regex",
+ "similar",
  "similar-asserts",
  "tempfile",
  "unicode-segmentation",

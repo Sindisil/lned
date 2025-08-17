@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -7,6 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use regex::Regex;
+use similar::TextDiff;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli;
@@ -70,6 +72,10 @@ pub enum LnedError {
         source: std::io::Error,
         backup_filename: Option<PathBuf>,
     },
+    DiffReadFile {
+        source: std::io::Error,
+        filename: PathBuf,
+    },
 }
 
 impl std::error::Error for LnedError {
@@ -88,6 +94,7 @@ impl std::error::Error for LnedError {
             | LnedError::NothingToRedo
             | LnedError::NoFilename => None,
             LnedError::EditFileOpen { ref source, .. }
+            | LnedError::DiffReadFile { ref source, .. }
             | LnedError::WriteMakeBackup { ref source, .. }
             | LnedError::WriteRemoveBackup { ref source, .. }
             | LnedError::WriteBackupFileCreate { ref source, .. }
@@ -211,6 +218,9 @@ impl fmt::Display for LnedError {
                         .expect("backup path exists if this error produced")
                         .display()
                 )
+            }
+            LnedError::DiffReadFile { filename, .. } => {
+                write!(f, "error reading {} for diff", filename.display())
             }
         }
     }
@@ -353,6 +363,9 @@ fn dispatch_cmd(
             read_cmd(buffer, output, *address, filename.as_deref())
         }
         Cmd::Redo => buffer.do_redo().map(|()| None),
+        Cmd::ShowDiff(filename) => {
+            show_diff_cmd(buffer, output, filename.as_deref())
+        }
         Cmd::Substitute(address, pattern, replacement, scope) => {
             substitute_cmd(buffer, *address, pattern, replacement, *scope)
         }
@@ -440,6 +453,26 @@ fn delete_cmd(
     }
 }
 
+fn show_diff_cmd(
+    buffer: &EditBuffer,
+    output: &mut impl Write,
+    filename: Option<&Path>,
+) -> Result<Option<ChangeSet>, LnedError> {
+    let filename =
+        filename.or_else(|| buffer.filename()).ok_or(LnedError::NoFilename)?;
+    let file = fs::read(filename).map_err(|source| {
+        LnedError::DiffReadFile { source, filename: filename.to_owned() }
+    })?;
+    let file = String::from_utf8_lossy(&file);
+    let mem = Cow::from(buffer[..].concat());
+    TextDiff::from_lines(&file, &mem)
+        .unified_diff()
+        .header(&filename.as_os_str().to_string_lossy(), "current buffer")
+        .to_writer(output)
+        .expect("reliable stdout");
+    Ok(None)
+}
+
 fn edit_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
@@ -457,8 +490,7 @@ fn edit_cmd(
     if let Some(filename) = filename {
         buffer.set_filename(Some(filename.to_owned()));
     }
-    let filename = buffer.filename();
-    let filename = filename.as_ref().ok_or(LnedError::NoFilename)?;
+    let filename = buffer.filename().ok_or(LnedError::NoFilename)?;
 
     let file = File::open(filename);
     let mut source = match file {
@@ -3572,5 +3604,71 @@ mod tests {
             EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         list_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
+    }
+
+    #[test]
+    fn show_diff_cmd_dispatch() {
+        let input = b"S\nq\n";
+        let mut output = Vec::new();
+        let args = CmdArgs { file: None };
+        run(&input[..], &mut output, &args).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("no filename"));
+    }
+
+    #[test]
+    fn show_diff_cmd_diffs_current_file() {
+        let mut buffer = EditBuffer::new();
+        let mut output = Vec::new();
+        let name = Path::new(r"test/assets/text_with_final_eol.txt");
+        let _ = edit_cmd(&mut buffer, &mut output, Some(name), None)
+            .expect("no error");
+        assert_eq!(buffer.filename(), Some(name));
+
+        let _ =
+            delete_cmd(&mut buffer, Some(Address::line(6))).expect("no error");
+        let _ = show_diff_cmd(&buffer, &mut output, None).expect("no error");
+        let output = str::from_utf8(&output).unwrap();
+        let expected = "10 lines (312 bytes) read\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn show_diff_cmd_with_filename_diffs_filename() {
+        let mut buffer = EditBuffer::new();
+        let mut output = Vec::new();
+        let name = Path::new(r"test/assets/text_with_final_eol.txt");
+        let _ = read_cmd(&mut buffer, &mut output, None, Some(name))
+            .expect("no error");
+        let _ =
+            delete_cmd(&mut buffer, Some(Address::line(6))).expect("no error");
+        let _ =
+            show_diff_cmd(&buffer, &mut output, Some(name)).expect("no error");
+        let output = str::from_utf8(&output).unwrap();
+        let expected = "10 lines (312 bytes) read\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn show_diff_cmd_error_reading_file_fails() {
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut output = Vec::new();
+        let name = Path::new("file_not_found");
+        let Err(LnedError::DiffReadFile { source, filename }) =
+            show_diff_cmd(&buffer, &mut output, Some(name))
+        else {
+            panic!("error expected!");
+        };
+        assert!(matches!(source.kind(), io::ErrorKind::NotFound));
+        assert_eq!(filename, name);
+    }
+
+    #[test]
+    fn show_diff_cmd_no_filename_no_current_file_fails() {
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut output = Vec::new();
+        let res =
+            show_diff_cmd(&buffer, &mut output, None).expect_err("no filename");
+        assert!(matches!(res, LnedError::NoFilename));
     }
 }
