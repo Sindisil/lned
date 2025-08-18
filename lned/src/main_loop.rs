@@ -373,10 +373,12 @@ fn dispatch_cmd(
             transfer_cmd(buffer, *address, *destination)
         }
         Cmd::Undo => buffer.do_undo().map(|()| None),
+        Cmd::Version => version_cmd(output),
         Cmd::Write(address, filename) => {
             write_cmd(buffer, output, *address, filename.as_deref())
         }
     };
+
     match res {
         Ok(Some(changes)) => buffer.push_undo(changes),
         Ok(None) => (),
@@ -1179,6 +1181,13 @@ impl FileWrite for EditedFile {
     }
 }
 
+fn version_cmd(
+    output: &mut impl Write,
+) -> Result<Option<ChangeSet>, LnedError> {
+    writeln!(output, "{} version {}", cli::APP_NAME, cli::APP_VERSION)
+        .expect("reliable stdout");
+    Ok(None)
+}
 fn write_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
@@ -2479,6 +2488,15 @@ mod tests {
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("312"));
+    }
+
+    #[test]
+    fn version_cmd_dispatch() {
+        let input = b"#\nq";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains(cli::APP_VERSION));
     }
 
     #[test]

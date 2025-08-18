@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use lexopt::prelude::*;
 
-const APP_NAME: &str = env!("CARGO_PKG_NAME");
-const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const APP_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
+pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const APP_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 const APP_HELP: &str = "
 Usage: lned [OPTIONS] [file]
 
@@ -16,12 +16,10 @@ Options:
   -V, --version            print version information and exit
 
 Arugments:
-  [file]  optional file to edit
-              for editing.
+  [file]  optional file to load for editing
 
-Files, if specified, will be loaded into separate buffers for editing.
-If no file is specified, an empty buffer will be created for editing.
-The first edit buffer will initially be the active buffer.
+File, if specified, will be loaded into buffer for editing.
+If no file is specified, an empty buffer will be created instead.
 ";
 
 #[derive(Debug)]

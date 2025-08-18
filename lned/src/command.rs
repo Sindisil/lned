@@ -42,6 +42,7 @@ pub enum Cmd {
     Substitute(Option<Address>, Regex, String, SubstitutionScope),
     Transfer(Option<Address>, Address),
     Undo,
+    Version,
     Write(Option<Address>, Option<PathBuf>),
 }
 
@@ -394,6 +395,8 @@ impl Cmd {
                 address,
             ),
             Some("u") => parse_no_address(address, Cmd::Undo)
+                .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
+            Some("#") => parse_no_address(address, Cmd::Version)
                 .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
             Some("U") => parse_no_address(address, Cmd::Redo)
                 .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
@@ -2161,5 +2164,13 @@ mod tests {
         let res =
             parse_show_cmd(&mut cmd_line, None).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
+    }
+
+    #[test]
+    fn parse_version_cmd() {
+        let mut input = "#\n".as_bytes();
+        let res =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
+        assert!(matches!(res, Some((Cmd::Version, None))));
     }
 }
