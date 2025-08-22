@@ -38,6 +38,7 @@ pub enum Cmd {
     Quit,
     Read(Option<Address>, Option<PathBuf>),
     Redo,
+    Scroll(Option<Address>, Option<usize>, Option<PrintAttributes>),
     ShowDiff(Option<PathBuf>),
     Substitute(Option<Address>, Regex, String, SubstitutionScope),
     Transfer(Option<Address>, Address),
@@ -52,11 +53,10 @@ pub enum SubstitutionScope {
     Global,
 }
 
-#[derive(Debug)]
-pub enum PrintSuffix {
-    Enumerate,
-    Print,
-    List,
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct PrintAttributes {
+    pub enumerate: bool,
+    pub expand_escapes: bool,
 }
 
 #[derive(Debug)]
@@ -295,6 +295,15 @@ impl Address {
     }
 }
 
+impl IntoIterator for Address {
+    type Item = usize;
+    type IntoIter = RangeInclusive<usize>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.into()
+    }
+}
+
 impl From<Address> for RangeInclusive<usize> {
     fn from(value: Address) -> Self {
         value.start()..=value.end()
@@ -339,7 +348,7 @@ impl Cmd {
         input: &mut impl LineRead,
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
-    ) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+    ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
         let cmd_read_options = LineReaderOptions {
             prompt: Some(':'),
             history: true,
@@ -401,6 +410,7 @@ impl Cmd {
             Some("U") => parse_no_address(address, Cmd::Redo)
                 .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
             Some("w") => parse_write_cmd(&mut graphemes, address),
+            Some("z") => parse_scroll_cmd(&mut graphemes, address),
             Some("=") => {
                 parse_no_args(&mut graphemes, Cmd::LineNumber(address))
             }
@@ -411,27 +421,27 @@ impl Cmd {
 
 fn parse_print_suffix(
     graphemes: &mut Peekable<Graphemes<'_>>,
-) -> Result<Option<PrintSuffix>, Error> {
-    let res = match graphemes.next() {
-        None | Some("\n" | "\r\n") => Ok(None),
-        Some("n") => Ok(Some(PrintSuffix::Enumerate)),
-        Some("p") => Ok(Some(PrintSuffix::Print)),
-        Some("l") => Ok(Some(PrintSuffix::List)),
-        _ => Err(Error::InvalidCmdSuffix),
-    };
-    if res.is_err() || res.as_ref().is_ok_and(Option::is_none) {
-        return res;
+) -> Result<Option<PrintAttributes>, Error> {
+    let mut attrs: Option<PrintAttributes> = None;
+    loop {
+        let gr = graphemes.next();
+        match gr {
+            None | Some("\n" | "\r\n") => break,
+            Some("n") => attrs.get_or_insert_default().enumerate = true,
+            Some("p") => {
+                attrs.get_or_insert_default();
+            }
+            Some("l") => attrs.get_or_insert_default().expand_escapes = true,
+            _ => return Err(Error::InvalidCmdSuffix),
+        }
     }
-    match graphemes.next() {
-        None | Some("\n" | "\r\n") => res,
-        _ => Err(Error::InvalidCmdSuffix),
-    }
+    Ok(attrs)
 }
 
 fn parse_write_cmd<'a>(
     graphemes: &mut impl Iterator<Item = &'a str>,
     address: Option<Address>,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     match graphemes.next() {
         None | Some("\n" | "\r\n") => {
             Ok(Some((Cmd::Write(address, None), None)))
@@ -455,10 +465,24 @@ fn parse_write_cmd<'a>(
     }
 }
 
+fn parse_scroll_cmd(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+    address: Option<Address>,
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+    let has_window = graphemes
+        .peek()
+        .is_some_and(|gr| gr.starts_with(|c: char| c.is_ascii_digit()));
+    let window: Option<usize> =
+        if has_window { Some(parse_number(graphemes)?) } else { None };
+
+    let print_sfx = parse_print_suffix(graphemes)?;
+    Ok(Some((Cmd::Scroll(address, window, print_sfx), None)))
+}
+
 fn parse_show_cmd<'a>(
     graphemes: &mut impl Iterator<Item = &'a str>,
     address: Option<Address>,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     if address.is_some() {
         return Err(Error::UnexpectedAddress);
     }
@@ -483,7 +507,7 @@ fn parse_show_cmd<'a>(
 fn parse_edit_cmd<'a>(
     graphemes: &mut impl Iterator<Item = &'a str>,
     address: Option<Address>,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     if address.is_some() {
         return Err(Error::UnexpectedAddress);
     }
@@ -508,7 +532,7 @@ fn parse_edit_cmd<'a>(
 fn parse_read_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<Address>,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     match graphemes.next() {
         None | Some("\n" | "\r\n") => {
             Ok(Some((Cmd::Read(address, None), None)))
@@ -537,7 +561,7 @@ fn parse_move_cmd(
     buffer: &mut EditBuffer,
     previous_pattern: &mut Option<Regex>,
     address: Option<Address>,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     let Some(destination) = Address::eval(graphemes, buffer, previous_pattern)?
     else {
         return Err(Error::MissingDestination);
@@ -600,7 +624,7 @@ pub(crate) fn parse_substitute_cmd(
     address: Option<Address>,
     previous_pattern: &mut Option<Regex>,
     input: &mut impl LineRead,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     let (pattern, delimiter) = parse_pattern(graphemes, None, true)?;
     if !(pattern.is_empty()) {
         *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
@@ -654,7 +678,7 @@ fn parse_transfer_cmd(
     buffer: &mut EditBuffer,
     previous_pattern: &mut Option<Regex>,
     address: Option<Address>,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     let destination = Address::eval(graphemes, buffer, previous_pattern)?;
     let Some(destination) = destination else {
         return Err(Error::MissingDestination);
@@ -772,7 +796,7 @@ fn parse_no_address(address: Option<Address>, cmd: Cmd) -> Result<Cmd, Error> {
 fn parse_no_args(
     graphemes: &mut Peekable<Graphemes<'_>>,
     cmd: Cmd,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     Ok(Some((cmd, parse_print_suffix(graphemes)?)))
 }
 
@@ -794,7 +818,7 @@ fn parse_number<'a>(
 fn parse_file_cmd<'a>(
     graphemes: &mut impl Iterator<Item = &'a str>,
     address: Option<Address>,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     if address.is_some() {
         return Err(Error::UnexpectedAddress);
     }
@@ -879,7 +903,7 @@ fn parse_global_cmd(
     address: Option<Address>,
     previous_pattern: &mut Option<Regex>,
     input: &mut impl LineRead,
-) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     let (pattern, _) = parse_pattern(graphemes, None, false)?;
     if !(pattern.is_empty()) {
         *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
@@ -929,20 +953,21 @@ mod tests {
     fn parse_no_args_p_print_suffix() {
         let mut cmd_line = "p\r\n".graphemes(true).peekable();
         let res = parse_no_args(&mut cmd_line, Cmd::Delete(None)).unwrap();
-        assert!(matches!(
-            res,
-            Some((Cmd::Delete(None), Some(PrintSuffix::Print)))
-        ));
+        let expected_attrs = Some(PrintAttributes { ..Default::default() });
+        assert!(
+            matches!(res, Some((Cmd::Delete(None), attrs)) if attrs == expected_attrs)
+        );
     }
 
     #[test]
     fn parse_no_args_n_print_suffix() {
         let mut cmd_line = "n\r\n".graphemes(true).peekable();
         let res = parse_no_args(&mut cmd_line, Cmd::Delete(None)).unwrap();
-        assert!(matches!(
-            res,
-            Some((Cmd::Delete(None), Some(PrintSuffix::Enumerate)))
-        ));
+        let expected_attrs =
+            Some(PrintAttributes { enumerate: true, ..Default::default() });
+        assert!(
+            matches!(res, Some((Cmd::Delete(None), attrs)) if attrs == expected_attrs)
+        );
     }
 
     #[test]
@@ -954,37 +979,42 @@ mod tests {
     }
 
     #[test]
-    fn parse_no_args_multiple_print_suffix_error() {
-        let mut cmd_line = "pn\r\n".graphemes(true).peekable();
-        let res = parse_no_args(&mut cmd_line, Cmd::Delete(None))
-            .expect_err("invalid suffix");
-        assert!(matches!(res, Error::InvalidCmdSuffix));
-    }
-
-    #[test]
     fn parse_print_suffix_p() {
         let mut graphs = "p\r\n".graphemes(true).peekable();
         let res = parse_print_suffix(&mut graphs).unwrap();
-        assert!(matches!(res, Some(PrintSuffix::Print)));
+        assert!(matches!(
+            res,
+            Some(a) if a == PrintAttributes { ..Default::default() }));
     }
 
     #[test]
     fn parse_print_suffix_n() {
         let mut graphs = "n\r\n".graphemes(true).peekable();
         let res = parse_print_suffix(&mut graphs).unwrap();
-        assert!(matches!(res, Some(PrintSuffix::Enumerate)));
+        assert!(matches!(
+            res,
+            Some(a) if a ==PrintAttributes {
+                enumerate: true,
+                ..Default::default()
+            }
+        ));
     }
 
     #[test]
     fn parse_print_suffix_l() {
         let mut graphs = "l\r\n".graphemes(true).peekable();
         let res = parse_print_suffix(&mut graphs).unwrap();
-        assert!(matches!(res, Some(PrintSuffix::List)));
+        assert!(matches!(
+        res,
+        Some(a) if a ==PrintAttributes {
+            expand_escapes: true,
+            ..Default::default()
+        }));
     }
 
     #[test]
     fn parse_print_suffix_trailing_chars_error() {
-        let mut graphs = "pn\r\n".graphemes(true).peekable();
+        let mut graphs = "pn5\r\n".graphemes(true).peekable();
         let res = parse_print_suffix(&mut graphs).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
@@ -1831,16 +1861,13 @@ mod tests {
             &mut "".as_bytes(),
         )
         .unwrap();
-        let Some((
-            Cmd::Substitute(a, p, r, SubstitutionScope::Single(1)),
-            Some(PrintSuffix::Enumerate),
-        )) = res
-        else {
-            panic!("not Single(1)!");
-        };
-        assert_eq!(a, address);
-        assert_eq!(p.as_str(), "[^01]*");
-        assert_eq!(r, ".");
+        let (cmd, attrs) = res.unwrap();
+        let expected_attrs =
+            PrintAttributes { enumerate: true, ..Default::default() };
+        assert!(
+            matches!(cmd, Cmd::Substitute(a, p, r, SubstitutionScope::Single(s)) if a == address && p.as_str() == "[^01]*" && r == "." && s == 1)
+        );
+        assert!(matches!(attrs, Some(a) if a == expected_attrs));
     }
 
     #[test]
@@ -2172,5 +2199,16 @@ mod tests {
         let res =
             Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
         assert!(matches!(res, Some((Cmd::Version, None))));
+    }
+
+    #[test]
+    fn parse_valid_scroll_cmd() {
+        let mut input = "5z10\n".as_bytes();
+        let mut buffer =
+            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
+        assert!(
+            matches!(res, Some((Cmd::Scroll(a, w, p), None)) if a == Some(Address::line(5)) && w == Some(10) && p.is_none())
+        );
     }
 }
