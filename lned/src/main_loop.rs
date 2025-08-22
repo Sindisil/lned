@@ -373,7 +373,10 @@ fn dispatch_cmd(
             transfer_cmd(buffer, *address, *destination)
         }
         Cmd::Undo => buffer.do_undo().map(|()| None),
-        Cmd::Version => version_cmd(output),
+        Cmd::Version => {
+            version_cmd(output);
+            Ok(None)
+        }
         Cmd::Write(address, filename) => {
             write_cmd(buffer, output, *address, filename.as_deref())
         }
@@ -1181,12 +1184,9 @@ impl FileWrite for EditedFile {
     }
 }
 
-fn version_cmd(
-    output: &mut impl Write,
-) -> Result<Option<ChangeSet>, LnedError> {
+fn version_cmd(output: &mut impl Write) {
     writeln!(output, "{} version {}", cli::APP_NAME, cli::APP_VERSION)
         .expect("reliable stdout");
-    Ok(None)
 }
 fn write_cmd(
     buffer: &mut EditBuffer,
