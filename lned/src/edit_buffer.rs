@@ -36,11 +36,12 @@ impl Default for EditBuffer {
     }
 }
 
-impl<'a, T: AsRef<[&'a str]>> From<T> for EditBuffer {
-    fn from(value: T) -> Self {
-        let mut buf = EditBuffer::with_capacity(value.as_ref().len());
-        buf.append(0, value.as_ref().iter().map(ToString::to_string).collect());
-        buf.set_current_line(buf.len());
+impl From<Vec<String>> for EditBuffer {
+    fn from(lines: Vec<String>) -> Self {
+        let line_count = lines.len();
+        let mut buf = EditBuffer::with_capacity(line_count);
+        buf.append(0, lines);
+        buf.set_current_line(line_count);
         buf
     }
 }
@@ -155,6 +156,16 @@ impl EditBuffer {
             text: Vec::with_capacity(capacity),
             ..EditBuffer::default()
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_text(text: &[&str]) -> EditBuffer {
+        let line_count = text.len();
+        let text = text.iter().map(ToString::to_string).collect();
+        let mut buf = EditBuffer::with_capacity(line_count);
+        buf.append(0, text);
+        buf.set_current_line(line_count);
+        buf
     }
 
     #[must_use]
@@ -530,9 +541,11 @@ mod tests {
 
     #[test]
     fn buffer_from_vec_ensures_eols() {
-        let buf_fully_terminated = EditBuffer::from(vec!["1\n", "2\n", "3\n"]);
-        let buf_non_terminated = EditBuffer::from(vec!["1", "2", "3"]);
-        let buf_partially_terminated = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let buf_fully_terminated =
+            EditBuffer::with_text(&["1\n", "2\n", "3\n"]);
+        let buf_non_terminated = EditBuffer::with_text(&["1", "2", "3"]);
+        let buf_partially_terminated =
+            EditBuffer::with_text(&["1\n", "2", "3"]);
         assert_eq!(buf_partially_terminated[..], buf_fully_terminated[..]);
         assert!(
             buf_non_terminated
@@ -544,7 +557,7 @@ mod tests {
 
     #[test]
     fn buffer_from_vec_is_clean() {
-        let buf = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let buf = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert!(!buf.is_dirty());
     }
 
@@ -586,7 +599,7 @@ mod tests {
 
     #[test]
     fn usize_index() {
-        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let buffer = EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!("1\n", buffer[1]);
         assert_eq!("6\n", buffer[6]);
     }
@@ -594,27 +607,27 @@ mod tests {
     #[test]
     #[should_panic = "index out of bounds"]
     fn zero_index_panics() {
-        let buffer = EditBuffer::from(vec!["1"]);
+        let buffer = EditBuffer::with_text(&["1"]);
         let _ = &buffer[0];
     }
 
     #[test]
     #[should_panic = "index out of bounds"]
     fn index_too_large_panics() {
-        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let buffer = EditBuffer::with_text(&["1", "2", "3"]);
         let _ = &buffer[4];
     }
 
     #[test]
     fn range_full() {
-        let content = vec!["1\n", "2\n", "3\n", "4\n"];
-        let buffer = EditBuffer::from(content.clone());
+        let content = ["1\n", "2\n", "3\n", "4\n"];
+        let buffer = EditBuffer::with_text(&content);
         assert_eq!(content, buffer[..]);
     }
 
     #[test]
     fn range_index() {
-        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let buffer = EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!(vec!["2\n", "3\n", "4\n"], buffer[2..5]);
         assert_eq!(
             vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"],
@@ -624,7 +637,7 @@ mod tests {
 
     #[test]
     fn range_inclusive_index() {
-        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let buffer = EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!(vec!["2\n", "3\n", "4\n"], buffer[2..=4]);
         assert_eq!(
             vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"],
@@ -635,14 +648,14 @@ mod tests {
     #[test]
     #[should_panic = "Invalid range"]
     fn zero_based_range_panics() {
-        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let buffer = EditBuffer::with_text(&["1", "2"]);
         let _ = &buffer[0..2];
     }
 
     #[test]
     #[should_panic = "Invalid range"]
     fn zero_based_range_inclusive_panics() {
-        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let buffer = EditBuffer::with_text(&["1", "2"]);
         let _ = &buffer[0..=1];
     }
 
@@ -650,7 +663,7 @@ mod tests {
     #[should_panic = "Invalid range"]
     #[allow(clippy::reversed_empty_ranges)]
     fn zero_terminated_range_panics() {
-        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let buffer = EditBuffer::with_text(&["1", "2"]);
         let _ = &buffer[1..0];
     }
 
@@ -658,27 +671,27 @@ mod tests {
     #[should_panic = "Invalid range"]
     #[allow(clippy::reversed_empty_ranges)]
     fn zero_terminated_range_inclusive_panics() {
-        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let buffer = EditBuffer::with_text(&["1", "2"]);
         let _ = &buffer[1..=0];
     }
 
     #[test]
     #[should_panic = "range end index 4 out of range for slice of length 3"]
     fn range_too_far_beyond_end_panics() {
-        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let buffer = EditBuffer::with_text(&["1", "2", "3"]);
         let _ = &buffer[3..5];
     }
 
     #[test]
     #[should_panic = "range end index 4 out of range for slice of length 3"]
     fn range_inclusive_beyond_end_panics() {
-        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let buffer = EditBuffer::with_text(&["1", "2", "3"]);
         let _ = &buffer[3..=4];
     }
 
     #[test]
     fn range_from() {
-        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let buffer = EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!(vec!["4\n", "5\n", "6\n"], buffer[4..]);
         assert_eq!(vec!["6\n"], buffer[6..]);
         assert!(buffer[7..].is_empty());
@@ -687,13 +700,13 @@ mod tests {
     #[test]
     #[should_panic = "Invalid range"]
     fn zero_based_range_from_panics() {
-        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let buffer = EditBuffer::with_text(&["1", "2", "3"]);
         let _ = &buffer[0..];
     }
 
     #[test]
     fn set_current_line() {
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1", "2", "3"]);
         buffer.set_current_line(2);
         assert_eq!(2, buffer.current_line());
     }
@@ -701,14 +714,14 @@ mod tests {
     #[test]
     #[should_panic = "0 is an invalid index (1-3)"]
     fn set_current_line_bad_index() {
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1", "2", "3"]);
         buffer.set_current_line(0);
     }
 
     #[test]
     #[should_panic = "99 is an invalid index (1-3)"]
     fn set_current_line_beyond_end() {
-        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1", "2", "3"]);
         buffer.set_current_line(99);
     }
 
@@ -718,7 +731,7 @@ mod tests {
     #[test]
     fn do_append_one_to_empty_buffer() {
         let mut buffer = EditBuffer::new();
-        let expected = EditBuffer::from(vec!["one\n"]);
+        let expected = EditBuffer::with_text(&["one\n"]);
         let lines = ["one\n"].map(ToOwned::to_owned).to_vec();
         buffer.do_append(Some(Address::line(0)), lines);
         assert_eq!(1, buffer.current_line);
@@ -728,8 +741,8 @@ mod tests {
 
     #[test]
     fn do_append_of_zero_lines() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let expected = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
+        let expected = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert_eq!(3, buffer.current_line());
         buffer.do_append(Some(Address::line(2)), Vec::new());
         assert_eq!(2, buffer.current_line);
@@ -739,9 +752,10 @@ mod tests {
 
     #[test]
     fn do_transfer_one_line() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected =
-            EditBuffer::from(vec!["1\n", "2", "3", "5", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\n", "2", "3", "5", "4", "5", "6"]);
         buffer.do_transfer(Some(Address::line(5)), Address::line(3));
         assert_eq!(buffer[..], expected[..]);
         assert_eq!(buffer.current_line(), 4);
@@ -749,9 +763,10 @@ mod tests {
 
     #[test]
     fn do_transfer_span() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected =
-            EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "4", "5", "6"]);
         buffer.do_transfer(Some(Address::span(4, 5)), Address::line(3));
         assert_eq!(buffer[..], expected[..]);
         assert_eq!(buffer.current_line(), 5);
@@ -759,9 +774,10 @@ mod tests {
 
     #[test]
     fn do_transfer_no_addr() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected =
-            EditBuffer::from(vec!["1\n", "2", "3", "1", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\n", "2", "3", "1", "4", "5", "6"]);
         buffer.set_current_line(1);
         buffer.do_transfer(None, Address::line(3));
         assert_eq!(buffer[..], expected[..]);
@@ -770,9 +786,10 @@ mod tests {
 
     #[test]
     fn do_transfer_to_line_0() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected =
-            EditBuffer::from(vec!["4\n", "5", "1", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["4\n", "5", "1", "2", "3", "4", "5", "6"]);
         buffer.do_transfer(Some(Address::span(4, 5)), Address::line(0));
         assert_eq!(buffer[..], expected[..]);
         assert_eq!(buffer.current_line(), 2);
@@ -780,9 +797,10 @@ mod tests {
 
     #[test]
     fn do_transfer_destination_is_span() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected =
-            EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "4", "5", "6"]);
         buffer.do_transfer(Some(Address::span(4, 5)), Address::span(1, 3));
         assert_eq!(buffer[..], expected[..]);
         assert_eq!(buffer.current_line(), 5);
@@ -791,8 +809,8 @@ mod tests {
     #[test]
     fn do_delete_span() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["1\r\n", "2", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::with_text(&["1\r\n", "2", "6"]);
         buffer.do_delete(Some(Address::span(3, 5)));
         assert_eq!(3, buffer.len());
         assert_eq!(buffer[..], expected[..]);
@@ -800,8 +818,9 @@ mod tests {
 
     #[test]
     fn do_delete_line() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["1\n", "2", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::with_text(&["1\n", "2", "4", "5", "6"]);
         buffer.do_delete(Some(Address::line(3)));
         assert_eq!(5, buffer.len());
         assert_eq!(buffer[..], expected[..]);
@@ -810,8 +829,8 @@ mod tests {
     #[test]
     fn do_delete_span_at_start() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["4\r\n", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::with_text(&["4\r\n", "5", "6"]);
         buffer.do_delete(Some(Address::span(1, 3)));
         assert_eq!(3, buffer.len());
         assert_eq!(buffer[..], expected[..]);
@@ -820,8 +839,8 @@ mod tests {
     #[test]
     fn do_delete_span_at_end() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["1\r\n", "2", "3", "4"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::with_text(&["1\r\n", "2", "3", "4"]);
         buffer.do_delete(Some(Address::span(5, 6)));
         assert_eq!(4, buffer.len());
         assert_eq!(buffer[..], expected[..]);
@@ -829,8 +848,9 @@ mod tests {
 
     #[test]
     fn do_delete_no_addr() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected = EditBuffer::from(vec!["1\n", "2", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
+        let expected = EditBuffer::with_text(&["1\n", "2", "4", "5", "6"]);
         buffer.set_current_line(3);
         buffer.do_delete(None);
         assert_eq!(5, buffer.len());
@@ -840,7 +860,7 @@ mod tests {
     #[test]
     fn do_insert_one_to_empty_buffer() {
         let mut buffer = EditBuffer::new();
-        let expected = EditBuffer::from(vec!["one\n"]);
+        let expected = EditBuffer::with_text(&["one\n"]);
         let lines = vec!["one\n".to_owned()];
         buffer.do_insert(Some(Address::line(0)), lines);
         assert_eq!(1, buffer.current_line);
@@ -851,7 +871,7 @@ mod tests {
     #[test]
     fn do_insert_empty_buffer() {
         let mut buffer = EditBuffer::new();
-        let expected = EditBuffer::from(vec!["a\n", "b", "c"]);
+        let expected = EditBuffer::with_text(&["a\n", "b", "c"]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
         buffer.do_insert(Some(Address::line(0)), lines);
         assert_eq!(3, buffer.current_line);
@@ -861,8 +881,8 @@ mod tests {
 
     #[test]
     fn do_insert_non_empty_at_0() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let expected = EditBuffer::from(vec!["a\n", "b", "c", "1", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
+        let expected = EditBuffer::with_text(&["a\n", "b", "c", "1", "2", "3"]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
         buffer.do_insert(Some(Address::line(0)), lines);
         assert_eq!(3, buffer.current_line);
@@ -872,9 +892,10 @@ mod tests {
 
     #[test]
     fn do_insert_span_address() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
-        let expected = EditBuffer::from(vec![
+        let expected = EditBuffer::with_text(&[
             "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
         ]);
         buffer.do_insert(Some(Address::span(2, 3)), lines);
@@ -885,9 +906,9 @@ mod tests {
 
     #[test]
     fn do_insert_at_end() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
-        let expected = EditBuffer::from(vec!["1\n", "2", "a", "b", "c", "3"]);
+        let expected = EditBuffer::with_text(&["1\n", "2", "a", "b", "c", "3"]);
         buffer.do_insert(Some(Address::line(3)), lines);
         assert_eq!(5, buffer.current_line);
         assert_eq!(6, buffer.len());
@@ -896,8 +917,8 @@ mod tests {
 
     #[test]
     fn do_insert_of_zero_lines() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let expected = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
+        let expected = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert_eq!(3, buffer.current_line());
         buffer.do_insert(Some(Address::line(2)), Vec::new());
         assert_eq!(2, buffer.current_line);
@@ -907,9 +928,10 @@ mod tests {
 
     #[test]
     fn do_join_default_addr() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.current_line = 2;
-        let mut expected = EditBuffer::from(vec!["1\n", "23", "4", "5", "6"]);
+        let mut expected = EditBuffer::with_text(&["1\n", "23", "4", "5", "6"]);
         expected.current_line = 2;
         buffer.do_join(None);
         assert_eq!(buffer, expected);
@@ -917,9 +939,10 @@ mod tests {
 
     #[test]
     fn do_join_two_lines() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.current_line = 2;
-        let mut expected = EditBuffer::from(vec!["1\n", "2", "34", "5", "6"]);
+        let mut expected = EditBuffer::with_text(&["1\n", "2", "34", "5", "6"]);
         expected.set_current_line(3);
         buffer.do_join(Some(Address::span(3, 4)));
         assert_eq!(buffer, expected);
@@ -927,9 +950,10 @@ mod tests {
 
     #[test]
     fn do_join_several_lines() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.current_line = 2;
-        let mut expected = EditBuffer::from(vec!["1\n", "2", "345", "6"]);
+        let mut expected = EditBuffer::with_text(&["1\n", "2", "345", "6"]);
         expected.set_current_line(3);
         buffer.do_join(Some(Address::span(3, 5)));
         assert_eq!(buffer, expected);
@@ -937,10 +961,11 @@ mod tests {
 
     #[test]
     fn do_move_one_line() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let orig = buffer.clone();
         let mut expected =
-            EditBuffer::from(vec!["1\n", "2", "3", "5", "4", "6"]);
+            EditBuffer::with_text(&["1\n", "2", "3", "5", "4", "6"]);
         expected.current_line = 4;
         let changes = buffer.do_move(Some(Address::line(5)), Address::line(3));
         buffer.push_undo(changes);
@@ -958,10 +983,11 @@ mod tests {
 
     #[test]
     fn do_move_span() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let orig = buffer.clone();
         let mut expected =
-            EditBuffer::from(vec!["1\n", "2", "3", "5", "6", "4"]);
+            EditBuffer::with_text(&["1\n", "2", "3", "5", "6", "4"]);
         expected.current_line = 5;
         let changes =
             buffer.do_move(Some(Address::span(5, 6)), Address::line(3));
@@ -980,11 +1006,12 @@ mod tests {
 
     #[test]
     fn do_move_no_addr() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(1);
         let orig = buffer.clone();
         let mut expected =
-            EditBuffer::from(vec!["2\n", "3", "1", "4", "5", "6"]);
+            EditBuffer::with_text(&["2\n", "3", "1", "4", "5", "6"]);
         expected.set_current_line(3);
         let changes = buffer.do_move(None, Address::line(3));
         buffer.push_undo(changes);
@@ -1002,10 +1029,11 @@ mod tests {
 
     #[test]
     fn do_move_to_line_0() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let orig = buffer.clone();
         let mut expected =
-            EditBuffer::from(vec!["4\n", "5", "1", "2", "3", "6"]);
+            EditBuffer::with_text(&["4\n", "5", "1", "2", "3", "6"]);
         expected.set_current_line(2);
         let changes =
             buffer.do_move(Some(Address::span(4, 5)), Address::line(0));
@@ -1024,10 +1052,11 @@ mod tests {
 
     #[test]
     fn do_move_destination_is_span() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let orig = buffer.clone();
         let mut expected =
-            EditBuffer::from(vec!["1\n", "2", "4", "5", "3", "6"]);
+            EditBuffer::with_text(&["1\n", "2", "4", "5", "3", "6"]);
         expected.set_current_line(4);
         let changes =
             buffer.do_move(Some(Address::span(4, 5)), Address::span(1, 2));
@@ -1074,31 +1103,33 @@ mod tests {
             .do_append(Some(Address::line(0)), lines)
             .expect("Some(ChangeSet)");
         buffer.push_undo(changes);
-        assert_eq!(buffer[..], EditBuffer::from(vec!["1\n", "2", "3"])[..]);
+        assert_eq!(buffer[..], EditBuffer::with_text(&["1\n", "2", "3"])[..]);
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], EditBuffer::new()[..]);
     }
 
     #[test]
     fn do_undo_delete_span() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected = buffer.clone();
         let changes = buffer.do_delete(Some(Address::span(1, 4)));
         buffer.push_undo(changes);
-        assert_eq!(buffer[..], EditBuffer::from(vec!["5\n", "6"])[..]);
+        assert_eq!(buffer[..], EditBuffer::with_text(&["5\n", "6"])[..]);
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected[..]);
     }
 
     #[test]
     fn do_undo_delete_line() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected = buffer.clone();
         let changes = buffer.do_delete(Some(Address::line(3)));
         buffer.push_undo(changes);
         assert_eq!(
             buffer[..],
-            EditBuffer::from(vec!["1\n", "2", "4", "5", "6"])[..]
+            EditBuffer::with_text(&["1\n", "2", "4", "5", "6"])[..]
         );
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected[..]);
@@ -1106,14 +1137,15 @@ mod tests {
 
     #[test]
     fn do_undo_delete_current_line() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(4);
         let expected = buffer.clone();
         let changes = buffer.do_delete(None);
         buffer.push_undo(changes);
         assert_eq!(
             buffer[..],
-            EditBuffer::from(vec!["1\n", "2", "3", "5", "6"])[..]
+            EditBuffer::with_text(&["1\n", "2", "3", "5", "6"])[..]
         );
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected[..]);
@@ -1121,10 +1153,11 @@ mod tests {
 
     #[test]
     fn do_undo_redo_insert() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected_final =
-            EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        let expected_modified = EditBuffer::from(vec![
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
+        let expected_modified = EditBuffer::with_text(&[
             "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
         ]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
@@ -1141,10 +1174,11 @@ mod tests {
 
     #[test]
     fn do_undo_transfer_line() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected_final = buffer.clone();
         let mut expected_tr =
-            EditBuffer::from(vec!["1\n", "2", "6", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\n", "2", "6", "3", "4", "5", "6"]);
         expected_tr.current_line = 3;
         let changes =
             buffer.do_transfer(Some(Address::line(6)), Address::line(2));
@@ -1158,10 +1192,11 @@ mod tests {
 
     #[test]
     fn do_undo_transfer_span() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let expected_final = buffer.clone();
         let mut expected_tr =
-            EditBuffer::from(vec!["1\n", "2", "5", "6", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\n", "2", "5", "6", "3", "4", "5", "6"]);
         expected_tr.current_line = 4;
         let changes =
             buffer.do_transfer(Some(Address::span(5, 6)), Address::line(2));
@@ -1175,11 +1210,12 @@ mod tests {
 
     #[test]
     fn do_undo_transfer_default() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.current_line = 6;
         let expected_final = buffer.clone();
         let mut expected_tr =
-            EditBuffer::from(vec!["1\n", "2", "6", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\n", "2", "6", "3", "4", "5", "6"]);
         expected_tr.current_line = 3;
         let changes = buffer.do_transfer(None, Address::line(2));
         buffer.push_undo(changes);
@@ -1192,7 +1228,8 @@ mod tests {
 
     #[test]
     fn do_undo_multi() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
         let expected_final = buffer.clone();
         assert_eq!(buffer.current_line(), 6);
@@ -1201,7 +1238,7 @@ mod tests {
             .do_append(Some(Address::line(2)), lines)
             .expect("Some(ChangeSet)");
         buffer.push_undo(changes);
-        let expected_1 = EditBuffer::from(vec![
+        let expected_1 = EditBuffer::with_text(&[
             "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
         ]);
         assert_eq!(buffer[..], expected_1[..]);
@@ -1209,7 +1246,7 @@ mod tests {
 
         let changes = buffer.do_delete(Some(Address::span(4, 7)));
         buffer.push_undo(changes);
-        let expected_2 = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
+        let expected_2 = EditBuffer::with_text(&["1\n", "2", "a", "5", "6"]);
         assert_eq!(buffer[..], expected_2[..]);
 
         buffer.do_undo().unwrap();
@@ -1221,7 +1258,8 @@ mod tests {
 
     #[test]
     fn do_undo_redo_multi() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
         let expected_final = buffer.clone();
         assert_eq!(6, buffer.current_line());
@@ -1230,7 +1268,7 @@ mod tests {
             .do_append(Some(Address::line(2)), lines)
             .expect("Some(ChangeSet)");
         buffer.push_undo(changes);
-        let expected_1 = EditBuffer::from(vec![
+        let expected_1 = EditBuffer::with_text(&[
             "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
         ]);
         assert_eq!(&expected_1[..], &buffer[..]);
@@ -1238,7 +1276,7 @@ mod tests {
 
         let changes = buffer.do_delete(Some(Address::span(4, 7)));
         buffer.push_undo(changes);
-        let expected_2 = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
+        let expected_2 = EditBuffer::with_text(&["1\n", "2", "a", "5", "6"]);
         assert_eq!(buffer[..], expected_2[..]);
 
         buffer.do_undo().unwrap();
@@ -1249,7 +1287,7 @@ mod tests {
             .do_append(Some(Address::line(5)), lines)
             .expect("Some(ChangeSet)");
         buffer.push_undo(changes);
-        let expected_3 = EditBuffer::from(vec![
+        let expected_3 = EditBuffer::with_text(&[
             "1\n", "2", "a", "b", "c", "spam!", "3", "4", "5", "6",
         ]);
         assert_eq!(buffer[..], expected_3[..]);
@@ -1274,7 +1312,8 @@ mod tests {
 
     #[test]
     fn buffer_clean_after_undo_all() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
 
         let changes = buffer
@@ -1306,7 +1345,8 @@ mod tests {
 
     #[test]
     fn do_redo_multi() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let buffer_orig = buffer.clone();
         assert_eq!(buffer.current_line(), 6);
 
@@ -1315,7 +1355,7 @@ mod tests {
             .do_append(Some(Address::line(2)), lines)
             .expect("Some(ChangeSet)");
         buffer.push_undo(changes);
-        let expected_1 = EditBuffer::from(vec![
+        let expected_1 = EditBuffer::with_text(&[
             "1\n", "2", "a", "b", "c", "3", "4", "5", "6",
         ]);
         assert_eq!(&expected_1[..], &buffer[..]);
@@ -1323,7 +1363,8 @@ mod tests {
 
         let changes = buffer.do_delete(Some(Address::span(4, 7)));
         buffer.push_undo(changes);
-        let expected_final = EditBuffer::from(vec!["1\n", "2", "a", "5", "6"]);
+        let expected_final =
+            EditBuffer::with_text(&["1\n", "2", "a", "5", "6"]);
         assert_eq!(buffer[..], expected_final[..]);
 
         buffer.do_undo().unwrap();
@@ -1349,7 +1390,7 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let orig = EditBuffer::new();
 
-        let expected1 = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let expected1 = EditBuffer::with_text(&["1\n", "2", "3"]);
         let changes =
             buffer.do_change(Some(Address::line(0)), expected1[..].to_vec());
         buffer.push_undo(changes);
@@ -1357,7 +1398,7 @@ mod tests {
         assert_eq!(buffer.current_line(), 3);
 
         let expected2 =
-            EditBuffer::from(vec!["1\n", "2", "4", "5", "6", "7", "8"]);
+            EditBuffer::with_text(&["1\n", "2", "4", "5", "6", "7", "8"]);
         let changes = buffer.do_change(None, expected2[3..].to_vec());
         buffer.push_undo(changes);
         assert_eq!(buffer[..], expected2[..]);
@@ -1375,7 +1416,8 @@ mod tests {
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
-        let expected3 = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let expected3 =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let changes = buffer
             .do_change(Some(Address::span(2, 3)), expected3[2..].to_vec());
         buffer.push_undo(changes);
@@ -1409,7 +1451,7 @@ mod tests {
 
     #[test]
     fn do_undo_redo_change_line_0() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let orig = buffer.clone();
         let lines = vec!["changed\n".to_owned()];
         assert_eq!(buffer.current_line(), 3);
@@ -1426,7 +1468,8 @@ mod tests {
 
     #[test]
     fn do_undo_redo_change_span_no_input() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let lines = Vec::new();
         assert_eq!(buffer.current_line(), 6);
         let orig = buffer.clone();
