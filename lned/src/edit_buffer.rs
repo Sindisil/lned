@@ -36,23 +36,11 @@ impl Default for EditBuffer {
     }
 }
 
-impl From<Vec<&str>> for EditBuffer {
-    fn from(value: Vec<&str>) -> Self {
-        let mut buf = EditBuffer::with_capacity(value.len());
-        let default_eol = compute_default_eol(value.iter());
-        buf.default_eol = Some(default_eol);
-        let mut value = value
-            .iter()
-            .map(|v| {
-                let mut line = (*v).to_string();
-                if !(line.ends_with("\r\n") || line.ends_with('\n')) {
-                    line.push_str(default_eol.as_ref());
-                }
-                line
-            })
-            .collect::<Vec<String>>();
-        buf.text.append(&mut value);
-        buf.current_line = buf.text.len();
+impl<'a, T: AsRef<[&'a str]>> From<T> for EditBuffer {
+    fn from(value: T) -> Self {
+        let mut buf = EditBuffer::with_capacity(value.as_ref().len());
+        buf.append(0, value.as_ref().iter().map(ToString::to_string).collect());
+        buf.set_current_line(buf.len());
         buf
     }
 }
@@ -267,13 +255,13 @@ impl EditBuffer {
             self.default_eol.get_or_insert_with(|| compute_default_eol(&lines));
 
         // Add missing EOL if necessary
-        let eol_added = match lines.last_mut() {
-            Some(last) if !(last.ends_with("\r\n") || last.ends_with('\n')) => {
-                last.push_str(default_eol);
-                true
+        let mut eol_added = false;
+        for l in &mut lines {
+            if !(l.ends_with("\r\n") || l.ends_with('\n')) {
+                l.push_str(default_eol);
+                eol_added = true;
             }
-            _ => false,
-        };
+        }
 
         self.text.splice(location..location, lines);
         eol_added

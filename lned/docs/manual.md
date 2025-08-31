@@ -447,6 +447,30 @@ undo stack.
 
 For more details about the undo/redo system, see the 'u' (undo) command.
 
+### Scroll ('z')
+
+#### Syntax
+
+(.)z[count]
+
+#### Behavior
+
+Prints 'count' display lines from buffer, setting the scroll window size
+to 'count'. Printing will begin with the addressed line, or current_line
+if no address is given.
+
+If 'count' is not given, the current scroll window size is used.
+The scroll window size defaults to display height - 2, or 22 if
+the display height can't be determined.
+
+Note that the scroll window size is a number of display lines, not buffer
+lines.
+
+The current_line is set to one past the last line displayed, or buffer
+end, whichever is smaller.
+
+If any print suffixes are specified, all lines will be displayed
+accordingly.
 
 ### Substitute ('s')
 

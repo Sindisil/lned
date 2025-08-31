@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cmp;
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
@@ -7,12 +8,13 @@ use std::ops::RangeInclusive;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crossterm::terminal;
 use regex::Regex;
 use similar::TextDiff;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli;
-use crate::command::{self, Address, Cmd, PrintSuffix, SubstitutionScope};
+use crate::command::{self, Address, Cmd, PrintAttributes, SubstitutionScope};
 use crate::edit_buffer::{Change, ChangeSet, Diff, EditBuffer};
 
 use line_reader::LineRead;
@@ -226,6 +228,19 @@ impl fmt::Display for LnedError {
     }
 }
 
+#[derive(Debug, Default)]
+struct EditorState {
+    previous_cmd: Option<Cmd>,
+    previous_pattern: Option<regex::Regex>,
+    scroll_row_limit: Option<usize>,
+}
+
+impl EditorState {
+    fn new() -> EditorState {
+        EditorState { ..Default::default() }
+    }
+}
+
 /// Main event loop.
 ///
 /// Handles prompting, command input, command dispatch, and error display.
@@ -236,15 +251,14 @@ pub fn run(
 ) -> Result<(), LnedError> {
     let mut buffer = EditBuffer::new();
 
-    let mut previous_cmd: Option<Cmd> = None;
-    let mut previous_pattern: Option<regex::Regex> = None;
+    let mut state = EditorState::new();
 
     if let Some(file) = &args.file
         && let Err(e) = edit_cmd(
             &mut buffer,
             &mut output,
             Some(file),
-            previous_cmd.as_ref(),
+            state.previous_cmd.as_ref(),
         )
     {
         writeln!(output, "{e}").unwrap();
@@ -253,7 +267,7 @@ pub fn run(
     // Accept and process commands until fatal error or exit
     let mut done = false;
     while !done {
-        Cmd::read(&mut input, &mut buffer, &mut previous_pattern)
+        Cmd::read(&mut input, &mut buffer, &mut state.previous_pattern)
             .map_err(LnedError::ParseCmd)
             .and_then(|res| match res {
                 Some((cmd, sfx)) => {
@@ -262,41 +276,32 @@ pub fn run(
                         &mut buffer,
                         &mut output,
                         &mut input,
-                        &mut previous_cmd,
-                        &mut previous_pattern,
+                        &mut state,
                     );
-                    previous_cmd = Some(cmd);
+                    state.previous_cmd = Some(cmd);
                     res.and_then(|exit| {
                         done = exit;
-                        let cur_line_addr =
-                            Some(Address::line(buffer.current_line()));
-                        match sfx {
-                            Some(PrintSuffix::Print) => print_cmd(
-                                &mut buffer,
+                        if let Some(attrs) = sfx {
+                            let cur_line_addr =
+                                Address::line(buffer.current_line());
+                            print_lines(
                                 &mut output,
+                                &buffer,
                                 cur_line_addr,
-                            ),
-                            Some(PrintSuffix::Enumerate) => enumerate_cmd(
-                                &mut buffer,
-                                &mut output,
-                                cur_line_addr,
-                            ),
-                            Some(PrintSuffix::List) => list_cmd(
-                                &mut buffer,
-                                &mut output,
-                                cur_line_addr,
-                            ),
-                            None => Ok(None),
+                                attrs,
+                                None,
+                            )?;
                         }
+                        Ok(())
                     })
                 }
-                _ => Ok(None),
+                _ => Ok(()),
             })
             .or_else(|e| {
                 writeln!(output, "{e}").unwrap();
                 write_backtrace(&mut output, &e);
                 output.flush().unwrap();
-                Ok(None)
+                Ok(())
             })?;
     }
     Ok(())
@@ -320,8 +325,7 @@ fn dispatch_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     input: &mut impl LineRead,
-    previous_cmd: &mut Option<Cmd>,
-    previous_pattern: &mut Option<regex::Regex>,
+    state: &mut EditorState,
 ) -> Result<bool, LnedError> {
     let mut done = false;
     let res = match cmd {
@@ -329,9 +333,12 @@ fn dispatch_cmd(
         Cmd::Append(address) => append_cmd(buffer, input, *address),
         Cmd::Delete(address) => delete_cmd(buffer, *address),
         Cmd::Change(address) => change_cmd(buffer, input, *address),
-        Cmd::Edit(filename) => {
-            edit_cmd(buffer, output, filename.as_deref(), previous_cmd.as_ref())
-        }
+        Cmd::Edit(filename) => edit_cmd(
+            buffer,
+            output,
+            filename.as_deref(),
+            state.previous_cmd.as_ref(),
+        ),
         Cmd::Enumerate(address) => enumerate_cmd(buffer, output, *address),
         Cmd::File(filename) => {
             file_cmd(buffer, output, filename.as_deref());
@@ -343,7 +350,7 @@ fn dispatch_cmd(
             *address,
             pattern,
             commands,
-            previous_pattern,
+            &mut state.previous_pattern,
         ),
         Cmd::Insert(address) => insert_cmd(buffer, input, *address),
         Cmd::Join(address) => join_cmd(buffer, *address),
@@ -356,13 +363,29 @@ fn dispatch_cmd(
         }
         Cmd::Null(address) => null_cmd(buffer, output, *address),
         Cmd::Print(address) => print_cmd(buffer, output, *address),
-        Cmd::Quit => {
-            quit_cmd(buffer, previous_cmd.as_ref()).inspect(|_| done = true)
-        }
+        Cmd::Quit => quit_cmd(buffer, state.previous_cmd.as_ref())
+            .inspect(|_| done = true),
         Cmd::Read(address, filename) => {
             read_cmd(buffer, output, *address, filename.as_deref())
         }
         Cmd::Redo => buffer.do_redo().map(|()| None),
+        Cmd::Scroll(address, cmd_rows, attrs) => {
+            let (cols, term_rows): (usize, usize) = terminal::size()
+                .map_or((80, 24), |(cols, rows)| (cols.into(), rows.into()));
+            let rows = *match cmd_rows {
+                Some(rows) => state.scroll_row_limit.insert(*rows),
+                None => state
+                    .scroll_row_limit
+                    .get_or_insert_with(|| term_rows.saturating_sub(2)),
+            };
+            scroll_cmd(
+                buffer,
+                output,
+                *address,
+                *attrs,
+                ScrollWindow { cols, rows },
+            )
+        }
         Cmd::ShowDiff(filename) => {
             show_diff_cmd(buffer, output, filename.as_deref())
         }
@@ -373,7 +396,10 @@ fn dispatch_cmd(
             transfer_cmd(buffer, *address, *destination)
         }
         Cmd::Undo => buffer.do_undo().map(|()| None),
-        Cmd::Version => version_cmd(output),
+        Cmd::Version => {
+            version_cmd(output);
+            Ok(None)
+        }
         Cmd::Write(address, filename) => {
             write_cmd(buffer, output, *address, filename.as_deref())
         }
@@ -423,8 +449,8 @@ fn change_cmd(
         return Err(LnedError::InvalidAddress);
     }
     let to_change = address.map_or_else(
-        || Address::line(buffer.current_line().max(1)),
-        |a| Address::span(a.start().max(1), a.end().max(1)),
+        || Address::line(cmp::max(buffer.current_line(), 1)),
+        |a| Address::span(cmp::max(a.start(), 1), cmp::max(a.end(), 1)),
     );
     let indent = buffer[RangeInclusive::from(to_change)]
         .iter()
@@ -453,6 +479,26 @@ fn delete_cmd(
         None if buffer.current_line() == 0 => Err(LnedError::InvalidAddress),
         _ => Ok(Some(buffer.do_delete(address))),
     }
+}
+
+fn scroll_cmd(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    address: Option<Address>,
+    attrs: Option<PrintAttributes>,
+    window: ScrollWindow,
+) -> Result<Option<ChangeSet>, LnedError> {
+    // create addressed span to print from specified address
+    // and max_rows
+    let start = address.map_or_else(|| buffer.current_line(), |a| a.end());
+    let end = cmp::min(buffer.len(), start + window.rows);
+    let address = Address::span(start, end);
+
+    let attrs = attrs.unwrap_or_default();
+    let last_printed =
+        print_lines(output, buffer, address, attrs, Some(&window))?;
+    buffer.set_current_line(cmp::min(last_printed + 1, buffer.len()));
+    Ok(None)
 }
 
 fn show_diff_cmd(
@@ -525,37 +571,28 @@ fn edit_cmd(
     Ok(None)
 }
 
+#[derive(Debug, Copy, Clone)]
+struct ScrollWindow {
+    cols: usize,
+    rows: usize,
+}
+
 fn enumerate_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     address: Option<Address>,
 ) -> Result<Option<ChangeSet>, LnedError> {
-    let span = if let Some(addr) = address {
-        addr.into()
-    } else {
-        if buffer.current_line() == 0 {
-            return Err(LnedError::InvalidAddress);
-        }
-        buffer.current_line()..=buffer.current_line()
-    };
-
-    if *span.start() < 1
-        || *span.start() > buffer.len()
-        || *span.end() < 1
-        || *span.end() > buffer.len()
-    {
-        return Err(LnedError::InvalidAddress);
-    }
-
-    let width = 1 + buffer.len().checked_ilog10().unwrap_or_default() as usize;
-    let start = *span.start();
-    buffer.set_current_line(*span.end());
-
-    for (i, l) in buffer[span].iter().enumerate() {
-        write!(output, "{:>width$}  ", start + i).unwrap();
-        print_line(output, l);
-    }
-    output.flush().unwrap();
+    let address = address
+        .or_else(|| {
+            if buffer.current_line() == 0 {
+                return None;
+            }
+            Some(Address::line(buffer.current_line()))
+        })
+        .ok_or(LnedError::InvalidAddress)?;
+    let attrs = PrintAttributes { enumerate: true, ..Default::default() };
+    let last_printed = print_lines(output, buffer, address, attrs, None)?;
+    buffer.set_current_line(last_printed);
     Ok(None)
 }
 
@@ -670,19 +707,14 @@ fn do_global_cmds(
                     let cl_after = change.current_line_after;
                     changes.push(change, cl_after);
                 }
-            }
-            if let Some(sfx) = sfx {
-                let cur_line_addr = Some(Address::line(buffer.current_line()));
-                match sfx {
-                    PrintSuffix::Print => {
-                        print_cmd(buffer, output, cur_line_addr)?;
-                    }
-                    PrintSuffix::Enumerate => {
-                        enumerate_cmd(buffer, output, cur_line_addr)?;
-                    }
-                    PrintSuffix::List => {
-                        list_cmd(buffer, output, cur_line_addr)?;
-                    }
+                if let Some(attrs) = sfx {
+                    print_lines(
+                        output,
+                        buffer,
+                        Address::line(buffer.current_line()),
+                        attrs,
+                        None,
+                    )?;
                 }
             }
         }
@@ -723,8 +755,8 @@ fn insert_cmd(
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(LnedError::InvalidAddress);
     }
-    let indent = buffer
-        [address.map_or_else(|| buffer.current_line().max(1), |a| a.end())..]
+    let indent = buffer[address
+        .map_or_else(|| cmp::max(buffer.current_line(), 1), |a| a.end())..]
         .iter()
         .find(|l| l.contains(|c: char| !c.is_whitespace()))
         .and_then(|l| command::INDENT.captures(l))
@@ -773,38 +805,18 @@ fn list_cmd(
     output: &mut impl Write,
     address: Option<Address>,
 ) -> Result<Option<ChangeSet>, LnedError> {
-    let span = if let Some(addr) = address {
-        addr.into()
-    } else {
-        if buffer.current_line() == 0 {
-            return Err(LnedError::InvalidAddress);
-        }
-        buffer.current_line()..=buffer.current_line()
-    };
-
-    if *span.start() < 1
-        || *span.start() > buffer.len()
-        || *span.end() < 1
-        || *span.end() > buffer.len()
-    {
-        return Err(LnedError::InvalidAddress);
-    }
-
-    buffer.set_current_line(*span.end());
-    for l in &buffer[span] {
-        let expanded: String = l
-            .graphemes(true)
-            .map(|gr| match gr {
-                "\t" => "\\t",
-                "$" => "\\$",
-                "\n" => "$\n",
-                "\r\n" => "$\r\n",
-                gr => gr,
-            })
-            .collect();
-        print_line(output, &expanded);
-    }
-    output.flush().unwrap();
+    let address = address
+        .or_else(|| {
+            if buffer.current_line() == 0 {
+                None
+            } else {
+                Some(Address::line(buffer.current_line()))
+            }
+        })
+        .ok_or(LnedError::InvalidAddress)?;
+    let attrs = PrintAttributes { expand_escapes: true, ..Default::default() };
+    let last_printed = print_lines(output, buffer, address, attrs, None)?;
+    buffer.set_current_line(last_printed);
     Ok(None)
 }
 
@@ -840,46 +852,90 @@ fn print_cmd(
     output: &mut impl Write,
     address: Option<Address>,
 ) -> Result<Option<ChangeSet>, LnedError> {
-    let span = if let Some(addr) = address {
-        addr.into()
-    } else {
-        if buffer.current_line() == 0 {
-            return Err(LnedError::InvalidAddress);
-        }
-        buffer.current_line()..=buffer.current_line()
-    };
+    let address = address
+        .or_else(|| {
+            if buffer.current_line() == 0 {
+                None
+            } else {
+                Some(Address::line(buffer.current_line()))
+            }
+        })
+        .ok_or(LnedError::InvalidAddress)?;
+    let attrs = PrintAttributes { ..Default::default() };
+    let last_printed = print_lines(output, buffer, address, attrs, None)?;
+    buffer.set_current_line(last_printed);
+    Ok(None)
+}
 
-    if *span.start() < 1
-        || *span.start() > buffer.len()
-        || *span.end() < 1
-        || *span.end() > buffer.len()
+/// Prints the addressed lines to ouput, applying the
+/// specified print attributes. If a window is specified,
+/// printing is stopped after the window has been filled.
+/// Since a single line may exceed the window size, output
+/// will overrun the window if the final printed line is
+/// longer than the specified window width.
+///
+/// Returns the last line number printed.
+fn print_lines(
+    output: &mut impl Write,
+    buffer: &EditBuffer,
+    address: Address,
+    attributes: PrintAttributes,
+    window: Option<&ScrollWindow>,
+) -> Result<usize, LnedError> {
+    if address.start() < 1
+        || address.start() > buffer.len()
+        || address.start() > address.end()
     {
         return Err(LnedError::InvalidAddress);
     }
 
-    buffer.set_current_line(*span.end());
-    for l in &buffer[span] {
-        print_line(output, l);
+    let ln_num_cols =
+        usize::try_from(1 + buffer.len().checked_ilog10().unwrap_or_default())
+            .unwrap();
+    let mut rows = 0;
+
+    for (n, l) in
+        (address.into_iter()).zip(&buffer[RangeInclusive::from(address)])
+    {
+        let mut cols = 0;
+        if attributes.enumerate {
+            write!(output, "{n:>ln_num_cols$}  ").expect("reliable stdout");
+            cols += ln_num_cols + 2;
+        }
+        let graphs = l.graphemes(true).map(|gr| {
+            if attributes.expand_escapes { expand_escapes(gr) } else { gr }
+        });
+        for gr in graphs {
+            cols += if gr == "\t" {
+                let gr_width = 8 - (cols % 8);
+                write!(output, "{}", &"        "[..gr_width])
+                    .expect("reliable stdout");
+                gr_width
+            } else {
+                use unicode_width::UnicodeWidthStr;
+                write!(output, "{gr}").expect("reliable stdout");
+                gr.width()
+            };
+        }
+
+        if let Some(window) = window {
+            let rows_printed = cols.div_ceil(window.cols);
+            if window.rows - rows <= rows_printed {
+                return Ok(n);
+            }
+            rows += rows_printed;
+        }
     }
-    output.flush().unwrap();
-    Ok(None)
+    Ok(address.end())
 }
 
-fn print_line(output: &mut impl Write, line: &str) {
-    let mut cols = 0;
-    for c in line.chars() {
-        let c_width = if c == '\t' {
-            8 - (cols % 8)
-        } else {
-            use unicode_width::UnicodeWidthChar;
-            c.width().unwrap_or(0)
-        };
-        if c == '\t' {
-            write!(output, "{}", &"        "[..c_width]).unwrap();
-        } else {
-            write!(output, "{c}").unwrap();
-        }
-        cols += c_width;
+fn expand_escapes(s: &str) -> &str {
+    match s {
+        "\t" => "\\t",
+        "$" => "\\$",
+        "\n" => "$\n",
+        "\r\n" => "$\r\n",
+        s => s,
     }
 }
 
@@ -1181,12 +1237,9 @@ impl FileWrite for EditedFile {
     }
 }
 
-fn version_cmd(
-    output: &mut impl Write,
-) -> Result<Option<ChangeSet>, LnedError> {
+fn version_cmd(output: &mut impl Write) {
     writeln!(output, "{} version {}", cli::APP_NAME, cli::APP_VERSION)
         .expect("reliable stdout");
-    Ok(None)
 }
 fn write_cmd(
     buffer: &mut EditBuffer,
@@ -3625,6 +3678,17 @@ mod tests {
     }
 
     #[test]
+    fn scroll_cmd_dispatch() {
+        let input = b"a\n1\n2\n3\n.\n1\nz2\nq\nq\n";
+        let mut output = Vec::new();
+        let args = CmdArgs { file: None };
+        run(&input[..], &mut output, &args).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("1\n2\n"));
+        assert!(!output.contains("3\n"));
+    }
+
+    #[test]
     fn show_diff_cmd_dispatch() {
         let input = b"S\nq\n";
         let mut output = Vec::new();
@@ -3632,6 +3696,105 @@ mod tests {
         run(&input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("no filename"));
+    }
+
+    #[test]
+    fn scroll_cmd_at_end() {
+        let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
+        let lines: Vec<_> = lines.iter().map(AsRef::as_ref).collect();
+        let mut buffer = EditBuffer::from(&lines);
+        let mut output = Vec::new();
+        let res = scroll_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::line(60)),
+            None,
+            ScrollWindow { cols: 80, rows: 24 },
+        )
+        .expect("scroll to end");
+        assert!(res.is_none());
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("60\r\n61\r\n62\r\n63\r\n64\r\n"));
+        assert_eq!(buffer.current_line(), 64);
+    }
+
+    #[test]
+    fn scroll_cmd_saves_windows() {
+        let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
+        let lines: Vec<_> = lines.iter().map(AsRef::as_ref).collect();
+        let mut buffer = EditBuffer::from(&lines);
+        let mut output = Vec::new();
+        let mut state = EditorState { ..Default::default() };
+        let mut input = b"" as &[u8];
+        dispatch_cmd(
+            &Cmd::Scroll(Some(Address::line(10)), Some(3), None),
+            &mut buffer,
+            &mut output,
+            &mut input,
+            &mut state,
+        )
+        .expect("scroll 10..12");
+        assert_eq!(buffer.current_line(), 13);
+        assert_eq!(state.scroll_row_limit, Some(3));
+        dispatch_cmd(
+            &Cmd::Scroll(None, None, None),
+            &mut buffer,
+            &mut output,
+            &mut input,
+            &mut state,
+        )
+        .expect("scroll 13..15");
+        assert_eq!(buffer.current_line(), 16);
+        assert_eq!(state.scroll_row_limit, Some(3));
+    }
+
+    #[test]
+    fn scroll_cmd_with_print_sfx() {
+        let lines: Vec<String> = (1..=64).map(|n| format!("{n}\n")).collect();
+        let lines: Vec<_> = lines.iter().map(AsRef::as_ref).collect();
+        let mut buffer = EditBuffer::from(&lines);
+        let mut output = Vec::new();
+        let mut state = EditorState { ..Default::default() };
+        let mut input = b"" as &[u8];
+        dispatch_cmd(
+            &Cmd::Scroll(
+                Some(Address::line(10)),
+                Some(3),
+                Some(PrintAttributes { enumerate: true, ..Default::default() }),
+            ),
+            &mut buffer,
+            &mut output,
+            &mut input,
+            &mut state,
+        )
+        .expect("scroll 10..12");
+        assert_eq!(buffer.current_line(), 13);
+        assert!(
+            str::from_utf8(&output[..])
+                .unwrap()
+                .contains("10  10\n11  11\n12  12\n")
+        );
+        assert!(!str::from_utf8(&output[..]).unwrap().contains("13"));
+        dispatch_cmd(
+            &Cmd::Scroll(
+                None,
+                None,
+                Some(PrintAttributes {
+                    expand_escapes: true,
+                    ..Default::default()
+                }),
+            ),
+            &mut buffer,
+            &mut output,
+            &mut input,
+            &mut state,
+        )
+        .expect("scroll 13..15");
+        assert_eq!(buffer.current_line(), 16);
+        assert!(
+            str::from_utf8(&output[..]).unwrap().contains("13$\n14$\n15$\n")
+        );
+        assert!(!str::from_utf8(&output[..]).unwrap().contains("16"));
     }
 
     #[test]
