@@ -472,6 +472,22 @@ end, whichever is smaller.
 If any print suffixes are specified, all lines will be displayed
 accordingly.
 
+### Show diff ('S')
+
+#### Syntax
+
+S [filename]
+
+#### Behavior
+
+Shows the differences between the current buffer contents and
+the specified filename's contents.
+
+If no filename is specified, the current remembered filename is
+used if it is set, otherwise an error is given.
+
+The current remembered filename is not changed by this command.
+
 ### Substitute ('s')
 
 #### Syntax
