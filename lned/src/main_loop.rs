@@ -1385,7 +1385,7 @@ mod tests {
     #[test]
     fn null_cmd_single_line() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         buffer.set_current_line(2);
         null_cmd(&mut buffer, &mut output, Some(Address::line(1))).unwrap();
         assert_eq!(buffer.current_line(), 1);
@@ -1395,7 +1395,7 @@ mod tests {
     #[test]
     fn null_cmd_no_addr() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         null_cmd(&mut buffer, &mut output, None).unwrap();
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "3\r\n");
@@ -1405,7 +1405,7 @@ mod tests {
     #[test]
     fn null_cmd_no_addr_last_line_gives_error() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(3);
         let res = null_cmd(&mut buffer, &mut output, None)
             .expect_err("invalid address");
@@ -1417,7 +1417,7 @@ mod tests {
     fn null_cmd_span() {
         let mut output = Vec::new();
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         null_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
@@ -1453,7 +1453,7 @@ mod tests {
     #[test]
     fn enumerate_sm_buffer() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10",
         ]);
         buffer.set_current_line(2);
@@ -1464,7 +1464,7 @@ mod tests {
     #[test]
     fn enumerate_sets_current_line() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10",
         ]);
         buffer.set_current_line(2);
@@ -1476,7 +1476,7 @@ mod tests {
     #[test]
     fn enumerate_lg_buffer() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "1\r\n", "2", "3", "4", "5", "6", "7", "8", "9", "10",
         ]);
         let mut input: Vec<u8> = Vec::new();
@@ -1505,7 +1505,7 @@ mod tests {
 
     #[test]
     fn print_filename_none_set() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         let mut output = Vec::new();
         file_cmd(&mut buffer, &mut output, None);
         assert_eq!(
@@ -1518,7 +1518,7 @@ mod tests {
     #[test]
     fn set_filename() {
         let new_filename = "a_new_filename.txt\n";
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
         assert_eq!(None, buffer.filename());
         file_cmd(
@@ -1533,7 +1533,7 @@ mod tests {
     #[test]
     fn print_filename() {
         let new_filename = "a_new_filename.txt\n";
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
         assert_eq!(None, buffer.filename());
         file_cmd(
@@ -1551,7 +1551,7 @@ mod tests {
     fn change_filename() {
         let orig_filename = "a_filename.md";
         let new_filename = "a_new_filename.txt\n";
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
         file_cmd(&mut buffer, &mut output, Some(Path::new(orig_filename)));
         output.clear();
@@ -1566,7 +1566,7 @@ mod tests {
 
     #[test]
     fn global_cmd_no_matches() {
-        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        let mut buffer = EditBuffer::with_text(&["one\n", "two", "three"]);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("four").unwrap();
@@ -1589,7 +1589,7 @@ mod tests {
 
     #[test]
     fn global_cmd_illegal_nested_gobal() {
-        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three"]);
+        let mut buffer = EditBuffer::with_text(&["one\r\n", "two", "three"]);
         buffer.set_current_line(1);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -1609,7 +1609,7 @@ mod tests {
     #[test]
     fn global_cmd_blank_command_print() {
         let mut buffer =
-            EditBuffer::from(vec!["one\r\n", "two", "three", "tweedle dee"]);
+            EditBuffer::with_text(&["one\r\n", "two", "three", "tweedle dee"]);
         buffer.set_current_line(3);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -1631,7 +1631,7 @@ mod tests {
 
     #[test]
     fn global_cmd_print() {
-        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        let mut buffer = EditBuffer::with_text(&["one\n", "two", "three"]);
         buffer.set_current_line(1);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -1653,7 +1653,7 @@ mod tests {
 
     #[test]
     fn global_cmd_enumerate() {
-        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        let mut buffer = EditBuffer::with_text(&["one\n", "two", "three"]);
         buffer.set_current_line(1);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -1675,7 +1675,7 @@ mod tests {
 
     #[test]
     fn global_cmd_enumerate_with_addresses() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(6);
@@ -1702,7 +1702,7 @@ mod tests {
 
     #[test]
     fn global_cmd_list() {
-        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        let mut buffer = EditBuffer::with_text(&["one\n", "two", "three"]);
         buffer.set_current_line(1);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -1724,7 +1724,7 @@ mod tests {
 
     #[test]
     fn global_cmd_list_with_addresses() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(6);
@@ -1751,11 +1751,11 @@ mod tests {
 
     #[test]
     fn global_cmd_append() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\n", "two", "three", "four", "five", "six",
         ]);
         let orig = buffer.clone();
-        let expected = EditBuffer::from(vec![
+        let expected = EditBuffer::with_text(&[
             "one\n", "append", "two", "three", "append", "four", "five",
             "append", "six",
         ]);
@@ -1791,12 +1791,12 @@ mod tests {
 
     #[test]
     fn global_cmd_change() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\n", "one", "two", "two", "three", "three", "four", "four",
             "five", "five", "six", "six",
         ]);
         let orig = buffer.clone();
-        let expected = EditBuffer::from(vec![
+        let expected = EditBuffer::with_text(&[
             "change 1\n",
             "change 2",
             "change 3",
@@ -1844,11 +1844,11 @@ mod tests {
 
     #[test]
     fn global_cmd_delete() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\n", "two", "three", "four", "five", "six",
         ]);
         let orig = buffer.clone();
-        let expected = EditBuffer::from(vec!["two\n", "four", "six"]);
+        let expected = EditBuffer::with_text(&["two\n", "four", "six"]);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
@@ -1885,11 +1885,11 @@ mod tests {
 
     #[test]
     fn global_cmd_insert() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         let orig = buffer.clone();
-        let expected = EditBuffer::from(vec![
+        let expected = EditBuffer::with_text(&[
             "insert\r\n",
             "one",
             "two",
@@ -1932,12 +1932,12 @@ mod tests {
 
     #[test]
     fn global_cmd_join() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\n", "two", "three", "four", "five", "six",
         ]);
         let orig = buffer.clone();
         let mut expected =
-            EditBuffer::from(vec!["onetwo\n", "threefour", "fivesix"]);
+            EditBuffer::with_text(&["onetwo\n", "threefour", "fivesix"]);
         expected.set_current_line(3);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -1978,11 +1978,11 @@ mod tests {
 
     #[test]
     fn global_cmd_move() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         let orig = buffer.clone();
-        let mut expected = EditBuffer::from(vec![
+        let mut expected = EditBuffer::with_text(&[
             "three\r\n",
             "two",
             "one",
@@ -2024,11 +2024,11 @@ mod tests {
 
     #[test]
     fn global_cmd_move_with_overlap() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         let orig = buffer.clone();
-        let mut expected = EditBuffer::from(vec![
+        let mut expected = EditBuffer::with_text(&[
             "two\r\n", "three", "one", "four", "five", "six",
         ]);
         expected.set_current_line(2);
@@ -2065,7 +2065,7 @@ mod tests {
 
     #[test]
     fn global_cmd_substitute_with_error() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "1:one two three four\n",
             "2:five six seven eight",
             "3:nine ten eleven twelve",
@@ -2078,7 +2078,7 @@ mod tests {
         ]);
         buffer.set_current_line(5);
         let before = buffer.clone();
-        let mut expected = EditBuffer::from(vec![
+        let mut expected = EditBuffer::with_text(&[
             "1:one two three four\n",
             "2:five ",
             "'x seven eight",
@@ -2134,7 +2134,7 @@ mod tests {
 
     #[test]
     fn global_cmd_substitute() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "1:one two three four\n",
             "2:five six seven eight",
             "3:nine ten eleven twelve",
@@ -2147,7 +2147,7 @@ mod tests {
         ]);
         buffer.set_current_line(5);
         let before = buffer.clone();
-        let mut expected = EditBuffer::from(vec![
+        let mut expected = EditBuffer::with_text(&[
             "1:one two three four\n",
             "2:five ",
             "'x seven eight",
@@ -2197,11 +2197,11 @@ mod tests {
 
     #[test]
     fn global_cmd_transfer() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         let orig = buffer.clone();
-        let expected = EditBuffer::from(vec![
+        let expected = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six", "one", "three",
             "five",
         ]);
@@ -2238,7 +2238,7 @@ mod tests {
 
     #[test]
     fn global_cmd_unsupported_commands() {
-        let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three"]);
+        let mut buffer = EditBuffer::with_text(&["one\r\n", "two", "three"]);
         buffer.set_current_line(1);
         let mut output = Vec::new();
         let mut prev_pattern: Option<Regex> = None;
@@ -2258,7 +2258,7 @@ mod tests {
     #[test]
     fn print_cmd_no_addr() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         print_cmd(&mut buffer, &mut output, None).unwrap();
         assert_eq!(&output[..], b"2\r\n");
@@ -2267,7 +2267,7 @@ mod tests {
     #[test]
     fn print_cmd_single_line() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         print_cmd(&mut buffer, &mut output, Some(Address::line(3))).unwrap();
         assert_eq!(&output[..], b"3\r\n");
@@ -2277,7 +2277,7 @@ mod tests {
     fn print_cmd_span() {
         let mut output = Vec::new();
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         print_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
         assert_eq!(&output[..], b"2\r\n3\r\n4\r\n");
@@ -2287,7 +2287,7 @@ mod tests {
     fn print_cmd_sets_current_line() {
         let mut output = Vec::new();
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         print_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
         assert_eq!(4, buffer.current_line());
@@ -2601,7 +2601,7 @@ mod tests {
 
     #[test]
     fn substitute_cmd_no_matches() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one two three four\r\n",
             "five six seven eight",
             "nine ten eleven twelve",
@@ -2622,7 +2622,7 @@ mod tests {
 
     #[test]
     fn substitute_cmd_current_line_global() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one two three four\r\n",
             "five six seven eight",
             "nine ten eleven twelve",
@@ -2643,8 +2643,8 @@ mod tests {
 
     #[test]
     fn substitute_cmd_current_line_at_eol() {
-        let mut buffer = EditBuffer::from(vec!["some text\n"]);
-        let expected = EditBuffer::from(vec!["some text!\n"]);
+        let mut buffer = EditBuffer::with_text(&["some text\n"]);
+        let expected = EditBuffer::with_text(&["some text!\n"]);
         substitute_cmd(
             &mut buffer,
             None,
@@ -2658,7 +2658,7 @@ mod tests {
 
     #[test]
     fn substitute_cmd_current_line_single_first() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one two three four\r\n",
             "five six seven eight",
             "nine ten eleven twelve",
@@ -2679,7 +2679,7 @@ mod tests {
 
     #[test]
     fn substitute_cmd_current_line_single() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one two three four\r\n",
             "five six seven eight",
             "nine ten eleven twelve",
@@ -2700,7 +2700,7 @@ mod tests {
 
     #[test]
     fn substitute_split_line() {
-        let mut buffer = EditBuffer::from(vec!["a line, to split\r\n"]);
+        let mut buffer = EditBuffer::with_text(&["a line, to split\r\n"]);
         buffer.set_current_line(1);
         let cmd_line = "s/, /\\\r\n/";
         let mut input = cmd_line.as_bytes();
@@ -2717,14 +2717,14 @@ mod tests {
             scope,
         )
         .unwrap();
-        let mut expected = EditBuffer::from(vec!["a line\r\n", "to split"]);
+        let mut expected = EditBuffer::with_text(&["a line\r\n", "to split"]);
         expected.set_current_line(2);
         assert_eq!(buffer, expected);
     }
 
     #[test]
     fn substitute_split_line_no_end_delimiter() {
-        let mut buffer = EditBuffer::from(vec!["a line, to split\n"]);
+        let mut buffer = EditBuffer::with_text(&["a line, to split\n"]);
         buffer.set_current_line(1);
         let mut cmd_line = "/, /\\\n".graphemes(true).peekable();
         let mut input = "\n".as_bytes();
@@ -2748,7 +2748,7 @@ mod tests {
             scope,
         )
         .unwrap();
-        let mut expected = EditBuffer::from(vec!["a line\n", "to split"]);
+        let mut expected = EditBuffer::with_text(&["a line\n", "to split"]);
         expected.set_current_line(2);
         assert_eq!(buffer[..], expected[..]);
         assert_eq!(buffer.current_line(), expected.current_line());
@@ -2756,7 +2756,7 @@ mod tests {
 
     #[test]
     fn substitute_cmd_multi_line_single() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "1:one two three four\n",
             "2:five six seven eight",
             "3:nine ten eleven twelve",
@@ -2768,7 +2768,7 @@ mod tests {
             "9:one two three four\n",
         ]);
         buffer.set_current_line(5);
-        let mut expected = EditBuffer::from(vec![
+        let mut expected = EditBuffer::with_text(&[
             "1:one two three four\n",
             "2:five 'x seven eight",
             "3:nine ten eleven twelve",
@@ -2794,7 +2794,7 @@ mod tests {
 
     #[test]
     fn undo_redo_substitute_cmd_multi_line_single() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "1:one two three four\n",
             "2:five six seven eight",
             "3:nine ten eleven twelve",
@@ -2807,7 +2807,7 @@ mod tests {
         ]);
         buffer.set_current_line(5);
         let before = buffer.clone();
-        let mut expected = EditBuffer::from(vec![
+        let mut expected = EditBuffer::with_text(&[
             "1:one two three four\n",
             "2:five 'x seven eight",
             "3:nine ten eleven twelve",
@@ -2843,7 +2843,7 @@ mod tests {
 
     #[test]
     fn substitute_cmd_multi_line_single_first() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one two three four\r\n",
             "five six seven eight",
             "nine ten eleven twelve",
@@ -2867,7 +2867,7 @@ mod tests {
 
     #[test]
     fn substitute_cmd_multi_line_capture() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one two three four\r\n",
             "five six seven eight",
             "nine ten eleven twelve",
@@ -2895,7 +2895,7 @@ mod tests {
 
     #[test]
     fn undo_redo_substitute_cmd_multi_line_capture() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one two three four\r\n",
             "five six seven eight",
             "nine ten eleven twelve",
@@ -2934,7 +2934,8 @@ mod tests {
 
     #[test]
     fn transfer_cmd_destination_invalid() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let source = Address::span(3, 5);
         let destination = Address::line(7);
         let res = transfer_cmd(&mut buffer, Some(source), destination)
@@ -2944,7 +2945,8 @@ mod tests {
 
     #[test]
     fn transfer_cmd_destination_intersects_source_give_error() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let source = Address::span(3, 5);
         let destination = Address::line(4);
         let res = transfer_cmd(&mut buffer, Some(source), destination)
@@ -2954,7 +2956,7 @@ mod tests {
 
     #[test]
     fn write_propegates_errors() {
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         let mut dummy_file = BadWriter {};
         write_lines(&mut dummy_file, &mut buffer, Some(Address::span(1, 2)))
             .expect_err("io error");
@@ -2962,7 +2964,7 @@ mod tests {
 
     #[test]
     fn write_one_line() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut dummy_file = Vec::new();
         let (bytes, lines) =
             write_lines(&mut dummy_file, &mut buffer, Some(Address::line(2)))
@@ -2974,7 +2976,7 @@ mod tests {
     #[test]
     fn write_many_lines() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         let mut dummy_file = Vec::new();
         let (bytes, lines) = write_lines(
             &mut dummy_file,
@@ -2998,7 +3000,7 @@ mod tests {
 
     #[test]
     fn write_no_addr_leaves_clean_buffer() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
         let Some(change) =
@@ -3020,7 +3022,7 @@ mod tests {
 
     #[test]
     fn write_full_buffer_leaves_clean_buffer() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
         let Some(change) =
@@ -3043,7 +3045,7 @@ mod tests {
 
     #[test]
     fn write_partial_buffer_leaves_dirty_buffer() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
         let Some(change) =
@@ -3081,7 +3083,7 @@ mod tests {
 
     #[test]
     fn append_cmd_autoindents() {
-        let mut buffer = EditBuffer::from(vec!["one\n", "    two", "three"]);
+        let mut buffer = EditBuffer::with_text(&["one\n", "    two", "three"]);
         let mut input = IndentReader::from(&["indented\n", "    further\n"]);
         let expected = [
             "one\n",
@@ -3115,7 +3117,7 @@ mod tests {
     }
     #[test]
     fn insert_cmd_autoindents() {
-        let mut buffer = EditBuffer::from(vec!["one\n", "    two", "three"]);
+        let mut buffer = EditBuffer::with_text(&["one\n", "    two", "three"]);
         let mut input = IndentReader::from(&["indented\n", "    further\n"]);
         let expected = [
             "one\n",
@@ -3131,7 +3133,7 @@ mod tests {
 
     #[test]
     fn delete_cmd_line_zero() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let res = delete_cmd(&mut buffer, Some(Address::line(0)))
             .expect_err("invalid address");
         assert!(matches!(res, LnedError::InvalidAddress));
@@ -3139,7 +3141,7 @@ mod tests {
 
     #[test]
     fn delete_cmd_span_starting_at_zero() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3", "4", "5"]);
         let res = delete_cmd(&mut buffer, Some(Address::span(0, 3)))
             .expect_err("invalid address");
         assert!(matches!(res, LnedError::InvalidAddress));
@@ -3155,7 +3157,7 @@ mod tests {
 
     #[test]
     fn edit_cmd_missing_file_clears_buffer_sets_filename() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert_eq!(buffer.len(), 3);
         let mut output = Vec::new();
         let not_a_file = Some(Path::new("non-existant_file.txt"));
@@ -3211,7 +3213,7 @@ mod tests {
 
     #[test]
     fn change_cmd_addr_starting_after_buffer_end_gives_error() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let res = change_cmd(
             &mut buffer,
             &mut &b".\n"[..],
@@ -3223,7 +3225,7 @@ mod tests {
 
     #[test]
     fn change_cmd_addr_ending_past_buffer_end_gives_error() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let res = change_cmd(
             &mut buffer,
             &mut &b".\n"[..],
@@ -3235,7 +3237,7 @@ mod tests {
 
     #[test]
     fn change_cmd_autoindents() {
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\n",
             "\n",
             "\n",
@@ -3303,7 +3305,7 @@ mod tests {
 
     #[test]
     fn join_cmd_single_line_addr() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let expected = buffer.clone();
         join_cmd(&mut buffer, Some(Address::line(2))).unwrap();
         assert_eq!(buffer, expected);
@@ -3311,14 +3313,15 @@ mod tests {
 
     #[test]
     fn join_cmd_default_on_last_line() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let res = join_cmd(&mut buffer, None).expect_err("should fail");
         assert!(matches!(res, LnedError::InvalidAddress));
     }
 
     #[test]
     fn move_cmd_destination_invalid() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let source = Address::span(3, 5);
         let destination = Address::line(7);
         let res = move_cmd(&mut buffer, Some(source), destination)
@@ -3328,7 +3331,8 @@ mod tests {
 
     #[test]
     fn move_cmd_destination_intersects_source_give_error() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let source = Address::span(3, 5);
         let res = move_cmd(&mut buffer, Some(source), Address::line(4))
             .expect_err("should fail");
@@ -3340,7 +3344,8 @@ mod tests {
     #[test]
     fn line_number_cmd_with_and_without_address() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(2);
         let res = line_number_cmd(&mut buffer, &mut output, None);
         let out_text = str::from_utf8(&output[..]).unwrap();
@@ -3365,10 +3370,10 @@ mod tests {
     #[test]
     fn read_cmd_reads_file() {
         let mut buffer =
-            EditBuffer::from(vec!["one\n", "two", "three", "four"]);
+            EditBuffer::with_text(&["one\n", "two", "three", "four"]);
         buffer.set_current_line(2);
         let orig = buffer.clone();
-        let mut expected = EditBuffer::from(vec![
+        let mut expected = EditBuffer::with_text(&[
             "one\n",
             "two",
             "This is a test file with several lines of",
@@ -3427,7 +3432,7 @@ mod tests {
         let new_filename = tmp_dir.path().join("new_filename");
         let mut backup_filename = new_filename.clone();
         backup_filename.as_mut_os_string().push(".bak");
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         buffer.set_filename(Some(current_filename.clone()));
         let _res =
             write_cmd(&mut buffer, &mut output, None, Some(&new_filename))
@@ -3441,8 +3446,7 @@ mod tests {
     fn write_cmd_overwrite() {
         let tmp_dir = tempdir().expect("tmp dir created");
         let name = tmp_dir.path().join("filename.txt");
-        let content = vec!["1\r\n", "2\r\n", "3\r\n"];
-        let mut buffer = EditBuffer::from(content);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2\r\n", "3\r\n"]);
         buffer.set_filename(Some(name.clone()));
         let mut output = Vec::new();
         fs::copy(
@@ -3474,7 +3478,7 @@ mod tests {
     #[test]
     fn write_cmd_backup_exists() {
         let tmp_dir = tempdir().expect("tmp dir created");
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let name = tmp_dir.path().join("filename.txt");
         let mut backup_name = name.clone();
         backup_name.as_mut_os_string().push(".bak");
@@ -3537,7 +3541,7 @@ mod tests {
         }
 
         let tmp_dir = tempdir().expect("tmp dir created");
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let name = tmp_dir.path().join("filename.txt");
         let mut backup_name = name.clone();
         backup_name.as_mut_os_string().push(".bak");
@@ -3598,7 +3602,7 @@ mod tests {
         }
 
         let tmp_dir = tempdir().expect("tmp dir created");
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let name = tmp_dir.path().join("filename.txt");
         let mut backup_name = name.clone();
         backup_name.as_mut_os_string().push(".bak");
@@ -3625,7 +3629,7 @@ mod tests {
 
     #[test]
     fn list_cmd_bad_addr() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
         let res = list_cmd(&mut buffer, &mut output, Some(Address::line(4)))
             .expect_err("invalid addr");
@@ -3640,7 +3644,7 @@ mod tests {
     #[test]
     fn list_cmd_no_addr() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         list_cmd(&mut buffer, &mut output, None).unwrap();
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "2$\r\n");
@@ -3649,7 +3653,7 @@ mod tests {
     #[test]
     fn list_cmd_single_line() {
         let mut output = Vec::new();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         list_cmd(&mut buffer, &mut output, Some(Address::line(3))).unwrap();
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "3$\r\n");
@@ -3659,7 +3663,7 @@ mod tests {
     fn list_cmd_span() {
         let mut output = Vec::new();
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2\t2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2\t2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         list_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
         assert_eq!(
@@ -3672,7 +3676,7 @@ mod tests {
     fn list_cmd_sets_current_line() {
         let mut output = Vec::new();
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         list_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
     }
@@ -3701,8 +3705,7 @@ mod tests {
     #[test]
     fn scroll_cmd_at_end() {
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
-        let lines: Vec<_> = lines.iter().map(AsRef::as_ref).collect();
-        let mut buffer = EditBuffer::from(&lines);
+        let mut buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
         let res = scroll_cmd(
             &mut buffer,
@@ -3721,8 +3724,7 @@ mod tests {
     #[test]
     fn scroll_cmd_saves_windows() {
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
-        let lines: Vec<_> = lines.iter().map(AsRef::as_ref).collect();
-        let mut buffer = EditBuffer::from(&lines);
+        let mut buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
         let mut state = EditorState { ..Default::default() };
         let mut input = b"" as &[u8];
@@ -3751,8 +3753,7 @@ mod tests {
     #[test]
     fn scroll_cmd_with_print_sfx() {
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\n")).collect();
-        let lines: Vec<_> = lines.iter().map(AsRef::as_ref).collect();
-        let mut buffer = EditBuffer::from(&lines);
+        let mut buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
         let mut state = EditorState { ..Default::default() };
         let mut input = b"" as &[u8];
@@ -3832,7 +3833,7 @@ mod tests {
 
     #[test]
     fn show_diff_cmd_error_reading_file_fails() {
-        let buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
         let name = Path::new("file_not_found");
         let Err(LnedError::DiffReadFile { source, filename }) =
@@ -3846,7 +3847,7 @@ mod tests {
 
     #[test]
     fn show_diff_cmd_no_filename_no_current_file_fails() {
-        let buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
         let res =
             show_diff_cmd(&buffer, &mut output, None).expect_err("no filename");

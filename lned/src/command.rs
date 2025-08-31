@@ -1195,7 +1195,7 @@ mod tests {
     #[test]
     fn eval_dot_addr() {
         let mut cmd_line = ".d\r\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         let address =
             Address::eval(&mut cmd_line, &mut buffer, &mut None).unwrap();
@@ -1206,7 +1206,7 @@ mod tests {
     #[test]
     fn eval_dollar_addr() {
         let mut cmd_line = "$d\r\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         let address =
             Address::eval(&mut cmd_line, &mut buffer, &mut None).unwrap();
@@ -1216,7 +1216,8 @@ mod tests {
 
     #[test]
     fn eval_simple_number_addr() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let mut cmd_line = "5d\n".graphemes(true).peekable();
         let address =
             Address::eval(&mut cmd_line, &mut buffer, &mut None).unwrap();
@@ -1227,7 +1228,7 @@ mod tests {
     #[test]
     fn regex_line_addr_regex_syntax() {
         let mut input = "/\\lo.+/n\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(2);
@@ -1240,7 +1241,7 @@ mod tests {
     #[test]
     fn rev_regex_line_addr_regex_syntax() {
         let mut input = "?\\lo.+?n\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(2);
@@ -1253,7 +1254,7 @@ mod tests {
     #[test]
     fn regex_line_addr_embedded_delim() {
         let mut input = "/o.+\\//n\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one/\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(2);
@@ -1266,7 +1267,7 @@ mod tests {
     #[test]
     fn regex_line_addr_no_final_delimiter() {
         let mut input = "/o.+\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(2);
@@ -1280,7 +1281,7 @@ mod tests {
     fn regex_line_addr_needle_in_first_half_of_split_range() {
         let mut input = "/o.+/n\n".graphemes(true).peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(2);
@@ -1293,7 +1294,7 @@ mod tests {
     fn regex_line_addr_needle_in_second_half_of_split_range() {
         let mut input = "/on.+/n\n".graphemes(true).peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(4);
@@ -1306,7 +1307,7 @@ mod tests {
     fn regex_line_addr_contiguous_search_range() {
         let mut input = "/o.+/n\n".graphemes(true).peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(6);
@@ -1319,7 +1320,7 @@ mod tests {
     fn rev_regex_line_addr_needle_in_first_half_of_split_range() {
         let mut input = "?o.+?n\n".graphemes(true).peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(2);
@@ -1332,7 +1333,7 @@ mod tests {
     fn rev_regex_line_addr_needle_in_second_half_of_split_range() {
         let mut input = "?ou.+?n\n".graphemes(true).peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(4);
@@ -1345,7 +1346,7 @@ mod tests {
     fn rev_regex_line_addr_contiguous_search_range() {
         let mut input = "?o.+?n\n".graphemes(true).peekable();
         let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(1);
@@ -1357,7 +1358,7 @@ mod tests {
     #[test]
     fn regex_line_addr_with_offset() {
         let mut input = "/o.+/+2\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(2);
@@ -1370,7 +1371,7 @@ mod tests {
     #[test]
     fn rev_regex_line_addr_with_offset() {
         let mut input = "?o.+?+2\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec![
+        let mut buffer = EditBuffer::with_text(&[
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
         buffer.set_current_line(2);
@@ -1383,7 +1384,7 @@ mod tests {
     #[test]
     fn eval_simple_comma_addr() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         let mut input = "1,2p\n".graphemes(true).peekable();
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(res, Some(Address::span(1, 2)));
@@ -1393,7 +1394,7 @@ mod tests {
     #[test]
     fn eval_leading_comma_addr() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         let mut input = ",4p\r\n".graphemes(true).peekable();
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
@@ -1403,7 +1404,8 @@ mod tests {
     #[test]
     fn eval_trailing_comma_addr() {
         let mut input = "5,p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
         assert_eq!(res, Some(Address::line(5)));
@@ -1412,7 +1414,8 @@ mod tests {
     #[test]
     fn eval_comma_only_addr() {
         let mut input = ",p\r\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
         assert_eq!(res, Some(Address::span(1, 6)));
@@ -1421,7 +1424,8 @@ mod tests {
     #[test]
     fn eval_comma_only_chain_addr() {
         let mut input = ",,p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
         assert_eq!(res, Some(Address::line(6)));
@@ -1430,7 +1434,8 @@ mod tests {
     #[test]
     fn eval_comma_chain_addr() {
         let mut input = ",12, 3+1,p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
         assert_eq!(res, Some(Address::line(4)));
@@ -1440,7 +1445,7 @@ mod tests {
     fn eval_semicolon_addr_past_end() {
         let mut input = "+;np\n".graphemes(true).peekable();
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         assert_eq!(buffer.current_line(), 6);
         let res = Address::eval(&mut input, &mut buffer, &mut None)
             .expect_err("invalid address");
@@ -1450,7 +1455,8 @@ mod tests {
     #[test]
     fn eval_simple_semicolon_addr() {
         let mut input = "1;2p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!(buffer.current_line(), 6);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(res, Some(Address::span(1, 2)));
@@ -1461,7 +1467,8 @@ mod tests {
     #[test]
     fn eval_leading_semicolon_addr() {
         let mut input = ";5p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
@@ -1472,7 +1479,8 @@ mod tests {
     #[test]
     fn eval_trailing_semicolon_addr() {
         let mut input = "5;p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
@@ -1483,7 +1491,8 @@ mod tests {
     #[test]
     fn eval_semicolon_only_addr() {
         let mut input = ";p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
@@ -1494,7 +1503,8 @@ mod tests {
     #[test]
     fn eval_semicolon_only_chain_addr() {
         let mut input = ";;p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
@@ -1504,7 +1514,8 @@ mod tests {
     #[test]
     fn eval_big_before_small_semicolon_chain_addr() {
         let mut input = "4;$;2p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None)
             .expect_err("invalid address");
@@ -1514,14 +1525,16 @@ mod tests {
     #[test]
     fn eval_simple_offset_only_addrs() {
         let mut input = "+p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
         assert_eq!(res, Some(Address::line(4)));
 
         let mut input = "+10p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None)
             .expect_err("AddressTooLarge");
@@ -1529,14 +1542,16 @@ mod tests {
         assert!(matches!(res, Error::AddressTooLarge));
 
         let mut input = "-p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
         assert_eq!(res, Some(Address::line(2)));
 
         let mut input = "-2p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
         assert_eq!(input.next(), Some("p"));
@@ -1546,7 +1561,8 @@ mod tests {
     #[test]
     fn eval_too_big_offset_only_addr_overflows() {
         let mut input = "-10p\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let mut buffer =
+            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None)
             .expect_err("offset overflow");
@@ -1993,7 +2009,7 @@ mod tests {
     #[test]
     fn parse_transfer_cmd_with_destination() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         let mut cmd_line = " 4\n".graphemes(true).peekable();
         let addr = Address::span(1, 2);
         let dest = Address::line(4);
@@ -2012,7 +2028,7 @@ mod tests {
     #[test]
     fn parse_transfer_cmd_no_addr() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         let mut input = "t2\n".as_bytes();
         let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
         assert!(matches!(
@@ -2053,7 +2069,7 @@ mod tests {
 
     #[test]
     fn parse_line_number_cmd() {
-        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4"]);
+        let mut buffer = EditBuffer::with_text(&["1\n", "2", "3", "4"]);
         buffer.set_current_line(2);
         let mut input1 = "=\n".as_bytes();
         let mut input2 = ".=\n".as_bytes();
@@ -2068,7 +2084,7 @@ mod tests {
     #[test]
     fn parse_move_cmd_with_destination() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         let mut cmd_line = " 5\n".graphemes(true).peekable();
         let addr = Address::span(1, 2);
         let dest = Address::line(5);
@@ -2083,7 +2099,7 @@ mod tests {
     #[test]
     fn parse_move_cmd_no_addr() {
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         let mut input = "m4\n".as_bytes();
         let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
         assert!(matches!(
@@ -2205,7 +2221,7 @@ mod tests {
     fn parse_valid_scroll_cmd() {
         let mut input = "5z10\n".as_bytes();
         let mut buffer =
-            EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
         assert!(
             matches!(res, Some((Cmd::Scroll(a, w, p), None)) if a == Some(Address::line(5)) && w == Some(10) && p.is_none())
