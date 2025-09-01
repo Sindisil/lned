@@ -88,14 +88,6 @@ impl HistoryStack {
 }
 
 #[cfg(test)]
-#[derive(Debug, Default, Clone, PartialEq)]
-struct HistoryStackBuilder {
-    entries: Option<Vec<Entry>>,
-    draft: Option<String>,
-    pub(crate) index: usize,
-}
-
-#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
 
