@@ -78,6 +78,7 @@ pub enum LnedError {
         source: std::io::Error,
         filename: PathBuf,
     },
+    WriteWouldOverwrite(PathBuf),
 }
 
 impl std::error::Error for LnedError {
@@ -94,6 +95,7 @@ impl std::error::Error for LnedError {
             | LnedError::NoMatch
             | LnedError::NothingToUndo
             | LnedError::NothingToRedo
+            | LnedError::WriteWouldOverwrite(_)
             | LnedError::NoFilename => None,
             LnedError::EditFileOpen { ref source, .. }
             | LnedError::DiffReadFile { ref source, .. }
@@ -223,6 +225,13 @@ impl fmt::Display for LnedError {
             }
             LnedError::DiffReadFile { filename, .. } => {
                 write!(f, "error reading {} for diff", filename.display())
+            }
+            LnedError::WriteWouldOverwrite(filename) => {
+                write!(
+                    f,
+                    "'{}' exists - repeat write command to overwrite",
+                    filename.display()
+                )
             }
         }
     }
@@ -400,9 +409,13 @@ fn dispatch_cmd(
             version_cmd(output);
             Ok(None)
         }
-        Cmd::Write(address, filename) => {
-            write_cmd(buffer, output, *address, filename.as_deref())
-        }
+        Cmd::Write(address, filename) => write_cmd(
+            buffer,
+            output,
+            *address,
+            filename.as_deref(),
+            state.previous_cmd.as_ref(),
+        ),
     };
 
     match res {
@@ -1150,46 +1163,52 @@ trait FileWrite {
 struct EditedFile {
     filename: PathBuf,
     file: File,
+    created: bool,
     backup_filename: Option<PathBuf>,
     backup: Option<File>,
 }
 
 impl EditedFile {
-    fn open_or_create(filename: PathBuf) -> Result<EditedFile, LnedError> {
-        match OpenOptions::new().read(true).write(true).open(filename.as_path())
-        {
+    fn open_or_create(filename: &Path) -> Result<EditedFile, LnedError> {
+        match OpenOptions::new().read(true).write(true).open(filename) {
             Ok(file) => {
-                let mut backup_filename = filename.clone();
+                let mut backup_filename = filename.to_path_buf();
                 backup_filename.as_mut_os_string().push(".bak");
                 let backup = File::create_new(backup_filename.as_path())
                     .map_err(|source| LnedError::WriteBackupFileCreate {
                         source,
-                        filename: filename.clone(),
+                        filename: filename.to_path_buf(),
                         backup_filename: Some(backup_filename.clone()),
                     })?;
                 Ok(EditedFile {
-                    filename,
+                    filename: filename.to_path_buf(),
                     file,
+                    created: false,
                     backup_filename: Some(backup_filename),
                     backup: Some(backup),
                 })
             }
             Err(source) => {
                 if source.kind() == io::ErrorKind::NotFound {
-                    let file = File::create_new(filename.as_path()).map_err(
-                        |source| LnedError::WriteFileOpen {
-                            source,
-                            filename: filename.clone(),
-                        },
-                    )?;
+                    let file =
+                        File::create_new(filename).map_err(|source| {
+                            LnedError::WriteFileOpen {
+                                source,
+                                filename: filename.to_path_buf(),
+                            }
+                        })?;
                     return Ok(EditedFile {
-                        filename,
+                        filename: filename.to_path_buf(),
                         file,
+                        created: true,
                         backup_filename: None,
                         backup: None,
                     });
                 }
-                Err(LnedError::WriteFileOpen { source, filename })
+                Err(LnedError::WriteFileOpen {
+                    source,
+                    filename: filename.to_path_buf(),
+                })
             }
         }
     }
@@ -1246,16 +1265,33 @@ fn write_cmd(
     output: &mut impl Write,
     address: Option<Address>,
     filename: Option<&Path>,
+    previous_cmd: Option<&Cmd>,
 ) -> Result<Option<ChangeSet>, LnedError> {
+    let buffer_filename_on_entry = buffer.filename().map(ToOwned::to_owned);
+    let safe_to_overwrite = filename.is_none()
+        || matches!(previous_cmd, Some(Cmd::Write(a, f)) if *a == address && f.as_deref() == filename);
+
     if buffer.filename().is_none() && filename.is_some() {
         buffer.set_filename(filename.map(ToOwned::to_owned));
     }
+    let filename = PathBuf::from(
+        filename.or(buffer.filename()).ok_or(LnedError::NoFilename)?,
+    );
 
-    let filename = filename
-        .or(buffer.filename())
-        .ok_or(LnedError::NoFilename)?
-        .to_path_buf();
-    let mut writer = EditedFile::open_or_create(filename)?;
+    let mut writer = EditedFile::open_or_create(&filename)?;
+    if !(writer.created || safe_to_overwrite) {
+        buffer.set_filename(buffer_filename_on_entry);
+        if let Err(e) = writer.remove_backup().map_err(|source| {
+            LnedError::WriteRemoveBackup {
+                source,
+                backup_filename: writer.backup_name().map(ToOwned::to_owned),
+            }
+        }) {
+            writeln!(output, "{e}").expect("reliable stdout");
+        }
+        return Err(LnedError::WriteWouldOverwrite(filename));
+    }
+
     write_file(buffer, output, address, &mut writer)?;
     Ok(None)
 }
@@ -3434,9 +3470,14 @@ mod tests {
         backup_filename.as_mut_os_string().push(".bak");
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         buffer.set_filename(Some(current_filename.clone()));
-        let _res =
-            write_cmd(&mut buffer, &mut output, None, Some(&new_filename))
-                .expect("successful write to new_filename");
+        let _res = write_cmd(
+            &mut buffer,
+            &mut output,
+            None,
+            Some(&new_filename),
+            None,
+        )
+        .expect("successful write to new_filename");
         assert!(matches!(fs::exists(&new_filename), Ok(true)));
         assert_eq!(buffer.filename(), Some(current_filename.as_path()));
         assert!(matches!(fs::exists(&backup_filename), Ok(false)));
@@ -3446,6 +3487,7 @@ mod tests {
     fn write_cmd_overwrite() {
         let tmp_dir = tempdir().expect("tmp dir created");
         let name = tmp_dir.path().join("filename.txt");
+        let cmd = Cmd::Write(None, Some(name.clone()));
         let mut buffer = EditBuffer::with_text(&["1\r\n", "2\r\n", "3\r\n"]);
         buffer.set_filename(Some(name.clone()));
         let mut output = Vec::new();
@@ -3455,8 +3497,46 @@ mod tests {
         )
         .expect("copy file for test");
 
-        let _res = write_cmd(&mut buffer, &mut output, None, Some(&name))
-            .expect("successful write");
+        let res = write_cmd(&mut buffer, &mut output, None, Some(&name), None)
+            .expect_err("overwrite warning");
+        assert!(matches!(res, LnedError::WriteWouldOverwrite(_)));
+        let _ =
+            write_cmd(&mut buffer, &mut output, None, Some(&name), Some(&cmd))
+                .expect("successful overwrite on second try");
+        let new_content = fs::read(&name).expect("successful read");
+        assert_eq!(
+            new_content,
+            buffer[..]
+                .iter()
+                .fold(String::new(), |mut acc, x| {
+                    acc.push_str(x);
+                    acc
+                })
+                .as_bytes()
+        );
+        assert!(
+            str::from_utf8(&output[..])
+                .unwrap()
+                .contains("3 lines (9 bytes) written")
+        );
+    }
+
+    #[test]
+    fn write_cmd_default_overwrite() {
+        let tmp_dir = tempdir().expect("tmp dir created");
+        let name = tmp_dir.path().join("filename.txt");
+        let cmd = Cmd::Write(None, Some(name.clone()));
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2\r\n", "3\r\n"]);
+        buffer.set_filename(Some(name.clone()));
+        let mut output = Vec::new();
+        fs::copy(
+            Path::new(r"test/assets/text_with_final_eol.txt"),
+            name.as_path(),
+        )
+        .expect("copy file for test");
+
+        let _ = write_cmd(&mut buffer, &mut output, None, None, Some(&cmd))
+            .expect("successful overwrite because default filename");
         let new_content = fs::read(&name).expect("successful read");
         assert_eq!(
             new_content,
@@ -3498,7 +3578,7 @@ mod tests {
             source,
             filename,
             backup_filename,
-        } = write_cmd(&mut buffer, &mut output, None, Some(&name))
+        } = write_cmd(&mut buffer, &mut output, None, Some(&name), None)
             .expect_err("backup file create fail")
         {
             assert_eq!(source.kind(), io::ErrorKind::AlreadyExists);
@@ -3554,7 +3634,7 @@ mod tests {
         .expect("copy file for test");
         let file_content = fs::read(&name).expect("successful read");
         let edited_file =
-            EditedFile::open_or_create(name.clone()).expect("EditedFile");
+            EditedFile::open_or_create(&name).expect("EditedFile");
         let mut writer = BadWriter { inner: edited_file };
         if let Err(LnedError::WriteFile {
             source,
@@ -3614,7 +3694,7 @@ mod tests {
         )
         .expect("copy file for test");
         let edited_file =
-            EditedFile::open_or_create(name.clone()).expect("EditedFile");
+            EditedFile::open_or_create(&name).expect("EditedFile");
         let mut writer = BadWriter { inner: edited_file };
         if let Err(LnedError::WriteMakeBackup {
             source,

@@ -584,14 +584,19 @@ that no history of edit actions are lost, including 'undo' commands.
 #### Behavior
 
 The *w* command writes the addressed lines into the file with the
-specified filename, replacing the existing contents, or creating the file
-if it does not exist.
+specified filename. If no filename is given, the currently remembered
+filename will be used, or an error shown if there is none.
 
-The currently remembered filename will not be changed unless there is not
-a remembered filename.
+If the file named doesn't exist, it will be created. If it already
+exists, a warning will be displayed and no write will occur, nor will
+the remembered filename be changed. A second identical write command
+will override the warning, overwriting the file's contents. No warning
+will be displayed if the remembered filename is used (i.e., if no
+filename is specified) -- this is essentially a "save" command.
 
-If no filename is given, the currently remembered filename will be used,
-or an error shown if there is none.
+If the file is written, the remembered filename will be set to the
+specified filename if it had not already been set, otherwise it will
+remain unchanged.
 
 The current line number will not be changed.
 
