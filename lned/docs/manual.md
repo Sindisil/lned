@@ -335,16 +335,16 @@ The current line number will be unchanged.
 
 #### Behavior
 
-The addressed lines are written to stdout with tab
-characters and end of line displayed visually. The
-last line written becomes the current line.
+The addressed lines are written to stdout with the
+some special characters, and the end of line, displayed
+visually as follows:
 
-A '$' character will be displayed at the end of each line,
-any '$' characters within the text will be backslash
-escaped (i.e., will display as '$').
+* HT (horizontal tab):   \t
+* CR (carriage return):  \r
+* LF (line feed):        \n
+* EOL (end of line):      $
+* $ within text:         \$
 
-Each HT (horizontal tab) character within the text will
-be displayed as '\t'.
 
 ### Move ('m')
 

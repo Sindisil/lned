@@ -946,8 +946,9 @@ fn expand_escapes(s: &str) -> &str {
     match s {
         "\t" => "\\t",
         "$" => "\\$",
-        "\n" => "$\n",
-        "\r\n" => "$\r\n",
+        "\r" => "\\r",
+        "\n" => "\\n$\n",
+        "\r\n" => "\\r\\n$\r\n",
         s => s,
     }
 }
@@ -1755,7 +1756,10 @@ mod tests {
             panic!("should have returned Ok(Some(ChangeSet))");
         };
         assert!(changes.is_empty());
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), "two$\nthree$\n");
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "two\\n$\nthree\\n$\n"
+        );
     }
 
     #[test]
@@ -1781,7 +1785,7 @@ mod tests {
         assert!(changes.is_empty());
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
-            "two$\nthree$\nfour$\nfive$\n"
+            "two\\n$\nthree\\n$\nfour\\n$\nfive\\n$\n"
         );
     }
 
@@ -2437,7 +2441,7 @@ mod tests {
         assert!(output.contains("two\n"));
         assert!(output.contains("unwritten changes"));
         assert!(!output.contains("one"));
-        assert!(output.contains("three$\n"));
+        assert!(output.contains("three\\n$\n"));
     }
 
     #[test]
@@ -2523,7 +2527,7 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("1$\n2$\n"));
+        assert!(output.contains("1\\n$\n2\\n$\n"));
     }
 
     #[test]
@@ -3727,7 +3731,7 @@ mod tests {
         let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         list_cmd(&mut buffer, &mut output, None).unwrap();
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), "2$\r\n");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "2\\r\\n$\r\n");
     }
 
     #[test]
@@ -3736,7 +3740,7 @@ mod tests {
         let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         list_cmd(&mut buffer, &mut output, Some(Address::line(3))).unwrap();
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), "3$\r\n");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "3\\r\\n$\r\n");
     }
 
     #[test]
@@ -3748,7 +3752,7 @@ mod tests {
         list_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
-            "2\\t2$\r\n3$\r\n4$\r\n"
+            "2\\t2\\r\\n$\r\n3\\r\\n$\r\n4\\r\\n$\r\n"
         );
     }
 
@@ -3873,7 +3877,9 @@ mod tests {
         .expect("scroll 13..15");
         assert_eq!(buffer.current_line(), 16);
         assert!(
-            str::from_utf8(&output[..]).unwrap().contains("13$\n14$\n15$\n")
+            str::from_utf8(&output[..])
+                .unwrap()
+                .contains("13\\n$\n14\\n$\n15\\n$\n")
         );
         assert!(!str::from_utf8(&output[..]).unwrap().contains("16"));
     }
