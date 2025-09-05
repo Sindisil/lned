@@ -6,7 +6,7 @@ use std::ops::ControlFlow;
 use std::time::Duration;
 
 use crossterm::cursor::{self};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal;
 
 use unicode_width::UnicodeWidthChar;
@@ -86,7 +86,7 @@ impl LineReader {
             view.repaint(&input_buffer)?;
         }
 
-        let _ = handle_end(&input_buffer, &mut view);
+        let _ = handle_cursor_to_end(&input_buffer, &mut view);
         let mut stdout = io::stdout().lock();
         stdout.write_all(b"\r\n")?;
         stdout.flush()?;
@@ -140,13 +140,12 @@ fn handle_event(
     event: &Event,
 ) -> io::Result<ControlFlow<()>> {
     match event {
-        Event::Key(event) => {
-            if event.is_press() {
-                Ok(handle_key_event(buffer, view, history, event))
-            } else {
-                Ok(ControlFlow::Continue(()))
-            }
-        }
+        Event::Key(event) if event.is_press() => Ok(handle_key_pressed(
+            (event.code, event.modifiers),
+            buffer,
+            view,
+            history,
+        )),
         &Event::Resize(mut w, mut h) => {
             while let Ok(true) = event::poll(Duration::from_millis(50)) {
                 if let Event::Resize(w1, h1) = event::read()? {
@@ -156,7 +155,8 @@ fn handle_event(
             let cursor_position: Coord2D = cursor::position()?.into();
             Ok(handle_resize(buffer, view, DimWH(w, h), cursor_position))
         }
-        Event::FocusGained
+        Event::Key(_)
+        | Event::FocusGained
         | Event::FocusLost
         | Event::Mouse(_)
         | Event::Paste(_) => Ok(ControlFlow::Continue(())),
@@ -173,50 +173,61 @@ fn handle_resize(
     ControlFlow::Continue(())
 }
 
-fn handle_key_event(
+fn handle_key_pressed(
+    key: (KeyCode, KeyModifiers),
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
-    event: &KeyEvent,
 ) -> ControlFlow<()> {
-    match event.code {
-        KeyCode::Enter => {
-            if let Some(history) = history {
-                history.rewind();
-                if !buffer.is_empty()
-                    && history.last().is_none_or(|last| last != buffer)
-                {
-                    history.push(buffer.clone());
-                }
-            }
-            ControlFlow::Break(())
+    // decode command
+    let command = if let (KeyCode::Char(ch), KeyModifiers::NONE) = key {
+        EditCommand::CharInput(ch)
+    } else if let Some(binding) =
+        KEY_BINDINGS.iter().find(|binding| binding.key == key)
+    {
+        binding.command
+    } else {
+        return ControlFlow::Continue(());
+    };
+
+    // dispatch command
+    match command {
+        EditCommand::CharInput(ch) => handle_char_input(buffer, view, ch),
+        EditCommand::Backspace => handle_backspace(buffer, view),
+        EditCommand::Delete => handle_delete(buffer, view),
+        EditCommand::HistoryNextBack => {
+            handle_history_next_back(buffer, view, history)
         }
-        KeyCode::Left => handle_left(buffer, view),
-        KeyCode::Right => handle_right(buffer, view),
-        KeyCode::Home if event.modifiers == KeyModifiers::NONE => {
-            handle_home(view)
+        EditCommand::HistoryNext => handle_history_next(buffer, view, history),
+        EditCommand::RestoreDraft => {
+            handle_restore_draft(buffer, view, history)
         }
-        KeyCode::Home if event.modifiers == KeyModifiers::CONTROL => {
-            handle_delete_to_start(buffer, view)
-        }
-        KeyCode::End if event.modifiers == KeyModifiers::NONE => {
-            handle_end(buffer, view)
-        }
-        KeyCode::End if event.modifiers == KeyModifiers::CONTROL => {
-            handle_delete_to_end(buffer, view)
-        }
-        KeyCode::Backspace => handle_backspace(buffer, view),
-        KeyCode::Delete => handle_delete(buffer, view),
-        KeyCode::Char(c) => handle_char_input(buffer, view, c),
-        KeyCode::Up => handle_up(buffer, view, history),
-        KeyCode::Down => handle_down(buffer, view, history),
-        KeyCode::Esc => handle_esc(buffer, view, history),
-        KeyCode::Tab => handle_char_input(buffer, view, '\t'),
-        _ => ControlFlow::Continue(()),
+        EditCommand::CursorLeft => handle_cursor_left(buffer, view),
+        EditCommand::CursorRight => handle_cursor_right(buffer, view),
+        EditCommand::CursorToStart => handle_cursor_to_start(view),
+        EditCommand::CursorToEnd => handle_cursor_to_end(buffer, view),
+        EditCommand::DeleteToStart => handle_delete_to_start(buffer, view),
+        EditCommand::DeleteToEnd => handle_delete_to_end(buffer, view),
+        EditCommand::AcceptLine => handle_accept_line(buffer, history),
     }
 }
 
-fn handle_esc(
+fn handle_accept_line(
+    buffer: &str,
+    history: Option<&mut HistoryStack>,
+) -> ControlFlow<()> {
+    if let Some(history) = history {
+        history.rewind();
+        if !buffer.is_empty()
+            && history.last().is_none_or(|last| last != buffer)
+        {
+            history.push(buffer.to_string());
+        }
+    }
+    ControlFlow::Break(())
+}
+
+fn handle_restore_draft(
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
@@ -228,7 +239,7 @@ fn handle_esc(
     ControlFlow::Continue(())
 }
 
-fn handle_down(
+fn handle_history_next(
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
@@ -241,7 +252,7 @@ fn handle_down(
     ControlFlow::Continue(())
 }
 
-fn handle_up(
+fn handle_history_next_back(
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
@@ -291,7 +302,7 @@ fn handle_backspace(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn handle_cursor_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() != 0
         && let Some((prev_idx, _)) = buffer[..view.insertion_point()]
             .char_indices()
@@ -303,7 +314,7 @@ fn handle_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn handle_cursor_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
     // If aleady at end, nothing to do
     if view.insertion_point() != buffer.len() {
         let next_idx = buffer[view.insertion_point()..]
@@ -359,7 +370,7 @@ fn handle_delete_to_end(
     ControlFlow::Continue(())
 }
 
-fn handle_home(view: &mut View) -> ControlFlow<()> {
+fn handle_cursor_to_start(view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() != 0 {
         view.set_insertion_point(0);
     }
@@ -367,13 +378,91 @@ fn handle_home(view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_end(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn handle_cursor_to_end(buffer: &str, view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() != buffer.len() {
         view.set_insertion_point(buffer.len());
     }
 
     ControlFlow::Continue(())
 }
+
+#[derive(Debug, Copy, Clone)]
+enum EditCommand {
+    CharInput(char),
+    Backspace,
+    Delete,
+    HistoryNextBack,
+    HistoryNext,
+    RestoreDraft,
+    CursorLeft,
+    CursorRight,
+    CursorToStart,
+    CursorToEnd,
+    DeleteToStart,
+    DeleteToEnd,
+    AcceptLine,
+}
+
+#[derive(Debug)]
+struct KeyBinding {
+    key: (KeyCode, KeyModifiers),
+    command: EditCommand,
+}
+
+const KEY_BINDINGS: [KeyBinding; 13] = [
+    KeyBinding {
+        key: (KeyCode::Enter, KeyModifiers::NONE),
+        command: EditCommand::AcceptLine,
+    },
+    KeyBinding {
+        key: (KeyCode::Left, KeyModifiers::NONE),
+        command: EditCommand::CursorLeft,
+    },
+    KeyBinding {
+        key: (KeyCode::Right, KeyModifiers::NONE),
+        command: EditCommand::CursorRight,
+    },
+    KeyBinding {
+        key: (KeyCode::Home, KeyModifiers::NONE),
+        command: EditCommand::CursorToStart,
+    },
+    KeyBinding {
+        key: (KeyCode::Home, KeyModifiers::CONTROL),
+        command: EditCommand::DeleteToStart,
+    },
+    KeyBinding {
+        key: (KeyCode::End, KeyModifiers::NONE),
+        command: EditCommand::CursorToEnd,
+    },
+    KeyBinding {
+        key: (KeyCode::End, KeyModifiers::CONTROL),
+        command: EditCommand::DeleteToEnd,
+    },
+    KeyBinding {
+        key: (KeyCode::Backspace, KeyModifiers::NONE),
+        command: EditCommand::Backspace,
+    },
+    KeyBinding {
+        key: (KeyCode::Delete, KeyModifiers::NONE),
+        command: EditCommand::Delete,
+    },
+    KeyBinding {
+        key: (KeyCode::Up, KeyModifiers::NONE),
+        command: EditCommand::HistoryNextBack,
+    },
+    KeyBinding {
+        key: (KeyCode::Down, KeyModifiers::NONE),
+        command: EditCommand::HistoryNext,
+    },
+    KeyBinding {
+        key: (KeyCode::Esc, KeyModifiers::NONE),
+        command: EditCommand::RestoreDraft,
+    },
+    KeyBinding {
+        key: (KeyCode::Tab, KeyModifiers::NONE),
+        command: EditCommand::CharInput('\t'),
+    },
+];
 
 #[cfg(test)]
 #[allow(clippy::unicode_not_nfc)]
@@ -383,6 +472,7 @@ mod tests {
     use crate::renderer::ViewState;
     use crate::renderer::tests::ViewBuilder;
 
+    use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
     use similar_asserts::assert_eq;
 
