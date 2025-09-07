@@ -23,6 +23,17 @@ impl HistoryStack {
         self.index = self.entries.len();
     }
 
+    /// Return reference to currently indexed stack entry,
+    /// if not empty or at top of stack. Otherwise return
+    /// None.
+    pub fn peek(&self) -> Option<&str> {
+        if self.index == self.entries.len() {
+            return None;
+        }
+        let entry = &self.entries[self.index];
+        entry.edited.as_ref().or(Some(&entry.line)).map(String::as_str)
+    }
+
     /// Return reference to last (top) stack entry,
     /// or None if stack is empty.
     pub fn last(&self) -> Option<&str> {
@@ -136,5 +147,80 @@ pub(crate) mod tests {
                 index: self.index,
             }
         }
+    }
+
+    #[test]
+    fn push_adds_entry_to_empty_stack() {
+        let line = "added line";
+        let mut hs = HistoryStack::new();
+        let mut builder = HistoryStackBuilder::new();
+        let expected =
+            builder.with_entries(&[(line, None)]).with_index(1).build();
+        assert!(hs.entries.is_empty());
+        assert_eq!(hs.index, 0);
+        hs.push(line.to_owned());
+        assert_eq!(hs, expected);
+    }
+
+    #[test]
+    fn push_adds_another_entry_to_stack() {
+        let line = "added line";
+        let mut builder = HistoryStackBuilder::new();
+        let mut hs =
+            builder.with_entries(&[("old line", None)]).with_index(1).build();
+        let expected = builder
+            .with_entries(&[("old line", None), (line, None)])
+            .with_index(2)
+            .build();
+        hs.push(line.to_owned());
+        assert_eq!(hs, expected);
+    }
+
+    #[test]
+    fn last_on_empty_stack_returns_none() {
+        let hs = HistoryStack::new();
+        assert!(hs.last().is_none());
+    }
+
+    #[test]
+    fn last_returns_newest_stack_item() {
+        let mut hsb = HistoryStackBuilder::new();
+        let hs = hsb
+            .with_entries(&[("oldest", None), ("older", None), ("old", None)])
+            .with_index(3)
+            .build();
+        let line = hs.last();
+        assert_eq!(line, Some("old"));
+    }
+
+    #[test]
+    fn peek_of_empty_stack_returns_none() {
+        let hs = HistoryStack::new();
+        assert!(hs.peek().is_none());
+    }
+
+    #[test]
+    fn peek_of_rewound_stack_returns_none() {
+        let mut hsb = HistoryStackBuilder::new();
+        let mut hs = hsb
+            .with_entries(&[("1", None), ("2", None), ("3", None)])
+            .with_index(3)
+            .build();
+        hs.rewind();
+        let res = hs.peek();
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn peek_returns_current_item() {
+        let mut hsb = HistoryStackBuilder::new();
+        let mut hs = hsb
+            .with_entries(&[("oldest", None), ("older", None), ("old", None)])
+            .with_index(3)
+            .build();
+        let line = hs.next_older("old");
+        assert_eq!(line, Some("old"));
+        let peeked = hs.peek();
+        assert_eq!(peeked, Some("old"));
     }
 }
