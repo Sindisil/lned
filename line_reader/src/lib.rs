@@ -244,7 +244,7 @@ fn handle_history_next(
     view: &mut View,
     history: Option<&mut HistoryStack>,
 ) -> ControlFlow<()> {
-    if let Some(history_line) = history.and_then(|h| h.next_newer(buffer)) {
+    if let Some(history_line) = history.and_then(|h| h.next_newer()) {
         buffer.replace_range(.., history_line);
         view.set_insertion_point(buffer.len());
     }
@@ -1159,10 +1159,8 @@ mod tests {
         let mut view = ViewBuilder::new().build();
 
         let mut hs = Some(HistoryStack::new());
-        let expected_hs = HistoryStackBuilder::new()
-            .with_entries(&[("123456789abc", None)])
-            .with_index(1)
-            .build();
+        let expected_hs =
+            HistoryStackBuilder::new().with_entries(&["123456789abc"]).build();
         let res = handle_event(
             &mut buf,
             &mut view,
@@ -1183,13 +1181,9 @@ mod tests {
 
         let mut hs_builder = HistoryStackBuilder::new();
         hs_builder.with_draft(Some("123456789abc"));
-        let mut hs = Some(
-            hs_builder
-                .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
-                .with_index(3)
-                .build(),
-        );
-        let expected_hs = hs_builder.with_index(2).build();
+        let mut hs =
+            Some(hs_builder.with_entries(&["foo", "bar", "baz"]).build());
+        let expected_hs = hs_builder.with_index(Some(2)).build();
 
         let res = handle_event(
             &mut buf,
@@ -1202,41 +1196,6 @@ mod tests {
         assert!(res.is_continue());
         assert_eq!(&buf, expected_buf);
         assert_eq!(hs.unwrap(), expected_hs);
-        assert!(!view.is_valid());
-        assert_eq!(view.insertion_point(), expected_buf.len());
-    }
-
-    #[test]
-    fn up_editing_history_saves_edited_and_views_next_older_history() {
-        let mut buf = "ba".to_owned();
-        let expected_buf = "foo";
-
-        let mut view = ViewBuilder::new().build();
-
-        let mut hs_builder = HistoryStackBuilder::new();
-        let mut hs = Some(
-            hs_builder
-                .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
-                .with_index(1)
-                .with_draft(Some("123456789abc"))
-                .build(),
-        );
-        let expected_hs = hs_builder
-            .with_entries(&[("foo", None), ("bar", Some("ba")), ("baz", None)])
-            .with_index(0)
-            .build();
-
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
-        )
-        .unwrap();
-
-        assert!(res.is_continue());
-        assert_eq!(hs.unwrap(), expected_hs);
-        assert_eq!(&buf, expected_buf);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), expected_buf.len());
     }
@@ -1250,12 +1209,12 @@ mod tests {
 
         let mut hs_builder = HistoryStackBuilder::new();
         hs_builder
-            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_entries(&["foo", "bar", "baz"])
             .with_draft(Some("123456789abc"));
-        let mut hs = Some(hs_builder.with_index(1).build());
+        let mut hs = Some(hs_builder.with_index(Some(1)).build());
         let expected_hs = hs_builder
-            .with_entries(&[("foo", None), ("bar", Some("ba")), ("baz", None)])
-            .with_index(0)
+            .with_entries(&["foo", "bar", "baz"])
+            .with_index(Some(0))
             .build();
 
         let res = handle_event(
@@ -1273,13 +1232,8 @@ mod tests {
         assert_eq!(hs.as_ref(), Some(&expected_hs));
 
         let expected_hs = hs_builder
-            .with_entries(&[
-                ("foo", None),
-                ("bar", None),
-                ("baz", None),
-                ("foo", None),
-            ])
-            .with_index(4)
+            .with_entries(&["foo", "bar", "baz", "foo"])
+            .with_index(None)
             .with_draft(None)
             .build();
         let res = handle_event(
@@ -1304,10 +1258,10 @@ mod tests {
 
         let mut hs_builder = HistoryStackBuilder::new();
         hs_builder
-            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_entries(&["foo", "bar", "baz"])
             .with_draft(Some("123456789abc"));
-        let expected_hs = hs_builder.with_index(1).build();
-        let mut hs = Some(hs_builder.with_index(2).build());
+        let expected_hs = hs_builder.with_index(Some(1)).build();
+        let mut hs = Some(hs_builder.with_index(Some(2)).build());
 
         let res = handle_event(
             &mut buf,
@@ -1332,9 +1286,9 @@ mod tests {
 
         let mut hs_builder = HistoryStackBuilder::new();
         hs_builder
-            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_entries(&["foo", "bar", "baz"])
             .with_draft(Some("123456789abc"));
-        let expected_hs = hs_builder.with_index(0).build();
+        let expected_hs = hs_builder.with_index(Some(0)).build();
         let mut hs = Some(hs_builder.build());
 
         let expected_buf = buf.clone();
@@ -1363,10 +1317,10 @@ mod tests {
 
         let mut hs_builder = HistoryStackBuilder::new();
         hs_builder
-            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_entries(&["foo", "bar", "baz"])
             .with_draft(Some("123456789abc"));
-        let expected_hs = hs_builder.with_index(1).build();
-        let mut hs = Some(hs_builder.with_index(0).build());
+        let expected_hs = hs_builder.with_index(Some(1)).build();
+        let mut hs = Some(hs_builder.with_index(Some(0)).build());
 
         let res = handle_event(
             &mut buf,
@@ -1393,10 +1347,9 @@ mod tests {
         let mut view = ViewBuilder::new().build();
 
         let mut hs_builder = HistoryStackBuilder::new();
-        hs_builder.with_entries(&[("foo", None), ("bar", None), ("baz", None)]);
-        let expected_hs =
-            hs_builder.with_index(3).with_draft(Some(draft)).build();
-        let mut hs = Some(hs_builder.with_index(2).build());
+        hs_builder.with_entries(&["foo", "bar", "baz"]);
+        let expected_hs = hs_builder.with_draft(Some(draft)).build();
+        let mut hs = Some(hs_builder.with_index(Some(2)).build());
 
         let res = handle_event(
             &mut buf,
@@ -1416,12 +1369,13 @@ mod tests {
     #[test]
     fn esc_editing_history_edits_draft() {
         let mut hs_builder = HistoryStackBuilder::new();
-        let expected_hs = hs_builder
-            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
-            .with_index(3)
-            .build();
+        let expected_hs =
+            hs_builder.with_entries(&["foo", "bar", "baz"]).build();
         let mut hs = Some(
-            hs_builder.with_draft(Some("123456789abc")).with_index(0).build(),
+            hs_builder
+                .with_draft(Some("123456789abc"))
+                .with_index(Some(0))
+                .build(),
         );
 
         let expected_buf = "123456789abc";
@@ -1470,12 +1424,15 @@ mod tests {
         let mut buf = "foo".to_owned();
         let mut view = ViewBuilder::new().build();
         let mut hs_builder = HistoryStackBuilder::new();
-        hs_builder.with_entries(&[("foo", None), ("bar", None), ("baz", None)]);
-        let hs =
-            hs_builder.with_draft(Some("123456789abc")).with_index(0).build();
+        hs_builder.with_entries(&["foo", "bar", "baz"]);
+        let hs = hs_builder
+            .with_draft(Some("123456789abc"))
+            .with_index(Some(0))
+            .build();
 
         let expected_buf = "123456789abc";
-        let expected_hs = hs_builder.with_index(3).with_draft(None).build();
+        let expected_hs =
+            hs_builder.with_index(Some(3)).with_draft(None).build();
 
         let mut hs = Some(hs);
         let res = handle_event(
