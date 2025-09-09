@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use lexopt::prelude::*;
 
 pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
-pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const APP_VERSION: &str = env!("LNED_VERSION");
 pub const APP_DESCRIPTION: &str = env!("CARGO_PKG_DESCRIPTION");
 const APP_HELP: &str = "
 Usage: lned [OPTIONS] [file]
@@ -73,13 +73,12 @@ pub fn parse_args(
             Short('h') | Long("help") => {
                 writeln!(&mut output, "{APP_NAME} - {APP_DESCRIPTION}")
                     .unwrap();
-                writeln!(&mut output, "Version {APP_VERSION}").unwrap();
+                writeln!(&mut output, "{APP_VERSION}").unwrap();
                 write!(&mut output, "{APP_HELP}").unwrap();
                 return Err(Error::WroteMessage);
             }
             Short('V') | Long("version") => {
-                writeln!(&mut output, "{APP_NAME} version {APP_VERSION}")
-                    .unwrap();
+                writeln!(&mut output, "{APP_NAME} {APP_VERSION}").unwrap();
                 return Err(Error::WroteMessage);
             }
             Value(val) if cmd_args.file.is_none() => {
@@ -102,7 +101,7 @@ mod tests {
     #[test]
     fn help_options_output_help_message() {
         let expected = format!(
-            "{APP_NAME} - {APP_DESCRIPTION}\nVersion {APP_VERSION}\n{APP_HELP}"
+            "{APP_NAME} - {APP_DESCRIPTION}\n{APP_VERSION}\n{APP_HELP}"
         );
         let mut output = Vec::new();
         let args = &["test", "-h"];
@@ -118,7 +117,7 @@ mod tests {
 
     #[test]
     fn version_options_output_version_message() {
-        let expected = format!("{APP_NAME} version {APP_VERSION}\n");
+        let expected = format!("{APP_NAME} {APP_VERSION}\n");
         let mut output = Vec::new();
         let args = &["test", "-V"];
         let res = parse_args(&mut output, args);

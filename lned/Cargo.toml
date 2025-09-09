@@ -2,6 +2,7 @@
 name = "lned"
 description = "A line oriented text editor"
 version = "0.6.0-alpha"
+build = "build.rs"
 edition = "2024"
 
 [dependencies]

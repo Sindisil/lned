@@ -1258,7 +1258,7 @@ impl FileWrite for EditedFile {
 }
 
 fn version_cmd(output: &mut impl Write) {
-    writeln!(output, "{} version {}", cli::APP_NAME, cli::APP_VERSION)
+    writeln!(output, "{} {}", cli::APP_NAME, cli::APP_VERSION)
         .expect("reliable stdout");
 }
 fn write_cmd(
