@@ -180,15 +180,18 @@ fn handle_key_pressed(
     history: Option<&mut HistoryStack>,
 ) -> ControlFlow<()> {
     // decode command
-    let command = if let (KeyCode::Char(ch), KeyModifiers::NONE) = key {
-        EditCommand::CharInput(ch)
-    } else if let Some(binding) =
-        KEY_BINDINGS.iter().find(|binding| binding.key == key)
-    {
-        binding.command
-    } else {
-        return ControlFlow::Continue(());
-    };
+    let command =
+        if let (KeyCode::Char(ch), KeyModifiers::NONE | KeyModifiers::SHIFT) =
+            key
+        {
+            EditCommand::CharInput(ch)
+        } else if let Some(binding) =
+            KEY_BINDINGS.iter().find(|binding| binding.key == key)
+        {
+            binding.command
+        } else {
+            return ControlFlow::Continue(());
+        };
 
     // dispatch command
     match command {
@@ -528,7 +531,7 @@ mod tests {
     #[test]
     fn char_input_non_0w_inserts() {
         let mut buf = String::new();
-        let expected_buf = "🎸";
+        let expected_buf = "🎸!";
 
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
 
@@ -541,6 +544,16 @@ mod tests {
         .unwrap();
 
         assert!(res.is_continue(),);
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::SHIFT)),
+        )
+        .unwrap();
+
+        assert!(res.is_continue(),);
+
         assert_eq!(&buf, expected_buf);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), expected_buf.len());
