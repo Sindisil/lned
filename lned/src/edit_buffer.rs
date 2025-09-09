@@ -468,6 +468,7 @@ impl EditBuffer {
 
     pub fn clear_text(&mut self) {
         self.text.clear();
+        self.current_line = 0;
         self.default_eol = None;
     }
 
