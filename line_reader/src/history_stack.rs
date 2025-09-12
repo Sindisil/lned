@@ -33,16 +33,6 @@ impl HistoryStack {
         self.search_cursor = None;
     }
 
-    /// Return reference to currently indexed stack entry,
-    /// if not empty or at top of stack. Otherwise return
-    /// None.
-    pub fn peek(&self) -> Option<&str> {
-        if self.index == self.entries.len() {
-            return None;
-        }
-        Some(&self.entries[self.index])
-    }
-
     /// Return reference to last (top) stack entry,
     /// or None if stack is empty.
     pub fn last(&self) -> Option<&str> {
@@ -256,31 +246,6 @@ pub(crate) mod tests {
         let hs = hsb.with_entries(&["oldest", "older", "old"]).build();
         let line = hs.last();
         assert_eq!(line, Some("old"));
-    }
-
-    #[test]
-    fn peek_of_empty_stack_returns_none() {
-        let hs = HistoryStack::new();
-        assert!(hs.peek().is_none());
-    }
-
-    #[test]
-    fn peek_of_rewound_stack_returns_none() {
-        let mut hsb = HistoryStackBuilder::new();
-        let mut hs = hsb.with_entries(&["1", "2", "3"]).build();
-        hs.rewind();
-        let res = hs.peek();
-        assert!(res.is_none());
-    }
-
-    #[test]
-    fn peek_returns_current_item() {
-        let mut hsb = HistoryStackBuilder::new();
-        let mut hs = hsb.with_entries(&["oldest", "older", "old"]).build();
-        let line = hs.next_older("old");
-        assert_eq!(line, Some("old"));
-        let peeked = hs.peek();
-        assert_eq!(peeked, Some("old"));
     }
 
     #[test]
