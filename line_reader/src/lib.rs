@@ -216,6 +216,8 @@ fn handle_key_pressed(
             handle_history_rfind(buffer, view, history)
         }
         EditCommand::HistoryFind => handle_history_find(buffer, view, history),
+        EditCommand::Indent => handle_indent(buffer, view),
+        EditCommand::Dedent => handle_dedent(buffer, view),
     }
 }
 
@@ -423,6 +425,43 @@ fn handle_history_rfind(
     ControlFlow::Continue(())
 }
 
+fn handle_indent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
+    // If the first buffer char is tab ('\t'), insert one additional
+    // tab at start of line. If not, insert up to 4 space (' ') chars
+    // at start of line, so that leading spaces are the next multiple
+    // of four.
+    if buffer.starts_with('\t') {
+        buffer.insert(0, '\t');
+        view.set_insertion_point(view.insertion_point() + 1);
+    } else {
+        let leading_spaces = buffer.chars().take_while(|c| *c == ' ').count();
+        let next_stop = (leading_spaces + 1).next_multiple_of(4);
+        let to_add = next_stop - leading_spaces;
+        buffer.insert_str(0, &"    "[..to_add]);
+        view.set_insertion_point(view.insertion_point() + to_add);
+    }
+    ControlFlow::Continue(())
+}
+
+fn handle_dedent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
+    // If the first buffer char is tab ('\t'), delete it.
+    // If not, delete up to 4 leading spaces so that the
+    // number of remaining leading spaces is a multple of four.
+    if buffer.starts_with('\t') {
+        buffer.remove(1);
+        view.set_insertion_point(view.insertion_point().saturating_sub(1));
+    } else if buffer.starts_with(' ') {
+        let leading_spaces = buffer.chars().take_while(|c| *c == ' ').count();
+        let previous_stop = (leading_spaces / 4).saturating_sub(1) * 4;
+        let to_remove = leading_spaces.saturating_sub(previous_stop);
+        buffer.replace_range(..to_remove, "");
+        view.set_insertion_point(
+            view.insertion_point().saturating_sub(to_remove),
+        );
+    }
+    ControlFlow::Continue(())
+}
+
 #[derive(Debug, Copy, Clone)]
 enum EditCommand {
     CharInput(char),
@@ -440,6 +479,8 @@ enum EditCommand {
     AcceptLine,
     HistoryRFind,
     HistoryFind,
+    Indent,
+    Dedent,
 }
 
 #[derive(Debug)]
@@ -448,7 +489,7 @@ struct KeyBinding {
     command: EditCommand,
 }
 
-const KEY_BINDINGS: [KeyBinding; 17] = [
+const KEY_BINDINGS: [KeyBinding; 19] = [
     KeyBinding {
         key: (KeyCode::Enter, KeyModifiers::NONE),
         command: EditCommand::AcceptLine,
@@ -499,7 +540,11 @@ const KEY_BINDINGS: [KeyBinding; 17] = [
     },
     KeyBinding {
         key: (KeyCode::Tab, KeyModifiers::NONE),
-        command: EditCommand::CharInput('\t'),
+        command: EditCommand::Indent,
+    },
+    KeyBinding {
+        key: (KeyCode::BackTab, KeyModifiers::SHIFT),
+        command: EditCommand::Dedent,
     },
     KeyBinding {
         key: (KeyCode::F(8), KeyModifiers::NONE),
@@ -516,6 +561,10 @@ const KEY_BINDINGS: [KeyBinding; 17] = [
     KeyBinding {
         key: (KeyCode::Char('s'), KeyModifiers::CONTROL),
         command: EditCommand::HistoryFind,
+    },
+    KeyBinding {
+        key: (KeyCode::Char('i'), KeyModifiers::CONTROL),
+        command: EditCommand::CharInput('\t'),
     },
 ];
 
@@ -1687,5 +1736,154 @@ mod tests {
         assert!(res.is_continue());
         assert_eq!(&buf, "newest");
         assert_eq!(view.insertion_point(), 2);
+    }
+
+    #[test]
+    fn ctrl_i_inputs_tab() {
+        let mut buf = "text".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(1).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(
+                KeyCode::Char('i'),
+                KeyModifiers::CONTROL,
+            )),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buf, "t\text");
+        assert_eq!(view.insertion_point(), 2);
+    }
+
+    #[test]
+    fn tab_indents_with_tab() {
+        let mut buf = "\tline".to_owned();
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len()).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(&buf, "\t\tline");
+        assert_eq!(view.insertion_point(), buf.len());
+    }
+
+    #[test]
+    fn tab_indents_with_spaces() {
+        let mut buf = "line".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(2).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(&buf, "    line");
+        assert_eq!(view.insertion_point(), 6);
+        let mut buf = "     line".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(6).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(&buf, "        line");
+        assert_eq!(view.insertion_point(), 9);
+    }
+
+    #[test]
+    fn tab_indents_correctly_with_mixed_leading_blanks() {
+        let mut buf = "     \tline".to_owned();
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len()).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buf, "        \tline");
+        assert_eq!(view.insertion_point(), buf.len());
+
+        let mut buf = "\t\t  line".to_owned();
+        view.set_insertion_point(buf.len());
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buf, "\t\t\t  line");
+        assert_eq!(view.insertion_point(), buf.len());
+    }
+
+    #[test]
+    fn backtab_dedents_with_tab() {
+        let mut buf = "\t\tline".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(5).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buf, "\tline");
+        assert_eq!(view.insertion_point(), 4);
+    }
+
+    #[test]
+    fn backtab_dedents_with_spaces() {
+        let mut buf = "        line".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(10).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(&buf, "    line");
+        assert_eq!(view.insertion_point(), 6);
+    }
+
+    #[test]
+    fn backtab_nop_with_no_indent() {
+        let mut buf = "line".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(2).build();
+        let expected_buf = buf.clone();
+        let expected_view = view.clone();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(view.is_valid());
+        assert_eq!(buf, expected_buf);
+        assert_eq!(view, expected_view);
     }
 }
