@@ -218,6 +218,8 @@ fn handle_key_pressed(
         EditCommand::HistoryFind => handle_history_find(buffer, view, history),
         EditCommand::Indent => handle_indent(buffer, view),
         EditCommand::Dedent => handle_dedent(buffer, view),
+        EditCommand::CursorLeftSpan => handle_cursor_left_span(buffer, view),
+        EditCommand::CursorRightSpan => handle_cursor_right_span(buffer, view),
     }
 }
 
@@ -462,6 +464,69 @@ fn handle_dedent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum CharClass {
+    Word,
+    Space,
+    Other,
+}
+
+fn char_class(ch: char) -> CharClass {
+    match ch {
+        ch if ch.is_whitespace() => CharClass::Space,
+        ch if ch.is_word_char() => CharClass::Word,
+        _ => CharClass::Other,
+    }
+}
+
+trait CharUtils {
+    fn is_word_char(&self) -> bool;
+}
+
+impl CharUtils for char {
+    fn is_word_char(&self) -> bool {
+        self.is_alphanumeric() || *self == '_'
+    }
+}
+
+/// Moves `view`'s insertion point to the first character
+/// of the same character class as the character just
+/// before the insertion point, if any.
+///
+/// Character classes are: Whitespace, Word (alphanumeric or
+/// '_'), or Other (any other character).
+fn handle_cursor_left_span(buffer: &str, view: &mut View) -> ControlFlow<()> {
+    let mut cells = buffer[..view.insertion_point()].char_indices();
+    if let Some((_, ch)) = cells.next_back() {
+        let class = char_class(ch);
+        view.set_insertion_point(
+            cells
+                .rfind(|(_, ch)| char_class(*ch) != class)
+                .map_or(0, |c| c.0 + 1),
+        );
+    }
+    ControlFlow::Continue(())
+}
+
+/// Moves `view`'s insertion point to just after the last
+/// character of the same character class as the character
+/// just after the insertion point, if any.
+///
+/// Character classes are: Whitespace, Word (alphanumeric or
+/// '_'), or Other (any other character).
+fn handle_cursor_right_span(buffer: &str, view: &mut View) -> ControlFlow<()> {
+    let mut cells = buffer.char_indices().skip(view.insertion_point());
+    if let Some((_, ch)) = cells.next() {
+        let class = char_class(ch);
+        view.set_insertion_point(
+            cells
+                .find(|(_, ch)| char_class(*ch) != class)
+                .map_or(buffer.len(), |c| c.0),
+        );
+    }
+    ControlFlow::Continue(())
+}
+
 #[derive(Debug, Copy, Clone)]
 enum EditCommand {
     CharInput(char),
@@ -481,6 +546,8 @@ enum EditCommand {
     HistoryFind,
     Indent,
     Dedent,
+    CursorLeftSpan,
+    CursorRightSpan,
 }
 
 #[derive(Debug)]
@@ -489,7 +556,7 @@ struct KeyBinding {
     command: EditCommand,
 }
 
-const KEY_BINDINGS: [KeyBinding; 19] = [
+const KEY_BINDINGS: [KeyBinding; 21] = [
     KeyBinding {
         key: (KeyCode::Enter, KeyModifiers::NONE),
         command: EditCommand::AcceptLine,
@@ -565,6 +632,14 @@ const KEY_BINDINGS: [KeyBinding; 19] = [
     KeyBinding {
         key: (KeyCode::Char('i'), KeyModifiers::CONTROL),
         command: EditCommand::CharInput('\t'),
+    },
+    KeyBinding {
+        key: (KeyCode::Left, KeyModifiers::CONTROL),
+        command: EditCommand::CursorLeftSpan,
+    },
+    KeyBinding {
+        key: (KeyCode::Right, KeyModifiers::CONTROL),
+        command: EditCommand::CursorRightSpan,
     },
 ];
 
@@ -1884,6 +1959,149 @@ mod tests {
         assert!(res.is_continue());
         assert!(view.is_valid());
         assert_eq!(buf, expected_buf);
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn cursor_right_jumps_to_next_char_class_span() {
+        let mut buf = "word \t  (())".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(0).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(4, view.insertion_point());
+        assert!(!view.is_valid());
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(8, view.insertion_point());
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(12, view.insertion_point());
+    }
+
+    #[test]
+    fn cursor_right_nop_at_end() {
+        let mut buf = "chars".to_owned();
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len()).build();
+        let expected_view = view.clone();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(view.is_valid());
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn cursor_right_nop_on_empty_buffer() {
+        let mut buf = String::new();
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len()).build();
+        let expected_view = view.clone();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(view.is_valid());
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn cursor_left_jumps_to_start_of_previous_char_class_span() {
+        let mut buf = "word \t  (())".to_owned();
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buf.len()).build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(8, view.insertion_point());
+        assert!(!view.is_valid());
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(4, view.insertion_point());
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(0, view.insertion_point());
+    }
+
+    #[test]
+    fn cursor_left_nop_at_start() {
+        let mut buf = "chars".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(0).build();
+        let expected_view = view.clone();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(view.is_valid());
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn cursor_left_nop_on_empty_buffer() {
+        let mut buf = String::new();
+        let mut view = ViewBuilder::new().with_insertion_point(0).build();
+        let expected_view = view.clone();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(view.is_valid());
         assert_eq!(view, expected_view);
     }
 }
