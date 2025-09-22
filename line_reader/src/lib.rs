@@ -3,11 +3,16 @@ mod renderer;
 
 use std::io::{self, BufRead, Write};
 use std::ops::ControlFlow;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crossterm::cursor::{self};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal;
+
+use regex::Regex;
+
+use unicode_segmentation::UnicodeSegmentation;
 
 use unicode_width::UnicodeWidthChar;
 
@@ -465,63 +470,73 @@ fn handle_dedent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum CharClass {
+enum SpanType {
+    Empty,
     Word,
     Space,
+    Symbol,
     Other,
 }
 
-fn char_class(ch: char) -> CharClass {
-    match ch {
-        ch if ch.is_whitespace() => CharClass::Space,
-        ch if ch.is_word_char() => CharClass::Word,
-        _ => CharClass::Other,
+static SYMBOL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[\p{S}\p{P}]").unwrap());
+
+fn span_type(s: &str) -> SpanType {
+    if s.is_empty() {
+        return SpanType::Empty;
+    }
+    if s.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+        SpanType::Word
+    } else if s.starts_with(char::is_whitespace) {
+        SpanType::Space
+    } else if SYMBOL.is_match(s) {
+        SpanType::Symbol
+    } else {
+        SpanType::Other
     }
 }
 
-trait CharUtils {
-    fn is_word_char(&self) -> bool;
-}
-
-impl CharUtils for char {
-    fn is_word_char(&self) -> bool {
-        self.is_alphanumeric() || *self == '_'
-    }
-}
-
-/// Moves `view`'s insertion point to the first character
-/// of the same character class as the character just
-/// before the insertion point, if any.
-///
-/// Character classes are: Whitespace, Word (alphanumeric or
-/// '_'), or Other (any other character).
 fn handle_cursor_left_span(buffer: &str, view: &mut View) -> ControlFlow<()> {
-    let mut cells = buffer[..view.insertion_point()].char_indices();
-    if let Some((_, ch)) = cells.next_back() {
-        let class = char_class(ch);
-        view.set_insertion_point(
-            cells
-                .rfind(|(_, ch)| char_class(*ch) != class)
-                .map_or(0, |c| c.0 + 1),
-        );
+    if view.insertion_point() == 0 {
+        return ControlFlow::Continue(());
     }
+
+    let mut gr_idxs = buffer[..view.insertion_point()]
+        .grapheme_indices(true)
+        .rev()
+        .skip_while(|(_, gr)| span_type(gr) == SpanType::Space);
+    let Some((idx, target_span_type)) =
+        gr_idxs.next().map(|(idx, gr)| (idx, span_type(gr)))
+    else {
+        view.set_insertion_point(0);
+        return ControlFlow::Continue(());
+    };
+    view.set_insertion_point(
+        gr_idxs
+            .take_while(|(_, gr)| span_type(gr) == target_span_type)
+            .last()
+            .map_or(idx, |(i, _)| i),
+    );
     ControlFlow::Continue(())
 }
 
-/// Moves `view`'s insertion point to just after the last
-/// character of the same character class as the character
-/// just after the insertion point, if any.
-///
-/// Character classes are: Whitespace, Word (alphanumeric or
-/// '_'), or Other (any other character).
 fn handle_cursor_right_span(buffer: &str, view: &mut View) -> ControlFlow<()> {
-    let mut cells = buffer.char_indices().skip(view.insertion_point());
-    if let Some((_, ch)) = cells.next() {
-        let class = char_class(ch);
+    let mut gr_idxs = buffer
+        .grapheme_indices(true)
+        .skip_while(|(i, _)| *i < view.insertion_point());
+    let mut current_span_type =
+        gr_idxs.next().map_or(SpanType::Empty, |(_, gr)| span_type(gr));
+    if current_span_type != SpanType::Empty {
         view.set_insertion_point(
-            cells
-                .find(|(_, ch)| char_class(*ch) != class)
-                .map_or(buffer.len(), |c| c.0),
+            gr_idxs
+                .find(|(_, gr)| match span_type(gr) {
+                    SpanType::Space => {
+                        current_span_type = SpanType::Space;
+                        false
+                    }
+                    st => st != current_span_type,
+                })
+                .map_or(buffer.len(), |(i, _)| i),
         );
     }
     ControlFlow::Continue(())
@@ -1963,7 +1978,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_right_jumps_to_next_char_class_span() {
+    fn cursor_right_jumps_to_next_word() {
         let mut buf = "word \t  (())".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let res = handle_event(
@@ -1974,18 +1989,8 @@ mod tests {
         )
         .unwrap();
         assert!(res.is_continue());
-        assert_eq!(4, view.insertion_point());
-        assert!(!view.is_valid());
-
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
-        assert!(res.is_continue());
         assert_eq!(8, view.insertion_point());
+        assert!(!view.is_valid());
 
         let res = handle_event(
             &mut buf,
@@ -2035,7 +2040,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_left_jumps_to_start_of_previous_char_class_span() {
+    fn cursor_left_jumps_to_start_of_previous_word() {
         let mut buf = "word \t  (())".to_owned();
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len()).build();
@@ -2049,16 +2054,6 @@ mod tests {
         assert!(res.is_continue());
         assert_eq!(8, view.insertion_point());
         assert!(!view.is_valid());
-
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
-        assert!(res.is_continue());
-        assert_eq!(4, view.insertion_point());
 
         let res = handle_event(
             &mut buf,
