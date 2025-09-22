@@ -223,8 +223,10 @@ fn handle_key_pressed(
         EditCommand::HistoryFind => handle_history_find(buffer, view, history),
         EditCommand::Indent => handle_indent(buffer, view),
         EditCommand::Dedent => handle_dedent(buffer, view),
-        EditCommand::CursorLeftSpan => handle_cursor_left_span(buffer, view),
-        EditCommand::CursorRightSpan => handle_cursor_right_span(buffer, view),
+        EditCommand::CursorSpanLeft => handle_cursor_span_left(buffer, view),
+        EditCommand::CursorSpanRight => handle_cursor_span_right(buffer, view),
+        EditCommand::DeleteSpanLeft => handle_delete_span_left(buffer, view),
+        EditCommand::DeleteSpanRight => handle_delete_span_right(buffer, view),
     }
 }
 
@@ -496,7 +498,7 @@ fn span_type(s: &str) -> SpanType {
     }
 }
 
-fn handle_cursor_left_span(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn handle_cursor_span_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() == 0 {
         return ControlFlow::Continue(());
     }
@@ -505,22 +507,23 @@ fn handle_cursor_left_span(buffer: &str, view: &mut View) -> ControlFlow<()> {
         .grapheme_indices(true)
         .rev()
         .skip_while(|(_, gr)| span_type(gr) == SpanType::Space);
-    let Some((idx, target_span_type)) =
+    if let Some((idx, target_span_type)) =
         gr_idxs.next().map(|(idx, gr)| (idx, span_type(gr)))
-    else {
+    {
+        view.set_insertion_point(
+            gr_idxs
+                .take_while(|(_, gr)| span_type(gr) == target_span_type)
+                .last()
+                .map_or(idx, |(i, _)| i),
+        );
+    } else {
         view.set_insertion_point(0);
-        return ControlFlow::Continue(());
-    };
-    view.set_insertion_point(
-        gr_idxs
-            .take_while(|(_, gr)| span_type(gr) == target_span_type)
-            .last()
-            .map_or(idx, |(i, _)| i),
-    );
+    }
+
     ControlFlow::Continue(())
 }
 
-fn handle_cursor_right_span(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn handle_cursor_span_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
     let mut gr_idxs = buffer
         .grapheme_indices(true)
         .skip_while(|(i, _)| *i < view.insertion_point());
@@ -538,6 +541,56 @@ fn handle_cursor_right_span(buffer: &str, view: &mut View) -> ControlFlow<()> {
                 })
                 .map_or(buffer.len(), |(i, _)| i),
         );
+    }
+    ControlFlow::Continue(())
+}
+
+fn handle_delete_span_left(
+    buffer: &mut String,
+    view: &mut View,
+) -> ControlFlow<()> {
+    if view.insertion_point() == 0 {
+        return ControlFlow::Continue(());
+    }
+
+    let mut gr_idxs = buffer[..view.insertion_point()]
+        .grapheme_indices(true)
+        .rev()
+        .skip_while(|(_, gr)| span_type(gr) == SpanType::Space);
+    let (idx, target_span_type) = gr_idxs
+        .next()
+        .map_or((0, SpanType::Space), |(idx, gr)| (idx, span_type(gr)));
+
+    let span_start = gr_idxs
+        .take_while(|(_, gr)| span_type(gr) == target_span_type)
+        .last()
+        .map_or(idx, |(i, _)| i);
+    buffer.replace_range(span_start..view.insertion_point(), "");
+    view.set_insertion_point(span_start);
+    ControlFlow::Continue(())
+}
+
+fn handle_delete_span_right(
+    buffer: &mut String,
+    view: &mut View,
+) -> ControlFlow<()> {
+    let mut gr_idxs = buffer
+        .grapheme_indices(true)
+        .skip_while(|(i, _)| *i < view.insertion_point());
+    let mut current_span_type =
+        gr_idxs.next().map_or(SpanType::Empty, |(_, gr)| span_type(gr));
+    if current_span_type != SpanType::Empty {
+        let span_end = gr_idxs
+            .find(|(_, gr)| match span_type(gr) {
+                SpanType::Space => {
+                    current_span_type = SpanType::Space;
+                    false
+                }
+                st => st != current_span_type,
+            })
+            .map_or(buffer.len(), |(i, _)| i);
+        buffer.replace_range(view.insertion_point()..span_end, "");
+        view.invalidate();
     }
     ControlFlow::Continue(())
 }
@@ -561,8 +614,10 @@ enum EditCommand {
     HistoryFind,
     Indent,
     Dedent,
-    CursorLeftSpan,
-    CursorRightSpan,
+    CursorSpanLeft,
+    CursorSpanRight,
+    DeleteSpanLeft,
+    DeleteSpanRight,
 }
 
 #[derive(Debug)]
@@ -571,7 +626,7 @@ struct KeyBinding {
     command: EditCommand,
 }
 
-const KEY_BINDINGS: [KeyBinding; 21] = [
+const KEY_BINDINGS: [KeyBinding; 23] = [
     KeyBinding {
         key: (KeyCode::Enter, KeyModifiers::NONE),
         command: EditCommand::AcceptLine,
@@ -650,11 +705,19 @@ const KEY_BINDINGS: [KeyBinding; 21] = [
     },
     KeyBinding {
         key: (KeyCode::Left, KeyModifiers::CONTROL),
-        command: EditCommand::CursorLeftSpan,
+        command: EditCommand::CursorSpanLeft,
     },
     KeyBinding {
         key: (KeyCode::Right, KeyModifiers::CONTROL),
-        command: EditCommand::CursorRightSpan,
+        command: EditCommand::CursorSpanRight,
+    },
+    KeyBinding {
+        key: (KeyCode::Backspace, KeyModifiers::CONTROL),
+        command: EditCommand::DeleteSpanLeft,
+    },
+    KeyBinding {
+        key: (KeyCode::Delete, KeyModifiers::CONTROL),
+        command: EditCommand::DeleteSpanRight,
     },
 ];
 
@@ -1978,9 +2041,9 @@ mod tests {
     }
 
     #[test]
-    fn cursor_right_jumps_to_next_word() {
+    fn cursor_span_right_jumps_to_next_word() {
         let mut buf = "word \t  (())".to_owned();
-        let mut view = ViewBuilder::new().with_insertion_point(0).build();
+        let mut view = ViewBuilder::new().with_insertion_point(2).build();
         let res = handle_event(
             &mut buf,
             &mut view,
@@ -2004,7 +2067,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_right_nop_at_end() {
+    fn cursor_span_right_nop_at_end() {
         let mut buf = "chars".to_owned();
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len()).build();
@@ -2022,7 +2085,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_right_nop_on_empty_buffer() {
+    fn cursor_span_right_nop_on_empty_buffer() {
         let mut buf = String::new();
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len()).build();
@@ -2040,10 +2103,10 @@ mod tests {
     }
 
     #[test]
-    fn cursor_left_jumps_to_start_of_previous_word() {
-        let mut buf = "word \t  (())".to_owned();
+    fn cursor_span_left_jumps_to_start_of_previous_word() {
+        let mut buf = "    word \t  (())".to_owned();
         let mut view =
-            ViewBuilder::new().with_insertion_point(buf.len()).build();
+            ViewBuilder::new().with_insertion_point(buf.len() - 2).build();
         let res = handle_event(
             &mut buf,
             &mut view,
@@ -2052,8 +2115,18 @@ mod tests {
         )
         .unwrap();
         assert!(res.is_continue());
-        assert_eq!(8, view.insertion_point());
+        assert_eq!(12, view.insertion_point());
         assert!(!view.is_valid());
+
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(4, view.insertion_point());
 
         let res = handle_event(
             &mut buf,
@@ -2067,7 +2140,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_left_nop_at_start() {
+    fn cursor_span_left_nop_at_start() {
         let mut buf = "chars".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
@@ -2084,7 +2157,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_left_nop_on_empty_buffer() {
+    fn cursor_span_left_nop_on_empty_buffer() {
         let mut buf = String::new();
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
@@ -2097,6 +2170,133 @@ mod tests {
         .unwrap();
         assert!(res.is_continue());
         assert!(view.is_valid());
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn delete_span_right_nop_at_end() {
+        let mut buffer = "    word    \t  (())".to_owned();
+        let expected_buffer = buffer.clone();
+        let mut view =
+            ViewBuilder::new().with_insertion_point(buffer.len()).build();
+        let expected_view = view.clone();
+        let res = handle_event(
+            &mut buffer,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(buffer, expected_buffer);
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn delete_span_right_deletes_to_next_span_end() {
+        let mut buffer = "    word    \t  (())".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(2).build();
+
+        let res = handle_event(
+            &mut buffer,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buffer, "  word    \t  (())");
+        assert_eq!(view.insertion_point(), 2);
+
+        let res = handle_event(
+            &mut buffer,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buffer, "  (())");
+        assert_eq!(view.insertion_point(), 2);
+
+        let res = handle_event(
+            &mut buffer,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buffer, "  ");
+        assert_eq!(view.insertion_point(), 2);
+    }
+
+    #[test]
+    fn delete_span_left_deletes_to_previous_span_start() {
+        let mut buffer = "    word    \t  (())".to_owned();
+        let mut view = ViewBuilder::new().with_insertion_point(17).build();
+
+        let res = handle_event(
+            &mut buffer,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(
+                KeyCode::Backspace,
+                KeyModifiers::CONTROL,
+            )),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buffer, "    word    \t  ))");
+        assert_eq!(view.insertion_point(), 15);
+
+        let res = handle_event(
+            &mut buffer,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(
+                KeyCode::Backspace,
+                KeyModifiers::CONTROL,
+            )),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buffer, "    ))");
+        assert_eq!(view.insertion_point(), 4);
+
+        let res = handle_event(
+            &mut buffer,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(
+                KeyCode::Backspace,
+                KeyModifiers::CONTROL,
+            )),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buffer, "))");
+        assert_eq!(view.insertion_point(), 0);
+    }
+
+    #[test]
+    fn delete_span_left_at_start_is_nop() {
+        let mut buffer = "    word    \t  (())".to_owned();
+        let expected_buffer = buffer.clone();
+        let mut view = ViewBuilder::new().with_insertion_point(0).build();
+        let expected_view = view.clone();
+        let res = handle_event(
+            &mut buffer,
+            &mut view,
+            None,
+            &Event::Key(KeyEvent::new(
+                KeyCode::Backspace,
+                KeyModifiers::CONTROL,
+            )),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(buffer, expected_buffer);
         assert_eq!(view, expected_view);
     }
 }
