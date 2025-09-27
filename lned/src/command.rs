@@ -29,7 +29,7 @@ pub enum Cmd {
     File(Option<PathBuf>),
     Global(Option<Address>, Regex, String),
     Insert(Option<Address>),
-    Join(Option<Address>),
+    Join(Option<Address>, Option<String>),
     LineNumber(Option<Address>),
     List(Option<Address>),
     Move(Option<Address>, Address),
@@ -72,7 +72,7 @@ pub enum Error {
     NoPreviousPattern,
     NumberParse,
     TrailingBackslash,
-    InvalidPatternDelimiter,
+    InvalidDelimiter,
     InvalidCmdSuffix,
     InvalidFilename,
     ReadCommand { source: io::Error },
@@ -104,7 +104,7 @@ impl std::error::Error for Error {
             | Error::NoPreviousPattern
             | Error::NumberParse
             | Error::TrailingBackslash
-            | Error::InvalidPatternDelimiter
+            | Error::InvalidDelimiter
             | Error::InvalidCmdSuffix
             | Error::InvalidFilename
             | Error::MissingDestination
@@ -133,8 +133,8 @@ impl Display for Error {
             Error::NoMatchingLine => write!(f, "no matching line"),
             Error::TrailingBackslash => write!(f, "invalid trailing backslash"),
             Error::NoPreviousPattern => write!(f, "no previous pattern"),
-            Error::InvalidPatternDelimiter => {
-                write!(f, "invalid pattern delimiter")
+            Error::InvalidDelimiter => {
+                write!(f, "invalid delimiter")
             }
             Error::InvalidCmdSuffix => write!(f, "invalid command suffix"),
             Error::InvalidFilename => write!(f, "invalid filename"),
@@ -376,7 +376,7 @@ impl Cmd {
                 input,
             ),
             Some("i") => parse_no_args(&mut graphemes, Cmd::Insert(address)),
-            Some("j") => parse_no_args(&mut graphemes, Cmd::Join(address)),
+            Some("j") => parse_join_cmd(&mut graphemes, address),
             Some("l") => parse_no_args(&mut graphemes, Cmd::List(address)),
             Some("m") => parse_move_cmd(
                 &mut graphemes,
@@ -705,7 +705,7 @@ fn parse_pattern(
             || {
                 graphemes
                     .next_if(|gr| *gr != "\n" && *gr != "\r\n" && *gr != " ")
-                    .ok_or(Error::InvalidPatternDelimiter)
+                    .ok_or(Error::InvalidDelimiter)
             },
             Ok,
         )?
@@ -913,6 +913,29 @@ fn parse_global_cmd(
     let commands = parse_global_command_list(graphemes, input)?;
 
     Ok(Some((Cmd::Global(address, pattern, commands), None)))
+}
+
+fn parse_join_cmd(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+    address: Option<Address>,
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+    let Some(next_gr) = graphemes.peek() else {
+        return Ok(Some((Cmd::Join(address, None), None)));
+    };
+    let (cmd, sfx) = match *next_gr {
+        "l" | "n" | "p" => {
+            let sfx = parse_print_suffix(graphemes)?;
+            (Cmd::Join(address, None), sfx)
+        }
+        "\r\n" | "\r" => (Cmd::Join(address, None), None),
+        d => {
+            graphemes.next();
+            let (separator, _) = parse_pattern(graphemes, Some(d), false)?;
+            let sfx = parse_print_suffix(graphemes)?;
+            (Cmd::Join(address, Some(separator)), sfx)
+        }
+    };
+    Ok(Some((cmd, sfx)))
 }
 
 #[cfg(test)]
@@ -1125,7 +1148,7 @@ mod tests {
     fn parse_pattern_delimiter_invalid() {
         let mut input = " stuff + other_stuff. \n".graphemes(true).peekable();
         let res = parse_pattern(&mut input, None, false);
-        assert!(matches!(res, Err(Error::InvalidPatternDelimiter)));
+        assert!(matches!(res, Err(Error::InvalidDelimiter)));
     }
 
     #[test]
@@ -2056,7 +2079,7 @@ mod tests {
         let mut input = "j\r\n".as_bytes();
         let res =
             Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
-        assert!(matches!(res, Some((Cmd::Join(None), None))));
+        assert!(matches!(res, Some((Cmd::Join(None, None), None))));
     }
 
     #[test]

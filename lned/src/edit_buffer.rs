@@ -353,24 +353,41 @@ impl EditBuffer {
         Some(changes)
     }
 
-    pub fn do_join(&mut self, address: Option<Address>) -> ChangeSet {
+    pub fn do_join(
+        &mut self,
+        address: Option<Address>,
+        separator: Option<&str>,
+    ) -> ChangeSet {
         let address = address.unwrap_or_else(|| {
             Address::span(self.current_line, self.current_line + 1)
         });
         let mut changes = ChangeSet::new(self.current_line);
         let mut change = Change::new(self.current_line);
 
-        let mut joined = vec![String::new()];
-        for l in &self[address.start()..address.end()] {
-            joined[0].extend(l.lines());
+        let mut joined =
+            self[address.start()].lines().next().unwrap().to_owned();
+        if let Some(separator) = separator {
+            joined.push_str(separator);
+            for l in &self[address.start() + 1..address.end()] {
+                joined.push_str(l.trim_start().lines().next().unwrap());
+                joined.push_str(separator);
+            }
+            joined.push_str(self[address.end()].trim_start());
+        } else {
+            joined.extend(
+                self[address.start() + 1..address.end()]
+                    .iter()
+                    .map(|l| l.lines().next().unwrap()),
+            );
+            joined.push_str(&self[address.end()]);
         }
-        joined[0].push_str(&self[address.end()]);
+
         let replaced: Vec<_> = self
             .text
-            .splice(address.start() - 1..address.end(), joined.clone())
+            .splice(address.start() - 1..address.end(), vec![joined.clone()])
             .collect();
         self.current_line = address.start();
-        change.push_add(address.start() - 1, joined);
+        change.push_add(address.start() - 1, vec![joined]);
         change.push_remove(address.start(), replaced);
         changes.push(change, self.current_line);
         changes
@@ -934,7 +951,7 @@ mod tests {
         buffer.current_line = 2;
         let mut expected = EditBuffer::with_text(&["1\n", "23", "4", "5", "6"]);
         expected.current_line = 2;
-        buffer.do_join(None);
+        buffer.do_join(None, None);
         assert_eq!(buffer, expected);
     }
 
@@ -943,9 +960,9 @@ mod tests {
         let mut buffer =
             EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.current_line = 2;
-        let mut expected = EditBuffer::with_text(&["1\n", "2", "34", "5", "6"]);
+        let mut expected = EditBuffer::with_text(&["1\n", "2", "3 4", "5", "6"]);
         expected.set_current_line(3);
-        buffer.do_join(Some(Address::span(3, 4)));
+        buffer.do_join(Some(Address::span(3, 4)), Some(" "));
         assert_eq!(buffer, expected);
     }
 
@@ -956,7 +973,7 @@ mod tests {
         buffer.current_line = 2;
         let mut expected = EditBuffer::with_text(&["1\n", "2", "345", "6"]);
         expected.set_current_line(3);
-        buffer.do_join(Some(Address::span(3, 5)));
+        buffer.do_join(Some(Address::span(3, 5)), None);
         assert_eq!(buffer, expected);
     }
 

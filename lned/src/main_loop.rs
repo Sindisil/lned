@@ -362,7 +362,9 @@ fn dispatch_cmd(
             &mut state.previous_pattern,
         ),
         Cmd::Insert(address) => insert_cmd(buffer, input, *address),
-        Cmd::Join(address) => join_cmd(buffer, *address),
+        Cmd::Join(address, separator) => {
+            join_cmd(buffer, *address, separator.as_deref())
+        }
         Cmd::LineNumber(address) => {
             Ok(line_number_cmd(buffer, output, *address))
         }
@@ -692,7 +694,9 @@ fn do_global_cmds(
                 }
                 Cmd::Global(..) => return Err(LnedError::NestedGlobalCmd),
                 Cmd::Insert(address) => insert_cmd(buffer, &mut input, address),
-                Cmd::Join(address) => join_cmd(buffer, address),
+                Cmd::Join(address, separator) => {
+                    join_cmd(buffer, address, separator.as_deref())
+                }
                 Cmd::Move(address, destination) => {
                     move_cmd(buffer, address, destination)
                 }
@@ -784,6 +788,7 @@ fn insert_cmd(
 fn join_cmd(
     buffer: &mut EditBuffer,
     address: Option<Address>,
+    separator: Option<&str>,
 ) -> Result<Option<ChangeSet>, LnedError> {
     if buffer.is_empty() {
         return Err(LnedError::InvalidAddress);
@@ -793,7 +798,7 @@ fn join_cmd(
             Err(LnedError::InvalidAddress)
         }
         Some(a) if a.line_count() == 1 => Ok(None),
-        _ => Ok(Some(buffer.do_join(address))),
+        _ => Ok(Some(buffer.do_join(address, separator))),
     }
 }
 
@@ -3339,7 +3344,7 @@ mod tests {
     #[test]
     fn join_cmd_empty_buffer() {
         let mut buffer = EditBuffer::new();
-        let res = join_cmd(&mut buffer, None).expect_err("should fail");
+        let res = join_cmd(&mut buffer, None, None).expect_err("should fail");
         assert!(matches!(res, LnedError::InvalidAddress));
     }
 
@@ -3347,14 +3352,14 @@ mod tests {
     fn join_cmd_single_line_addr() {
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let expected = buffer.clone();
-        join_cmd(&mut buffer, Some(Address::line(2))).unwrap();
+        join_cmd(&mut buffer, Some(Address::line(2)), None).unwrap();
         assert_eq!(buffer, expected);
     }
 
     #[test]
     fn join_cmd_default_on_last_line() {
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
-        let res = join_cmd(&mut buffer, None).expect_err("should fail");
+        let res = join_cmd(&mut buffer, None, None).expect_err("should fail");
         assert!(matches!(res, LnedError::InvalidAddress));
     }
 

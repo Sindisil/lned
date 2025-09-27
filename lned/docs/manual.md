@@ -303,12 +303,20 @@ beginning of the buffer.
 
 #### Syntax
 
-(.,.+1)j
+(.,.+1)j[/separator/]
 
 #### Behavior
 
 Join addressed contiguous lines by removing the intervening line
-terminators.
+terminators, optionally inserting a separator string between each.
+
+If a separator string is given, it replaces any leading whitespace
+in each joined line past the first. Any character other than ' '
+(space), '\n' (newline), 'n', 'l', or 'p' may be used instead of '/'
+(slash) to delimit the separator string, and within the separator
+string the delimiter may be used as a literal character if escaped
+by a '\\' (backslash) character. The terminating delimiter is optional,
+but eliding it precludes the use of a print suffix.
 
 If exactly one address is given, no action will be taken.
 
