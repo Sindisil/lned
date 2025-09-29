@@ -40,8 +40,8 @@ pub struct LineReader {
 #[derive(Debug, Default, Clone)]
 pub struct LineReaderOptions {
     pub prompt: Option<char>,
-    pub indent: String,
     pub history: bool,
+    pub indent: Option<String>,
 }
 
 #[must_use]
@@ -79,8 +79,8 @@ impl LineReader {
 
         let mut input_buffer = String::with_capacity(80);
 
-        if !&options.indent.is_empty() {
-            input_buffer.push_str(&options.indent);
+        if let Some(indent) = options.indent.as_ref() {
+            input_buffer.push_str(indent);
             view.set_insertion_point(input_buffer.len());
         }
 

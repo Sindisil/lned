@@ -250,6 +250,12 @@ impl EditorState {
     }
 }
 
+#[derive(Debug, PartialEq, Copy, Clone)]
+enum IndentMode {
+    Auto,
+    Raw,
+}
+
 /// Main event loop.
 ///
 /// Handles prompting, command input, command dispatch, and error display.
@@ -329,6 +335,7 @@ fn write_backtrace(output: &mut impl Write, mut err: &dyn std::error::Error) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn dispatch_cmd(
     cmd: &Cmd,
     buffer: &mut EditBuffer,
@@ -339,9 +346,19 @@ fn dispatch_cmd(
     let mut done = false;
     let res = match cmd {
         // dispatch editor commands
-        Cmd::Append(address) => append_cmd(buffer, input, *address),
+        Cmd::Append(address) => {
+            append_cmd(buffer, input, *address, IndentMode::Auto)
+        }
+        Cmd::AppendRaw(address) => {
+            append_cmd(buffer, input, *address, IndentMode::Raw)
+        }
         Cmd::Delete(address) => delete_cmd(buffer, *address),
-        Cmd::Change(address) => change_cmd(buffer, input, *address),
+        Cmd::Change(address) => {
+            change_cmd(buffer, input, *address, IndentMode::Auto)
+        }
+        Cmd::ChangeRaw(address) => {
+            change_cmd(buffer, input, *address, IndentMode::Raw)
+        }
         Cmd::Edit(filename) => edit_cmd(
             buffer,
             output,
@@ -361,7 +378,12 @@ fn dispatch_cmd(
             commands,
             &mut state.previous_pattern,
         ),
-        Cmd::Insert(address) => insert_cmd(buffer, input, *address),
+        Cmd::Insert(address) => {
+            insert_cmd(buffer, input, *address, IndentMode::Auto)
+        }
+        Cmd::InsertRaw(address) => {
+            insert_cmd(buffer, input, *address, IndentMode::Raw)
+        }
         Cmd::Join(address, separator) => {
             join_cmd(buffer, *address, separator.as_deref())
         }
@@ -438,17 +460,21 @@ fn append_cmd(
     buffer: &mut EditBuffer,
     input: &mut impl LineRead,
     address: Option<Address>,
+    indent_mode: IndentMode,
 ) -> Result<Option<ChangeSet>, LnedError> {
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(LnedError::InvalidAddress);
     }
-    let indent = buffer
-        [..=address.map_or_else(|| buffer.current_line(), |a| a.end())]
-        .iter()
-        .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
-        .and_then(|l| command::INDENT.captures(l))
-        .and_then(|c| c.get(1))
-        .map_or("", |m| m.as_str());
+    let indent = match indent_mode {
+        IndentMode::Auto => buffer
+            [..=address.map_or_else(|| buffer.current_line(), |a| a.end())]
+            .iter()
+            .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
+            .and_then(|l| command::INDENT.captures(l))
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_owned()),
+        IndentMode::Raw => None,
+    };
     let mut lines = Vec::new();
     Cmd::read_input_lines(input, &mut lines, indent)
         .map_err(|source| LnedError::ReadLines { source })?;
@@ -459,6 +485,7 @@ fn change_cmd(
     buffer: &mut EditBuffer,
     input: &mut impl LineRead,
     address: Option<Address>,
+    indent_mode: IndentMode,
 ) -> Result<Option<ChangeSet>, LnedError> {
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(LnedError::InvalidAddress);
@@ -467,17 +494,20 @@ fn change_cmd(
         || Address::line(cmp::max(buffer.current_line(), 1)),
         |a| Address::span(cmp::max(a.start(), 1), cmp::max(a.end(), 1)),
     );
-    let indent = buffer[RangeInclusive::from(to_change)]
-        .iter()
-        .find(|l| l.contains(|c: char| !c.is_whitespace()))
-        .or_else(|| {
-            buffer[..to_change.start()]
-                .iter()
-                .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
-        })
-        .and_then(|l| command::INDENT.captures(l))
-        .and_then(|c| c.get(1))
-        .map_or("", |m| m.as_str());
+    let indent = match indent_mode {
+        IndentMode::Auto => buffer[RangeInclusive::from(to_change)]
+            .iter()
+            .find(|l| l.contains(|c: char| !c.is_whitespace()))
+            .or_else(|| {
+                buffer[..to_change.start()]
+                    .iter()
+                    .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
+            })
+            .and_then(|l| command::INDENT.captures(l))
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_owned()),
+        IndentMode::Raw => None,
+    };
 
     let mut lines = Vec::new();
     Cmd::read_input_lines(input, &mut lines, indent)
@@ -686,14 +716,20 @@ fn do_global_cmds(
                 .map_err(|source| LnedError::ReadGlobalCmd { source })?
         {
             let cs = match cmd {
-                Cmd::Append(address) => append_cmd(buffer, &mut input, address),
-                Cmd::Change(address) => change_cmd(buffer, &mut input, address),
+                Cmd::Append(address) => {
+                    append_cmd(buffer, &mut input, address, IndentMode::Auto)
+                }
+                Cmd::Change(address) => {
+                    change_cmd(buffer, &mut input, address, IndentMode::Auto)
+                }
                 Cmd::Delete(address) => delete_cmd(buffer, address),
                 Cmd::Enumerate(address) => {
                     enumerate_cmd(buffer, output, address)
                 }
                 Cmd::Global(..) => return Err(LnedError::NestedGlobalCmd),
-                Cmd::Insert(address) => insert_cmd(buffer, &mut input, address),
+                Cmd::Insert(address) => {
+                    insert_cmd(buffer, &mut input, address, IndentMode::Auto)
+                }
                 Cmd::Join(address, separator) => {
                     join_cmd(buffer, address, separator.as_deref())
                 }
@@ -768,17 +804,21 @@ fn insert_cmd(
     buffer: &mut EditBuffer,
     input: &mut impl LineRead,
     address: Option<Address>,
+    indent_mode: IndentMode,
 ) -> Result<Option<ChangeSet>, LnedError> {
     if address.is_some_and(|a| a.end() > buffer.len()) {
         return Err(LnedError::InvalidAddress);
     }
-    let indent = buffer[address
-        .map_or_else(|| cmp::max(buffer.current_line(), 1), |a| a.end())..]
-        .iter()
-        .find(|l| l.contains(|c: char| !c.is_whitespace()))
-        .and_then(|l| command::INDENT.captures(l))
-        .and_then(|c| c.get(1))
-        .map_or("", |m| m.as_str());
+    let indent = match indent_mode {
+        IndentMode::Auto => buffer[address
+            .map_or_else(|| cmp::max(buffer.current_line(), 1), |a| a.end())..]
+            .iter()
+            .find(|l| l.contains(|c: char| !c.is_whitespace()))
+            .and_then(|l| command::INDENT.captures(l))
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_owned()),
+        IndentMode::Raw => None,
+    };
     let mut lines = Vec::new();
     Cmd::read_input_lines(input, &mut lines, indent)
         .map_err(|source| LnedError::ReadLines { source })?;
@@ -1416,7 +1456,9 @@ mod tests {
         ) -> io::Result<usize> {
             let input = self.input.pop_front().unwrap_or_default();
             if !input.is_empty() {
-                buffer.push_str(&options.indent);
+                if let Some(indent) = options.indent.as_ref() {
+                    buffer.push_str(indent);
+                }
                 buffer.push_str(&input);
             }
             Ok(input.len())
@@ -1528,7 +1570,7 @@ mod tests {
         input.extend_from_slice(".\n".as_bytes());
         let mut input = &input[..];
         let address = Some(Address::line(buffer.len()));
-        append_cmd(&mut buffer, &mut input, address).unwrap();
+        append_cmd(&mut buffer, &mut input, address, IndentMode::Raw).unwrap();
         buffer.set_current_line(2);
         assert_eq!(1024, buffer.len());
         output.clear();
@@ -2414,6 +2456,18 @@ mod tests {
     }
 
     #[test]
+    fn append_raw_cmd_dispatch() {
+        let input = b"a\n    one\n    two\n    three\n.\n2A\nappended\n.\n2p\n3p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("    two\n"));
+        assert!(output.contains("\nappended"));
+        assert!(output.contains("unwritten changes"));
+        assert!(!output.contains("one"));
+    }
+
+    #[test]
     fn append_cmd_dispatch_p_print_sfx() {
         let input = b"ap\none\ntwo\nthree\n.\n2p\nq\nq\n";
         let mut output = Vec::new();
@@ -2469,6 +2523,16 @@ mod tests {
     }
 
     #[test]
+    fn change_raw_cmd_dispatch() {
+        let input =
+            b"a\n    1\n    2\n    3\n    4\n.\n2,3C\na\nb\n.\n1,$p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("    1\na\nb\n    4\n"));
+    }
+
+    #[test]
     fn edit_cmd_dispatch() {
         let input = b"e test/assets/text_with_final_eol.txt\nq\n";
         let mut output = Vec::new();
@@ -2505,6 +2569,18 @@ mod tests {
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("two\n"));
         assert!(output.contains("unwritten changes"));
+        assert!(!output.contains("one"));
+    }
+
+    #[test]
+    fn insert_raw_cmd_dispatch() {
+        let input = b"a\n    one\n    two\n    three\n.\n3I\ninserted\n.\n2p\n3p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("two\n"));
+        assert!(output.contains("unwritten changes"));
+        assert!(output.contains("\ninserted"));
         assert!(!output.contains("one"));
     }
 
@@ -3048,10 +3124,13 @@ mod tests {
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
-        let Some(change) =
-            append_cmd(&mut buffer, &mut input, Some(Address::line(0)))
-                .unwrap()
-        else {
+        let Some(change) = append_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::line(0)),
+            IndentMode::Raw,
+        )
+        .unwrap() else {
             panic!("expected Some(ChangeSet) from append_cmd!");
         };
         assert!(!change.is_empty());
@@ -3070,10 +3149,13 @@ mod tests {
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
-        let Some(change) =
-            append_cmd(&mut buffer, &mut input, Some(Address::line(0)))
-                .unwrap()
-        else {
+        let Some(change) = append_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::line(0)),
+            IndentMode::Raw,
+        )
+        .unwrap() else {
             panic!("expected append_cmd to return Some(ChangeSet)!");
         };
         assert!(!change.is_empty());
@@ -3093,10 +3175,13 @@ mod tests {
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
-        let Some(change) =
-            append_cmd(&mut buffer, &mut input, Some(Address::line(0)))
-                .unwrap()
-        else {
+        let Some(change) = append_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::line(0)),
+            IndentMode::Raw,
+        )
+        .unwrap() else {
             panic!("expected Some(ChangeSet) from append_cmd!");
         };
         assert!(!change.is_empty());
@@ -3119,15 +3204,20 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let mut input = "one\n.\n".as_bytes();
         let expected = "one\n.\n".as_bytes();
-        let res = append_cmd(&mut buffer, &mut input, Some(Address::line(2)))
-            .expect_err("invalid addr");
+        let res = append_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::line(2)),
+            IndentMode::Auto,
+        )
+        .expect_err("invalid addr");
         assert_eq!(0, buffer.len());
         assert_eq!(input, expected);
         assert!(matches!(res, LnedError::InvalidAddress));
     }
 
     #[test]
-    fn append_cmd_autoindents() {
+    fn append_cmd_auto_indent() {
         let mut buffer = EditBuffer::with_text(&["one\n", "    two", "three"]);
         let mut input = IndentReader::from(&["indented\n", "    further\n"]);
         let expected = [
@@ -3137,8 +3227,13 @@ mod tests {
             "        further\n",
             "three\n",
         ];
-        let _ = append_cmd(&mut buffer, &mut input, Some(Address::line(2)))
-            .expect("lines appended");
+        let _ = append_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::line(2)),
+            IndentMode::Auto,
+        )
+        .expect("lines appended");
         assert_eq!(&buffer[..], expected);
     }
 
@@ -3147,8 +3242,13 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let mut input = "one\n.\n".as_bytes();
         let expected = "one\n.\n".as_bytes();
-        let res = insert_cmd(&mut buffer, &mut input, Some(Address::line(2)))
-            .expect_err("invalid addr");
+        let res = insert_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::line(2)),
+            IndentMode::Auto,
+        )
+        .expect_err("invalid addr");
         assert_eq!(0, buffer.len());
         assert_eq!(input, expected);
         assert!(matches!(res, LnedError::InvalidAddress));
@@ -3161,7 +3261,7 @@ mod tests {
         assert!(matches!(res, LnedError::InvalidAddress));
     }
     #[test]
-    fn insert_cmd_autoindents() {
+    fn insert_cmd_auto_indent() {
         let mut buffer = EditBuffer::with_text(&["one\n", "    two", "three"]);
         let mut input = IndentReader::from(&["indented\n", "    further\n"]);
         let expected = [
@@ -3171,8 +3271,13 @@ mod tests {
             "    two\n",
             "three\n",
         ];
-        let _ = insert_cmd(&mut buffer, &mut input, Some(Address::line(2)))
-            .expect("lines inserted");
+        let _ = insert_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::line(2)),
+            IndentMode::Auto,
+        )
+        .expect("lines inserted");
         assert_eq!(&buffer[..], expected);
     }
 
@@ -3263,6 +3368,7 @@ mod tests {
             &mut buffer,
             &mut &b".\n"[..],
             Some(Address::span(5, 6)),
+            IndentMode::Auto,
         )
         .expect_err("illegal address");
         assert!(matches!(res, LnedError::InvalidAddress));
@@ -3275,13 +3381,14 @@ mod tests {
             &mut buffer,
             &mut &b".\n"[..],
             Some(Address::span(2, 4)),
+            IndentMode::Auto,
         )
         .expect_err("illegal address");
         assert!(matches!(res, LnedError::InvalidAddress));
     }
 
     #[test]
-    fn change_cmd_autoindents() {
+    fn change_cmd_auto_indent() {
         let mut buffer = EditBuffer::with_text(&[
             "one\n",
             "\n",
@@ -3307,8 +3414,13 @@ mod tests {
             "        replacing blanks\n",
             "    six\n",
         ];
-        let _ = change_cmd(&mut buffer, &mut input, Some(Address::span(8, 10)))
-            .expect("blanks replaced");
+        let _ = change_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::span(8, 10)),
+            IndentMode::Auto,
+        )
+        .expect("blanks replaced");
         assert_eq!(&buffer[..], expected);
 
         let mut input = IndentReader::from(&["indented\n", "    further\n"]);
@@ -3321,8 +3433,13 @@ mod tests {
             "        replacing blanks\n",
             "    six\n",
         ];
-        let _ = change_cmd(&mut buffer, &mut input, Some(Address::span(2, 5)))
-            .expect("lines changed");
+        let _ = change_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::span(2, 5)),
+            IndentMode::Auto,
+        )
+        .expect("lines changed");
         assert_eq!(&buffer[..], expected);
 
         let mut input = IndentReader::from(&["second"]);
@@ -3336,8 +3453,13 @@ mod tests {
             "        replacing blanks\n",
             "    six\n",
         ];
-        let _ = change_cmd(&mut buffer, &mut input, Some(Address::line(0)))
-            .expect("line changed");
+        let _ = change_cmd(
+            &mut buffer,
+            &mut input,
+            Some(Address::line(0)),
+            IndentMode::Auto,
+        )
+        .expect("line changed");
         assert_eq!(&buffer[..], expected);
     }
 
