@@ -22,13 +22,16 @@ pub static INDENT: LazyLock<Regex> =
 #[derive(Debug)]
 pub enum Cmd {
     Append(Option<Address>),
+    AppendRaw(Option<Address>),
     Change(Option<Address>),
+    ChangeRaw(Option<Address>),
     Delete(Option<Address>),
     Edit(Option<PathBuf>),
     Enumerate(Option<Address>),
     File(Option<PathBuf>),
     Global(Option<Address>, Regex, String),
     Insert(Option<Address>),
+    InsertRaw(Option<Address>),
     Join(Option<Address>, Option<String>),
     LineNumber(Option<Address>),
     List(Option<Address>),
@@ -318,13 +321,10 @@ impl Cmd {
     pub fn read_input_lines(
         input: &mut impl LineRead,
         buf: &mut Vec<String>,
-        indent: &str,
+        indent: Option<String>,
     ) -> Result<usize, io::Error> {
-        let mut text_read_options = LineReaderOptions {
-            prompt: None,
-            indent: indent.to_owned(),
-            history: false,
-        };
+        let mut text_read_options =
+            LineReaderOptions { prompt: None, history: false, indent };
         buf.clear();
         loop {
             let mut line = String::new();
@@ -332,13 +332,15 @@ impl Cmd {
             if n == 0 || line == ".\n" || line == ".\r\n" {
                 return Ok(buf.len());
             }
-            text_read_options.indent.replace_range(
-                ..,
-                INDENT
-                    .captures(&line)
-                    .and_then(|c| c.get(1))
-                    .map_or("", |m| m.as_str()),
-            );
+            if let Some(indent) = text_read_options.indent.as_mut() {
+                indent.replace_range(
+                    ..,
+                    INDENT
+                        .captures(&line)
+                        .and_then(|c| c.get(1))
+                        .map_or("", |m| m.as_str()),
+                );
+            }
             buf.push(line);
         }
     }
@@ -365,7 +367,9 @@ impl Cmd {
         let address = Address::eval(&mut graphemes, buffer, previous_pattern)?;
         match graphemes.next() {
             Some("a") => parse_no_args(&mut graphemes, Cmd::Append(address)),
+            Some("A") => parse_no_args(&mut graphemes, Cmd::AppendRaw(address)),
             Some("c") => parse_no_args(&mut graphemes, Cmd::Change(address)),
+            Some("C") => parse_no_args(&mut graphemes, Cmd::ChangeRaw(address)),
             Some("d") => parse_no_args(&mut graphemes, Cmd::Delete(address)),
             Some("e") => parse_edit_cmd(&mut graphemes, address),
             Some("f") => parse_file_cmd(&mut graphemes, address),
@@ -376,6 +380,7 @@ impl Cmd {
                 input,
             ),
             Some("i") => parse_no_args(&mut graphemes, Cmd::Insert(address)),
+            Some("I") => parse_no_args(&mut graphemes, Cmd::InsertRaw(address)),
             Some("j") => parse_join_cmd(&mut graphemes, address),
             Some("l") => parse_no_args(&mut graphemes, Cmd::List(address)),
             Some("m") => parse_move_cmd(

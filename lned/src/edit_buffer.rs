@@ -960,7 +960,8 @@ mod tests {
         let mut buffer =
             EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.current_line = 2;
-        let mut expected = EditBuffer::with_text(&["1\n", "2", "3 4", "5", "6"]);
+        let mut expected =
+            EditBuffer::with_text(&["1\n", "2", "3 4", "5", "6"]);
         expected.set_current_line(3);
         buffer.do_join(Some(Address::span(3, 4)), Some(" "));
         assert_eq!(buffer, expected);
