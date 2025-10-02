@@ -17,7 +17,7 @@ use crate::cli;
 use crate::command::{self, Address, Cmd, PrintAttributes, SubstitutionScope};
 use crate::edit_buffer::{Change, ChangeSet, Diff, EditBuffer};
 
-use line_reader::LineRead;
+use line_input::LineInput;
 
 #[derive(Debug)]
 pub enum LnedError {
@@ -260,7 +260,7 @@ enum IndentMode {
 ///
 /// Handles prompting, command input, command dispatch, and error display.
 pub fn run(
-    mut input: impl LineRead,
+    mut input: impl LineInput,
     mut output: impl Write,
     args: &cli::CmdArgs,
 ) -> Result<(), LnedError> {
@@ -340,7 +340,7 @@ fn dispatch_cmd(
     cmd: &Cmd,
     buffer: &mut EditBuffer,
     output: &mut impl Write,
-    input: &mut impl LineRead,
+    input: &mut impl LineInput,
     state: &mut EditorState,
 ) -> Result<bool, LnedError> {
     let mut done = false;
@@ -458,7 +458,7 @@ fn dispatch_cmd(
 
 fn append_cmd(
     buffer: &mut EditBuffer,
-    input: &mut impl LineRead,
+    input: &mut impl LineInput,
     address: Option<Address>,
     indent_mode: IndentMode,
 ) -> Result<Option<ChangeSet>, LnedError> {
@@ -483,7 +483,7 @@ fn append_cmd(
 
 fn change_cmd(
     buffer: &mut EditBuffer,
-    input: &mut impl LineRead,
+    input: &mut impl LineInput,
     address: Option<Address>,
     indent_mode: IndentMode,
 ) -> Result<Option<ChangeSet>, LnedError> {
@@ -802,7 +802,7 @@ fn adjust_global_list(list: &mut VecDeque<usize>, change: &Change) {
 
 fn insert_cmd(
     buffer: &mut EditBuffer,
-    input: &mut impl LineRead,
+    input: &mut impl LineInput,
     address: Option<Address>,
     indent_mode: IndentMode,
 ) -> Result<Option<ChangeSet>, LnedError> {
@@ -1410,7 +1410,7 @@ mod tests {
     use super::*;
 
     use cli::CmdArgs;
-    use line_reader::LineReaderOptions;
+    use line_input::LineInputOptions;
     use std::path::PathBuf;
     use std::str;
 
@@ -1448,11 +1448,11 @@ mod tests {
         }
     }
 
-    impl LineRead for IndentReader {
+    impl LineInput for IndentReader {
         fn read(
             &mut self,
             buffer: &mut String,
-            options: &LineReaderOptions,
+            options: &LineInputOptions,
         ) -> io::Result<usize> {
             let input = self.input.pop_front().unwrap_or_default();
             if !input.is_empty() {

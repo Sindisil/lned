@@ -17,12 +17,12 @@ top and bottom if more text exists in the buffer beyond that visible
 in the terminal window. If the terminal size is less than 3 lines,
 the viewport is the full terminal window.
 
-Intended usage is for lned to instantiate a LineReader, then make
+Intended usage is for lned to instantiate a InputEditor, then make
 calls to read_line() or read_line_or_cancel() as needed to get
 user input lines. The GapBuffer would thus only need to be
 allocated once, rather than when each line is read.
 
-LineReader would need to ensure that a few things (e.g., raw mode,
+LineInput would need to ensure that a few things (e.g., raw mode,
 hidden cursor) are safely reset after each read_line() call
 regardless of errors.
 
@@ -334,7 +334,7 @@ Right =>
 
 ##  InputHistory
 
-When instantiated, LineReader has empty history. As input lines are
+When instantiated, InputEditor has empty history. As input lines are
 accepted, non-empty lines are pushed to the history. The history stack can
 be navigated on later calls, via [Up] and [Down]. Two edited buffers are
 potentially maintaind: edited_input is saved when history is accessed,
@@ -343,7 +343,7 @@ a history line, but the user navigates away.
 
 ### States and transitions
 
-To manage the various history actions, LineReader may be in one of several
+To manage the various history actions, InputEditor may be in one of several
 states. These states may or may not need to be explicitly tracked, since
 the current state may be inferrable from history_iter, edited_history, and
 edited_input.

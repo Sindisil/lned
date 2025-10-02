@@ -171,8 +171,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
 
 [[package]]
-name = "line_reader"
-version = "0.3.0"
+name = "line_input"
+version = "0.4.0"
 dependencies = [
  "crossterm",
  "regex",
@@ -195,11 +195,11 @@ checksum = "f5e54036fe321fd421e10d732f155734c4e4afd610dd556d9a82833ab3ee0bed"
 
 [[package]]
 name = "lned"
-version = "0.6.0-alpha"
+version = "0.6.0"
 dependencies = [
  "crossterm",
  "lexopt",
- "line_reader",
+ "line_input",
  "regex",
  "similar",
  "similar-asserts",

@@ -7,7 +7,7 @@
        to preserve scrollback buffer history.
     3. Cursor shouldn't move around needlessly, to avoid disorienting
        the user.
-    4. Modulo terminl bugs, line_reader should support terminal window
+    4. Modulo terminl bugs, line_input should support terminal window
        resizing.
 
 #   Data model
@@ -40,7 +40,7 @@ struct DisplayPosition {
 }
 
 
-struct LineReader {
+struct InputEditor {
   buffer: Vec<BufferLine>,
   input_start: BufferIndex,
   display_width: usize,

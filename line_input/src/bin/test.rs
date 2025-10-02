@@ -1,14 +1,14 @@
-use line_reader::LineRead;
-use line_reader::LineReader;
-use line_reader::LineReaderOptions;
+use line_input::InputEditor;
+use line_input::LineInput;
+use line_input::LineInputOptions;
 
 #[cfg(not(tarpaulin_include))]
 fn main() {
     let mut line = String::new();
-    let mut reader = LineReader::new();
+    let mut reader = InputEditor::new();
     let res = reader.read(
         &mut line,
-        &LineReaderOptions { prompt: Some(':'), ..Default::default() },
+        &LineInputOptions { prompt: Some(':'), ..Default::default() },
     );
     match res {
         Err(e) => eprintln!("{e}"),

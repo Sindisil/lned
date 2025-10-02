@@ -21,24 +21,24 @@ use crate::renderer::Coord2D;
 use crate::renderer::DimWH;
 use crate::renderer::View;
 
-pub trait LineRead {
+pub trait LineInput {
     /// # Errors
     ///
     /// Will return `io::Error` if an error is encountered reading a line
     fn read(
         &mut self,
         buffer: &mut String,
-        options: &LineReaderOptions,
+        options: &LineInputOptions,
     ) -> io::Result<usize>;
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct LineReader {
+pub struct InputEditor {
     history: Option<HistoryStack>,
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct LineReaderOptions {
+pub struct LineInputOptions {
     pub prompt: Option<char>,
     pub history: bool,
     pub indent: Option<String>,
@@ -49,17 +49,17 @@ pub fn native_eol() -> &'static str {
     if std::env::consts::FAMILY == "windows" { "\r\n" } else { "\n" }
 }
 
-impl LineReader {
+impl InputEditor {
     #[must_use]
-    pub fn new() -> LineReader {
-        LineReader { ..Default::default() }
+    pub fn new() -> InputEditor {
+        InputEditor { ..Default::default() }
     }
 
     #[cfg(not(tarpaulin_include))]
     fn accept_line(
         &mut self,
         output_buffer: &mut String,
-        options: &LineReaderOptions,
+        options: &LineInputOptions,
     ) -> io::Result<usize> {
         let term_size: DimWH = terminal::size()?.into();
         let (_, first_display_line) = cursor::position()?;
@@ -104,24 +104,24 @@ impl LineReader {
 }
 
 #[cfg(not(tarpaulin_include))]
-impl LineRead for LineReader {
+impl LineInput for InputEditor {
     fn read(
         &mut self,
         buffer: &mut String,
-        options: &LineReaderOptions,
+        options: &LineInputOptions,
     ) -> io::Result<usize> {
         self.accept_line(buffer, options)
     }
 }
 
-impl<T> LineRead for T
+impl<T> LineInput for T
 where
     T: BufRead,
 {
     fn read(
         &mut self,
         buffer: &mut String,
-        _options: &LineReaderOptions,
+        _options: &LineInputOptions,
     ) -> io::Result<usize> {
         BufRead::read_line(self, buffer)
     }
