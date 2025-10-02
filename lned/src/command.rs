@@ -10,8 +10,8 @@ use regex::Regex;
 use unicode_segmentation::Graphemes;
 use unicode_segmentation::UnicodeSegmentation;
 
-use line_reader::LineRead;
-use line_reader::LineReaderOptions;
+use line_input::LineInput;
+use line_input::LineInputOptions;
 
 use crate::edit_buffer::EditBuffer;
 use crate::iter_utils::Peeking;
@@ -319,12 +319,12 @@ impl Cmd {
     // Returns number of bytes read or Error::Readlines if an error is
     // encountered.
     pub fn read_input_lines(
-        input: &mut impl LineRead,
+        input: &mut impl LineInput,
         buf: &mut Vec<String>,
         indent: Option<String>,
     ) -> Result<usize, io::Error> {
         let mut text_read_options =
-            LineReaderOptions { prompt: None, history: false, indent };
+            LineInputOptions { prompt: None, history: false, indent };
         buf.clear();
         loop {
             let mut line = String::new();
@@ -347,18 +347,18 @@ impl Cmd {
 
     /// Read input, parsing into a Cmd
     pub fn read(
-        input: &mut impl LineRead,
+        input: &mut impl LineInput,
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
-        let cmd_read_options = LineReaderOptions {
+        let cmd_input_options = LineInputOptions {
             prompt: Some(':'),
             history: true,
             ..Default::default()
         };
         let mut line = String::with_capacity(120);
         input
-            .read(&mut line, &cmd_read_options)
+            .read(&mut line, &cmd_input_options)
             .map_err(|source| Error::ReadCommand { source })?;
         if line.is_empty() {
             return Ok(None);
@@ -628,7 +628,7 @@ pub(crate) fn parse_substitute_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<Address>,
     previous_pattern: &mut Option<Regex>,
-    input: &mut impl LineRead,
+    input: &mut impl LineInput,
 ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     let (pattern, delimiter) = parse_pattern(graphemes, None, true)?;
     if !(pattern.is_empty()) {
@@ -652,11 +652,8 @@ pub(crate) fn parse_substitute_cmd(
         )));
     }
 
-    let line_read_options = LineReaderOptions {
-        prompt: None,
-        history: false,
-        ..Default::default()
-    };
+    let line_read_options =
+        LineInputOptions { prompt: None, history: false, ..Default::default() };
     let mut line = String::new();
     let (cmd, sfx) = loop {
         input
@@ -876,7 +873,7 @@ fn parse_global_command_line(
 
 fn parse_global_command_list(
     cmd_line: &mut Peekable<Graphemes<'_>>,
-    input: &mut impl LineRead,
+    input: &mut impl LineInput,
 ) -> Result<String, Error> {
     let mut commands = String::new();
     // Copy first command to commands string,
@@ -884,7 +881,7 @@ fn parse_global_command_list(
     let mut more_lines = parse_global_command_line(cmd_line, &mut commands)?;
 
     if more_lines {
-        let line_read_options = LineReaderOptions {
+        let line_read_options = LineInputOptions {
             prompt: None,
             history: false,
             ..Default::default()
@@ -907,7 +904,7 @@ fn parse_global_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<Address>,
     previous_pattern: &mut Option<Regex>,
-    input: &mut impl LineRead,
+    input: &mut impl LineInput,
 ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     let (pattern, _) = parse_pattern(graphemes, None, false)?;
     if !(pattern.is_empty()) {

@@ -2,7 +2,7 @@
 
 members = [
   "lned",
-  "line_reader",
+  "line_input",
 ]
 
 resolver = "2"
