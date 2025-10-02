@@ -173,10 +173,10 @@ checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
 [[package]]
 name = "line_input"
 version = "0.4.0"
+source = "git+https://github.com/Sindisil/line_input.git#2f92cfc16d469db671acf41ffb40462a9c2f25e7"
 dependencies = [
  "crossterm",
  "regex",
- "similar-asserts",
  "unicode-segmentation",
  "unicode-width",
 ]
