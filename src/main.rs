@@ -9,7 +9,7 @@ use std::error::Error;
 use std::io;
 use std::iter;
 
-use line_input::InputEditor;
+use line_edit::LineEditor;
 
 fn main() {
     let args = match cli::parse_args(&mut io::stdout(), wild::args_os()) {
@@ -21,7 +21,7 @@ fn main() {
         }
     };
 
-    if let Err(err) = main_loop::run(InputEditor::new(), io::stdout(), &args) {
+    if let Err(err) = main_loop::run(LineEditor::new(), io::stdout(), &args) {
         eprintln!("Error: {err}");
         if let Some(cause) = err.source() {
             println!("\nCaused by:");

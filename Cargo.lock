@@ -171,9 +171,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
 
 [[package]]
-name = "line_input"
+name = "line_edit"
 version = "0.4.0"
-source = "git+https://github.com/Sindisil/line_input.git#2f92cfc16d469db671acf41ffb40462a9c2f25e7"
+source = "git+https://github.com/Sindisil/line_edit.git#a141d082a9f0e21649b09ff793bffeeb1c57ac47"
 dependencies = [
  "crossterm",
  "regex",
@@ -199,7 +199,7 @@ version = "0.6.0"
 dependencies = [
  "crossterm",
  "lexopt",
- "line_input",
+ "line_edit",
  "regex",
  "similar",
  "similar-asserts",

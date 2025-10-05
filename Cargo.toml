@@ -11,7 +11,7 @@ regex = "1.8.1"
 unicode-segmentation = "1.11.0"
 unicode-width = "0.2.0"
 wild = "2.1.0"
-line_input = { git = "https://github.com/Sindisil/line_input.git" }
+line_edit = { git = "https://github.com/Sindisil/line_edit.git" }
 similar = { version = "2.7.0", features = ["unicode"] }
 crossterm = "0.29.0"
 
