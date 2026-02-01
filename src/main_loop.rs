@@ -1449,14 +1449,14 @@ mod tests {
     }
 
     impl LineEdit for IndentReader {
-        fn read(
+        fn read_line(
             &mut self,
             buffer: &mut String,
-            options: &EditorOptions,
+            options: Option<&EditorOptions>,
         ) -> io::Result<usize> {
             let input = self.input.pop_front().unwrap_or_default();
             if !input.is_empty() {
-                if let Some(indent) = options.indent.as_ref() {
+                if let Some(indent) = options.and_then(|o| o.prefill.as_ref()) {
                     buffer.push_str(indent);
                 }
                 buffer.push_str(&input);

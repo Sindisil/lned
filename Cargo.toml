@@ -6,12 +6,12 @@ build = "build.rs"
 edition = "2024"
 
 [dependencies]
-lexopt = "0.3.0"
-regex = "1.8.1"
-unicode-segmentation = "1.11.0"
-unicode-width = "0.2.0"
-wild = "2.1.0"
-line_edit = { git = "https://github.com/Sindisil/line_edit.git" }
+lexopt = "0.3.1"
+regex = "1.12.2"
+unicode-segmentation = "1.12.0"
+unicode-width = "0.2.2"
+wild = "2.2.1"
+line_edit = { version = "0.5.1", git = "https://github.com/Sindisil/line_edit.git" }
 similar = { version = "2.7.0", features = ["unicode"] }
 crossterm = "0.29.0"
 
