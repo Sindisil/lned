@@ -324,15 +324,15 @@ impl Cmd {
         indent: Option<String>,
     ) -> Result<usize, io::Error> {
         let mut text_read_options =
-            EditorOptions { prompt: None, history: false, indent };
+            EditorOptions { prompt: None, history: false, prefill: indent };
         buf.clear();
         loop {
             let mut line = String::new();
-            let n = input.read(&mut line, &text_read_options)?;
+            let n = input.read_line(&mut line, Some(&text_read_options))?;
             if n == 0 || line == ".\n" || line == ".\r\n" {
                 return Ok(buf.len());
             }
-            if let Some(indent) = text_read_options.indent.as_mut() {
+            if let Some(indent) = text_read_options.prefill.as_mut() {
                 indent.replace_range(
                     ..,
                     INDENT
@@ -358,7 +358,7 @@ impl Cmd {
         };
         let mut line = String::with_capacity(120);
         input
-            .read(&mut line, &cmd_input_options)
+            .read_line(&mut line, Some(&cmd_input_options))
             .map_err(|source| Error::ReadCommand { source })?;
         if line.is_empty() {
             return Ok(None);
@@ -657,7 +657,7 @@ pub(crate) fn parse_substitute_cmd(
     let mut line = String::new();
     let (cmd, sfx) = loop {
         input
-            .read(&mut line, &line_read_options)
+            .read_line(&mut line, Some(&line_read_options))
             .map_err(|source| Error::ReadCommand { source })?;
         let mut graphemes = line.graphemes(true).peekable();
         let more_lines = parse_replacement_line(
@@ -889,7 +889,7 @@ fn parse_global_command_list(
         let mut line = String::new();
         while more_lines {
             input
-                .read(&mut line, &line_read_options)
+                .read_line(&mut line, Some(&line_read_options))
                 .map_err(|source| Error::ReadCommand { source })?;
             let mut graphemes = line.graphemes(true).peekable();
             more_lines =
