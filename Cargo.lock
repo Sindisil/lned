@@ -126,7 +126,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -167,8 +167,8 @@ checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
 
 [[package]]
 name = "line_edit"
-version = "0.5.1"
-source = "git+https://github.com/Sindisil/line_edit.git#11493d61542866ce473935e631d96a8422807071"
+version = "0.5.2"
+source = "git+https://github.com/Sindisil/line_edit.git#b14d7843105d635861608d7716bd5de5481a8bfc"
 dependencies = [
  "crossterm",
  "regex",
@@ -347,7 +347,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -469,7 +469,7 @@ dependencies = [
  "getrandom",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
