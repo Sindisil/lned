@@ -5,3 +5,4 @@
 *.toml     text
 *.md       text diff=markdown
 Cargo.lock text
+test/assets/*.*     -text
