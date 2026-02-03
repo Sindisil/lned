@@ -123,7 +123,7 @@ impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Error::UnexpectedAddress => {
-                write!(f, "command takes no line address.")
+                write!(f, "unexpected line address")
             }
             Error::Unknown(c) => write!(f, "unknown command '{c}'"),
             Error::OffsetTooLarge => write!(f, "offset too large"),
