@@ -78,15 +78,14 @@ Several symbols have special meaning within a line address.
 * '.' is iterpreted as the address of the _current line_
 * '$' is interprete as the address of the last line in the buffer
 * '/' characters delimiting a regex address the first line found to match
-	  the regex searching *forward* through the buffer starting with the
-	  _current line_
+	the _current line_
 * '?' characters delimiting a regex address the first line found matching
-	  the regex searching *backward*, starting with the _current line_
+	the regex searching *backward*, starting with the _current line_
 * '+n' or '-n', where 'n' is a decimal number, addresses the
-      _current line_ plus or minus the specified number. If the number is
-      left out, it is assumed to be 1.
+	_current line_ plus or minus the specified number. If the number is
+	left out, it is assumed to be 1.
 * 'n', where 'n' is a decimal number, addresses the 'n'th line in the
-	  buffer
+	buffer
 
 In addition, line addresses can be followed by zero or more address
 offsets, which may optionally be separated by blanks ('\t' or ' '
@@ -108,12 +107,12 @@ or address offsets are ignored.
 Addresses omittd on either side of an address separator are evaluated as
 follows:
 
-,	    : 1,$
-,addr   : 1,addr
+,	: 1,$
+,addr	: 1,addr
 addr,	: addr,addr
-;		: .;$
-;addr   : .;addr
-addr;   : addr;addr
+;	: .;$
+;addr	: .;addr
+addr;	: addr;addr
 
 ## Print Suffixes
 

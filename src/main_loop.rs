@@ -959,14 +959,13 @@ fn print_lines(
     for (n, l) in
         (address.into_iter()).zip(&buffer[RangeInclusive::from(address)])
     {
-        let mut cols = 0;
         if attributes.enumerate {
             write!(output, "{n:>ln_num_cols$}  ").expect("reliable stdout");
-            cols += ln_num_cols + 2;
         }
         let graphs = l.graphemes(true).map(|gr| {
             if attributes.expand_escapes { expand_escapes(gr) } else { gr }
         });
+        let mut cols = 0;
         for gr in graphs {
             cols += if gr == "\t" {
                 let gr_width = 8 - (cols % 8);
