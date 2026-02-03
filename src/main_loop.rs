@@ -535,14 +535,18 @@ fn scroll_cmd(
 ) -> Result<Option<ChangeSet>, LnedError> {
     // create addressed span to print from specified address
     // and max_rows
-    let start = address.map_or_else(|| buffer.current_line(), |a| a.end());
+    let start = if let Some(addr) = address {
+        addr.end()
+    } else {
+        buffer.current_line().checked_add(1).ok_or(LnedError::InvalidAddress)?
+    };
     let end = cmp::min(buffer.len(), start + window.rows);
     let address = Address::span(start, end);
 
     let attrs = attrs.unwrap_or_default();
     let last_printed =
         print_lines(output, buffer, address, attrs, Some(&window))?;
-    buffer.set_current_line(cmp::min(last_printed + 1, buffer.len()));
+    buffer.set_current_line(cmp::min(last_printed, buffer.len()));
     Ok(None)
 }
 
@@ -3894,13 +3898,13 @@ mod tests {
 
     #[test]
     fn scroll_cmd_dispatch() {
-        let input = b"a\n1\n2\n3\n.\n1\nz2\nq\nq\n";
+        let input = b"a\n1\n2\n3\n4\n\n.\n1\nz2\nq\nq\n";
         let mut output = Vec::new();
         let args = CmdArgs { file: None };
         run(&input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("1\n2\n"));
-        assert!(!output.contains("3\n"));
+        assert!(output.contains("2\n3\n"));
+        assert!(!output.contains("4\n"));
     }
 
     #[test]
@@ -3947,7 +3951,7 @@ mod tests {
             &mut state,
         )
         .expect("scroll 10..12");
-        assert_eq!(buffer.current_line(), 13);
+        assert_eq!(buffer.current_line(), 12);
         assert_eq!(state.scroll_row_limit, Some(3));
         dispatch_cmd(
             &Cmd::Scroll(None, None, None),
@@ -3957,7 +3961,7 @@ mod tests {
             &mut state,
         )
         .expect("scroll 13..15");
-        assert_eq!(buffer.current_line(), 16);
+        assert_eq!(buffer.current_line(), 15);
         assert_eq!(state.scroll_row_limit, Some(3));
     }
 
@@ -3980,7 +3984,7 @@ mod tests {
             &mut state,
         )
         .expect("scroll 10..12");
-        assert_eq!(buffer.current_line(), 13);
+        assert_eq!(buffer.current_line(), 12);
         assert!(
             str::from_utf8(&output[..])
                 .unwrap()
@@ -4002,7 +4006,7 @@ mod tests {
             &mut state,
         )
         .expect("scroll 13..15");
-        assert_eq!(buffer.current_line(), 16);
+        assert_eq!(buffer.current_line(), 15);
         assert!(
             str::from_utf8(&output[..])
                 .unwrap()
