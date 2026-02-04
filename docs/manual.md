@@ -308,6 +308,7 @@ beginning of the buffer.
 
 Join addressed contiguous lines by removing the intervening line
 terminators, optionally inserting a separator string between each.
+If a single address is specified, that line is joined with the next.
 
 If a separator string is given, it replaces any leading whitespace
 in each joined line past the first. Any character other than ' '
@@ -317,9 +318,7 @@ string the delimiter may be used as a literal character if escaped
 by a '\\' (backslash) character. The terminating delimiter is optional,
 but eliding it precludes the use of a print suffix.
 
-If exactly one address is given, no action will be taken.
-
-If any lines are joined, the current line will be set tot he address of
+If any lines are joined, the current line will be set to the address of
 the resulting joined line, otherwise the current line number will not
 be set.
 

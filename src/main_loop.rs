@@ -834,14 +834,13 @@ fn join_cmd(
     address: Option<Address>,
     separator: Option<&str>,
 ) -> Result<Option<ChangeSet>, LnedError> {
-    if buffer.is_empty() {
-        return Err(LnedError::InvalidAddress);
-    }
     match address {
         None if buffer.current_line() == buffer.len() => {
             Err(LnedError::InvalidAddress)
         }
-        Some(a) if a.line_count() == 1 => Ok(None),
+        Some(a) if a.line_count() == 1 && a.end() == buffer.len() => {
+            Err(LnedError::InvalidAddress)
+        }
         _ => Ok(Some(buffer.do_join(address, separator))),
     }
 }
@@ -3477,6 +3476,11 @@ mod tests {
     fn join_cmd_single_line_addr() {
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let expected = buffer.clone();
+        let res = join_cmd(&mut buffer, Some(Address::line(3)), None)
+            .expect_err("invalid address");
+        assert!(matches!(res, LnedError::InvalidAddress));
+        assert_eq!(buffer, expected);
+        let expected = EditBuffer::with_text(&["1\n", "23"]);
         join_cmd(&mut buffer, Some(Address::line(2)), None).unwrap();
         assert_eq!(buffer, expected);
     }

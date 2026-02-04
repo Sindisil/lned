@@ -174,6 +174,7 @@ impl EditBuffer {
         self.text.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
@@ -358,9 +359,21 @@ impl EditBuffer {
         address: Option<Address>,
         separator: Option<&str>,
     ) -> ChangeSet {
+        let address = address.map_or_else(
+            || Address::span(self.current_line, self.current_line + 1),
+            |addr| {
+                if addr.line_count() == 1 {
+                    Address::span(addr.end(), addr.end() + 1)
+                } else {
+                    addr
+                }
+            },
+        );
+        /*
         let address = address.unwrap_or_else(|| {
             Address::span(self.current_line, self.current_line + 1)
         });
+        */
         let mut changes = ChangeSet::new(self.current_line);
         let mut change = Change::new(self.current_line);
 
