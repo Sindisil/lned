@@ -507,7 +507,7 @@ impl EditBuffer {
     }
 }
 
-fn compute_default_eol(
+pub fn compute_default_eol(
     lines: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> &'static str {
     let native_eol = line_edit::native_eol();

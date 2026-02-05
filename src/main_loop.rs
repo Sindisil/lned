@@ -609,7 +609,12 @@ fn edit_cmd(
 
     let mut lines = Vec::new();
     let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
-    writeln!(output, "{lines_read} lines ({bytes_read} bytes) read").unwrap();
+    writeln!(
+        output,
+        "{lines_read} lines ({bytes_read} bytes) read [eol:{:?}]",
+        buffer.default_eol()
+    )
+    .unwrap();
 
     buffer.clear_text();
     if buffer.append(0, lines) {
@@ -654,9 +659,14 @@ fn file_cmd(
         buffer.set_filename(Some(filename.to_owned()));
     }
 
+    let def_eol = buffer.default_eol();
     match buffer.filename() {
-        None => writeln!(output, "no current filename").unwrap(),
-        Some(f) => writeln!(output, "{}", f.display()).unwrap(),
+        None => {
+            writeln!(output, "no current filename [eol:{:?}]", def_eol).unwrap()
+        }
+        Some(f) => {
+            writeln!(output, "{} [eol:{:?}]", f.display(), def_eol).unwrap()
+        }
     }
     output.flush().unwrap();
 }
@@ -1367,8 +1377,12 @@ fn write_file(
             backup_filename: writer.backup_name().map(Path::to_owned),
         }
     })?;
-    writeln!(output, "{lines} lines ({bytes} bytes) written")
-        .expect("stdout failure is fatal");
+    writeln!(
+        output,
+        "{lines} lines ({bytes} bytes) written [eol:{:?}]",
+        buffer.default_eol()
+    )
+    .expect("stdout failure is fatal");
     output.flush().expect("stdout failure is fatal");
     writer.remove_backup().map_err(|source| LnedError::WriteRemoveBackup {
         source,
@@ -1594,59 +1608,48 @@ mod tests {
         let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         let mut output = Vec::new();
         file_cmd(&mut buffer, &mut output, None);
-        assert_eq!(
-            str::from_utf8(&output[..]).unwrap(),
-            "no current filename\n"
-        );
+        let expected = format!("no current filename [eol:\"\\r\\n\"]\n");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
         assert_eq!(None, buffer.filename());
     }
 
     #[test]
     fn set_filename() {
-        let new_filename = "a_new_filename.txt\n";
+        let new_filename = "a_new_filename.txt";
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
         assert_eq!(None, buffer.filename());
-        file_cmd(
-            &mut buffer,
-            &mut output,
-            Some(Path::new(new_filename.trim())),
-        );
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
+        file_cmd(&mut buffer, &mut output, Some(Path::new(new_filename)));
+        let expected = format!("{new_filename} [eol:\"\\n\"]\n");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
 
     #[test]
     fn print_filename() {
-        let new_filename = "a_new_filename.txt\n";
+        let new_filename = "a_new_filename.txt";
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
         assert_eq!(None, buffer.filename());
-        file_cmd(
-            &mut buffer,
-            &mut output,
-            Some(Path::new(new_filename.trim())),
-        );
-        assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
+        file_cmd(&mut buffer, &mut output, Some(Path::new(new_filename)));
+        assert_eq!(Some(Path::new(new_filename)), buffer.filename());
         output.clear();
         file_cmd(&mut buffer, &mut output, None);
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
+        let expected = format!("a_new_filename.txt [eol:\"\\n\"]\n");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
     }
 
     #[test]
     fn change_filename() {
         let orig_filename = "a_filename.md";
-        let new_filename = "a_new_filename.txt\n";
+        let new_filename = "a_new_filename.txt";
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
         file_cmd(&mut buffer, &mut output, Some(Path::new(orig_filename)));
         output.clear();
-        file_cmd(
-            &mut buffer,
-            &mut output,
-            Some(Path::new(new_filename.trim())),
-        );
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
+        file_cmd(&mut buffer, &mut output, Some(Path::new(new_filename)));
+        let expected = format!("a_new_filename.txt [eol:\"\\n\"]\n");
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
 
@@ -4031,7 +4034,7 @@ mod tests {
             delete_cmd(&mut buffer, Some(Address::line(6))).expect("no error");
         let _ = show_diff_cmd(&buffer, &mut output, None).expect("no error");
         let output = str::from_utf8(&output).unwrap();
-        let expected = "10 lines (312 bytes) read\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
+        let expected = "10 lines (312 bytes) read [eol:\"\\r\\n\"]\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
         assert_eq!(output, expected);
     }
 
