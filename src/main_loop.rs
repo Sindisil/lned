@@ -662,10 +662,10 @@ fn file_cmd(
     let def_eol = buffer.default_eol();
     match buffer.filename() {
         None => {
-            writeln!(output, "no current filename [EOL:{:?}]", def_eol).unwrap()
+            writeln!(output, "no current filename [EOL:{def_eol:?}]").unwrap();
         }
         Some(f) => {
-            writeln!(output, "{} [EOL:{:?}]", f.display(), def_eol).unwrap()
+            writeln!(output, "{} [EOL:{def_eol:?}]", f.display()).unwrap();
         }
     }
     output.flush().unwrap();
@@ -1608,8 +1608,8 @@ mod tests {
         let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         let mut output = Vec::new();
         file_cmd(&mut buffer, &mut output, None);
-        let expected = format!("no current filename [EOL:\"\\r\\n\"]\n");
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
+        let expected = "no current filename [EOL:\"\\r\\n\"]\n";
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
         assert_eq!(None, buffer.filename());
     }
 
@@ -1635,8 +1635,8 @@ mod tests {
         assert_eq!(Some(Path::new(new_filename)), buffer.filename());
         output.clear();
         file_cmd(&mut buffer, &mut output, None);
-        let expected = format!("a_new_filename.txt [EOL:\"\\n\"]\n");
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
+        let expected = "a_new_filename.txt [EOL:\"\\n\"]\n";
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
     }
 
     #[test]
@@ -1648,8 +1648,8 @@ mod tests {
         file_cmd(&mut buffer, &mut output, Some(Path::new(orig_filename)));
         output.clear();
         file_cmd(&mut buffer, &mut output, Some(Path::new(new_filename)));
-        let expected = format!("a_new_filename.txt [EOL:\"\\n\"]\n");
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
+        let expected = "a_new_filename.txt [EOL:\"\\n\"]\n";
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
 
