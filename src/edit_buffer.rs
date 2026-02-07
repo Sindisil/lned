@@ -24,7 +24,7 @@ use crate::main_loop::LnedError;
 pub struct EditBuffer {
     current_line: usize,
     filename: Option<PathBuf>,
-    default_eol: Option<&'static str>,
+    file_eol: Option<&'static str>,
     undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
     text: Vec<String>,
@@ -134,7 +134,7 @@ impl EditBuffer {
             text: Vec::new(),
             current_line: 0,
             filename: None,
-            default_eol: None,
+            file_eol: None,
             undo_stack: UndoStack::new(),
             clean_fingerprint: None,
         }
@@ -263,14 +263,14 @@ impl EditBuffer {
     }
 
     pub fn append(&mut self, location: usize, mut lines: Vec<String>) -> bool {
-        let default_eol =
-            self.default_eol.get_or_insert_with(|| compute_default_eol(&lines));
+        let file_eol =
+            self.file_eol.get_or_insert_with(|| compute_file_eol(&lines));
 
         // Add missing EOL if necessary
         let mut eol_added = false;
         for l in &mut lines {
             if !(l.ends_with("\r\n") || l.ends_with('\n')) {
-                l.push_str(default_eol);
+                l.push_str(file_eol);
                 eol_added = true;
             }
         }
@@ -499,15 +499,15 @@ impl EditBuffer {
     pub fn clear_text(&mut self) {
         self.text.clear();
         self.current_line = 0;
-        self.default_eol = None;
+        self.file_eol = None;
     }
 
-    pub fn default_eol(&mut self) -> &'static str {
-        self.default_eol.get_or_insert_with(line_edit::native_eol)
+    pub fn file_eol(&mut self) -> &'static str {
+        self.file_eol.get_or_insert_with(line_edit::native_eol)
     }
 }
 
-pub fn compute_default_eol(
+pub fn compute_file_eol(
     lines: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> &'static str {
     let native_eol = line_edit::native_eol();
@@ -593,36 +593,36 @@ mod tests {
     }
 
     /////
-    // compute_default_eol() tests
+    // compute_file_eol() tests
 
     #[test]
-    fn default_eol_when_all_crlf() {
+    fn file_eol_when_all_crlf() {
         let lines = vec!["L1\r\n", "L2\r\n", "L3\r\n"];
-        assert_eq!("\r\n", compute_default_eol(&lines));
+        assert_eq!("\r\n", compute_file_eol(&lines));
     }
 
     #[test]
-    fn default_eol_when_all_lf() {
+    fn file_eol_when_all_lf() {
         let lines = vec!["L1\n", "L2\n", "L3\n"];
-        assert_eq!("\n", compute_default_eol(&lines));
+        assert_eq!("\n", compute_file_eol(&lines));
     }
 
     #[test]
-    fn default_eol_when_most_crlf() {
+    fn file_eol_when_most_crlf() {
         let lines = vec!["L1\r\n", "L2\n", "L3\r\n"];
-        assert_eq!("\r\n", compute_default_eol(&lines));
+        assert_eq!("\r\n", compute_file_eol(&lines));
     }
 
     #[test]
-    fn default_eol_when_most_lf() {
+    fn file_eol_when_most_lf() {
         let lines = vec!["L1\n", "L2\n", "L3\r\n"];
-        assert_eq!("\n", compute_default_eol(&lines));
+        assert_eq!("\n", compute_file_eol(&lines));
     }
 
     #[test]
-    fn default_eol_when_equal_lf_crlf() {
+    fn file_eol_when_equal_lf_crlf() {
         let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n"];
-        assert_eq!(compute_default_eol(&lines), line_edit::native_eol());
+        assert_eq!(compute_file_eol(&lines), line_edit::native_eol());
     }
 
     /////

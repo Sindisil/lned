@@ -612,7 +612,7 @@ fn edit_cmd(
     writeln!(
         output,
         "{lines_read} lines ({bytes_read} bytes) read [EOL:{:?}]",
-        buffer.default_eol()
+        buffer.file_eol()
     )
     .unwrap();
 
@@ -659,7 +659,7 @@ fn file_cmd(
         buffer.set_filename(Some(filename.to_owned()));
     }
 
-    let def_eol = buffer.default_eol();
+    let def_eol = buffer.file_eol();
     match buffer.filename() {
         None => {
             writeln!(output, "no current filename [EOL:{def_eol:?}]").unwrap();
@@ -1123,7 +1123,7 @@ fn substitute_cmd(
                 edited_line
                     .split_terminator('\n')
                     .map(|l| l.trim_end_matches('\r'))
-                    .map(|l| l.to_owned() + buffer.default_eol()),
+                    .map(|l| l.to_owned() + buffer.file_eol()),
             );
             1
         } else {
@@ -1380,7 +1380,7 @@ fn write_file(
     writeln!(
         output,
         "{lines} lines ({bytes} bytes) written [EOL:{:?}]",
-        buffer.default_eol()
+        buffer.file_eol()
     )
     .expect("stdout failure is fatal");
     output.flush().expect("stdout failure is fatal");
