@@ -659,13 +659,13 @@ fn file_cmd(
         buffer.set_filename(Some(filename.to_owned()));
     }
 
-    let def_eol = buffer.file_eol();
+    let file_eol = buffer.file_eol();
     match buffer.filename() {
         None => {
-            writeln!(output, "no current filename [EOL:{def_eol:?}]").unwrap();
+            writeln!(output, "no current filename [EOL:{file_eol:?}]").unwrap();
         }
         Some(f) => {
-            writeln!(output, "{} [EOL:{def_eol:?}]", f.display()).unwrap();
+            writeln!(output, "{} [EOL:{file_eol:?}]", f.display()).unwrap();
         }
     }
     output.flush().unwrap();
@@ -1092,6 +1092,7 @@ fn substitute_cmd(
         return Err(LnedError::InvalidAddress);
     }
 
+    let file_eol = buffer.file_eol().as_str();
     let mut line_num = address.start();
     let mut last_line = address.end();
     let (target_match, limit) = if let SubstitutionScope::Single(n) = scope {
@@ -1123,7 +1124,7 @@ fn substitute_cmd(
                 edited_line
                     .split_terminator('\n')
                     .map(|l| l.trim_end_matches('\r'))
-                    .map(|l| l.to_owned() + buffer.file_eol()),
+                    .map(|l| l.to_owned() + file_eol),
             );
             1
         } else {
@@ -1608,7 +1609,7 @@ mod tests {
         let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         let mut output = Vec::new();
         file_cmd(&mut buffer, &mut output, None);
-        let expected = "no current filename [EOL:\"\\r\\n\"]\n";
+        let expected = "no current filename [EOL:CRLF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
         assert_eq!(None, buffer.filename());
     }
@@ -1620,7 +1621,7 @@ mod tests {
         let mut output = Vec::new();
         assert_eq!(None, buffer.filename());
         file_cmd(&mut buffer, &mut output, Some(Path::new(new_filename)));
-        let expected = format!("{new_filename} [EOL:\"\\n\"]\n");
+        let expected = format!("{new_filename} [EOL:LF]\n");
         assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
@@ -1635,7 +1636,7 @@ mod tests {
         assert_eq!(Some(Path::new(new_filename)), buffer.filename());
         output.clear();
         file_cmd(&mut buffer, &mut output, None);
-        let expected = "a_new_filename.txt [EOL:\"\\n\"]\n";
+        let expected = "a_new_filename.txt [EOL:LF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
     }
 
@@ -1648,7 +1649,7 @@ mod tests {
         file_cmd(&mut buffer, &mut output, Some(Path::new(orig_filename)));
         output.clear();
         file_cmd(&mut buffer, &mut output, Some(Path::new(new_filename)));
-        let expected = "a_new_filename.txt [EOL:\"\\n\"]\n";
+        let expected = "a_new_filename.txt [EOL:LF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
@@ -2713,6 +2714,7 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
+        eprintln!("{output:?}");
         assert!(output.contains("11.11.11\n"));
     }
 
@@ -4034,7 +4036,7 @@ mod tests {
             delete_cmd(&mut buffer, Some(Address::line(6))).expect("no error");
         let _ = show_diff_cmd(&buffer, &mut output, None).expect("no error");
         let output = str::from_utf8(&output).unwrap();
-        let expected = "10 lines (312 bytes) read [EOL:\"\\r\\n\"]\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
+        let expected = "10 lines (312 bytes) read [EOL:CRLF]\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
         assert_eq!(output, expected);
     }
 

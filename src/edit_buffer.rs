@@ -5,6 +5,7 @@
 mod undo_stack;
 
 use std::cmp::{self, Ordering};
+use std::fmt::{self, Display, Formatter};
 use std::ops::{
     Index, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
     RangeToInclusive,
@@ -24,10 +25,28 @@ use crate::main_loop::LnedError;
 pub struct EditBuffer {
     current_line: usize,
     filename: Option<PathBuf>,
-    file_eol: Option<&'static str>,
+    file_eol: Option<Eol>,
     undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
     text: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Eol {
+    LF,
+    CRLF,
+}
+
+trait EolTerminated {
+    #[must_use]
+    fn is_eol_terminated(&self) -> bool;
+}
+
+impl<T: AsRef<str>> EolTerminated for T {
+    fn is_eol_terminated(&self) -> bool {
+        let s = self.as_ref();
+        s.ends_with("\r\n") || s.ends_with('\n')
+    }
 }
 
 impl Default for EditBuffer {
@@ -163,6 +182,7 @@ impl EditBuffer {
         let line_count = text.len();
         let text = text.iter().map(ToString::to_string).collect();
         let mut buf = EditBuffer::with_capacity(line_count);
+        buf.file_eol = Some(Eol::compute_file_eol(&text));
         buf.append(0, text);
         buf.set_current_line(line_count);
         buf
@@ -264,13 +284,12 @@ impl EditBuffer {
 
     pub fn append(&mut self, location: usize, mut lines: Vec<String>) -> bool {
         let file_eol =
-            self.file_eol.get_or_insert_with(|| compute_file_eol(&lines));
-
+            self.file_eol.get_or_insert_with(|| Eol::compute_file_eol(&lines));
         // Add missing EOL if necessary
         let mut eol_added = false;
         for l in &mut lines {
-            if !(l.ends_with("\r\n") || l.ends_with('\n')) {
-                l.push_str(file_eol);
+            if !l.is_eol_terminated() {
+                l.push_str(file_eol.as_str());
                 eol_added = true;
             }
         }
@@ -502,31 +521,61 @@ impl EditBuffer {
         self.file_eol = None;
     }
 
-    pub fn file_eol(&mut self) -> &'static str {
-        self.file_eol.get_or_insert_with(line_edit::native_eol)
+    pub fn file_eol(&mut self) -> Eol {
+        *self.file_eol.get_or_insert_with(Eol::native)
     }
 }
 
-pub fn compute_file_eol(
-    lines: impl IntoIterator<Item = impl AsRef<str>>,
-) -> &'static str {
-    let native_eol = line_edit::native_eol();
-    let mut crlf = 0;
-    let mut lf = 0;
+impl Display for Eol {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+        match self {
+            Eol::LF => write!(f, "\n"),
+            Eol::CRLF => write!(f, "\r\n"),
+        }
+    }
+}
 
-    for line in lines {
-        let line = line.as_ref();
-        if line.ends_with("\r\n") {
-            crlf += 1;
-        } else if line.ends_with('\n') {
-            lf += 1;
+impl Into<&'static str> for Eol {
+    fn into(self) -> &'static str {
+        self.as_str()
+    }
+}
+
+impl Eol {
+    #[must_use]
+    pub fn native() -> Eol {
+        if std::env::consts::FAMILY == "windows" { Eol::CRLF } else { Eol::LF }
+    }
+
+    #[must_use]
+    fn compute_file_eol(
+        lines: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Eol {
+        let mut crlf = 0;
+        let mut lf = 0;
+
+        for line in lines {
+            let line = line.as_ref();
+            if line.ends_with("\r\n") {
+                crlf += 1;
+            } else if line.ends_with('\n') {
+                lf += 1;
+            }
+        }
+
+        match crlf.cmp(&lf) {
+            Ordering::Greater => Eol::CRLF,
+            Ordering::Less => Eol::LF,
+            Ordering::Equal => Eol::native(),
         }
     }
 
-    match crlf.cmp(&lf) {
-        Ordering::Greater => "\r\n",
-        Ordering::Less => "\n",
-        Ordering::Equal => native_eol,
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Eol::LF => "\n",
+            Eol::CRLF => "\r\n",
+        }
     }
 }
 
@@ -582,7 +631,7 @@ mod tests {
             buf_non_terminated
                 .text
                 .iter()
-                .all(|l| l.ends_with("\r\n") || l.ends_with('\n'))
+                .all(EolTerminated::is_eol_terminated)
         );
     }
 
@@ -593,36 +642,36 @@ mod tests {
     }
 
     /////
-    // compute_file_eol() tests
+    // Eol::compute_file_eol() tests
 
     #[test]
     fn file_eol_when_all_crlf() {
         let lines = vec!["L1\r\n", "L2\r\n", "L3\r\n"];
-        assert_eq!("\r\n", compute_file_eol(&lines));
+        assert_eq!(Eol::compute_file_eol(&lines), Eol::CRLF);
     }
 
     #[test]
     fn file_eol_when_all_lf() {
         let lines = vec!["L1\n", "L2\n", "L3\n"];
-        assert_eq!("\n", compute_file_eol(&lines));
+        assert_eq!(Eol::compute_file_eol(&lines), Eol::LF);
     }
 
     #[test]
     fn file_eol_when_most_crlf() {
         let lines = vec!["L1\r\n", "L2\n", "L3\r\n"];
-        assert_eq!("\r\n", compute_file_eol(&lines));
+        assert_eq!(Eol::compute_file_eol(&lines), Eol::CRLF);
     }
 
     #[test]
     fn file_eol_when_most_lf() {
         let lines = vec!["L1\n", "L2\n", "L3\r\n"];
-        assert_eq!("\n", compute_file_eol(&lines));
+        assert_eq!(Eol::compute_file_eol(&lines), Eol::LF);
     }
 
     #[test]
     fn file_eol_when_equal_lf_crlf() {
         let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n"];
-        assert_eq!(compute_file_eol(&lines), line_edit::native_eol());
+        assert_eq!(Eol::compute_file_eol(&lines), Eol::native());
     }
 
     /////
