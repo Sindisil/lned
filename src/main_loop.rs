@@ -15,7 +15,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli;
 use crate::command::{self, Address, Cmd, PrintAttributes, SubstitutionScope};
-use crate::edit_buffer::{Change, ChangeSet, Diff, EditBuffer};
+use crate::edit_buffer::{Change, ChangeSet, Diff, EditBuffer, Eol};
 
 use line_edit::LineEdit;
 
@@ -609,18 +609,18 @@ fn edit_cmd(
 
     let mut lines = Vec::new();
     let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
+    buffer.clear_text();
+    let missing_eol = buffer.append(0, lines);
     writeln!(
         output,
-        "{lines_read} lines ({bytes_read} bytes) read [EOL:{:?}]",
-        buffer.file_eol()
+        "{lines_read} lines ({bytes_read} bytes) read [EOL:{}]",
+        buffer.prevailing_eol().map_or("None", Eol::display_str)
     )
     .unwrap();
-
-    buffer.clear_text();
-    if buffer.append(0, lines) {
-        output.flush().unwrap();
-        writeln!(output, "missing line terminator appended").unwrap();
+    if missing_eol {
+        writeln!(output, "missing final line terminator appended").unwrap();
     }
+    output.flush().unwrap();
     buffer.set_current_line(buffer.len());
     Ok(None)
 }
@@ -659,13 +659,15 @@ fn file_cmd(
         buffer.set_filename(Some(filename.to_owned()));
     }
 
-    let file_eol = buffer.file_eol();
+    let prevailing_eol =
+        buffer.prevailing_eol().map_or("None", Eol::display_str);
     match buffer.filename() {
         None => {
-            writeln!(output, "no current filename [EOL:{file_eol:?}]").unwrap();
+            writeln!(output, "no current filename [EOL:{prevailing_eol}]")
+                .unwrap();
         }
         Some(f) => {
-            writeln!(output, "{} [EOL:{file_eol:?}]", f.display()).unwrap();
+            writeln!(output, "{} [EOL:{prevailing_eol}]", f.display()).unwrap();
         }
     }
     output.flush().unwrap();
@@ -1092,7 +1094,10 @@ fn substitute_cmd(
         return Err(LnedError::InvalidAddress);
     }
 
-    let file_eol = buffer.file_eol().as_str();
+    let prevailing_eol = buffer
+        .prevailing_eol()
+        .expect("non-empty buffer has valid EOL")
+        .as_str();
     let mut line_num = address.start();
     let mut last_line = address.end();
     let (target_match, limit) = if let SubstitutionScope::Single(n) = scope {
@@ -1124,7 +1129,7 @@ fn substitute_cmd(
                 edited_line
                     .split_terminator('\n')
                     .map(|l| l.trim_end_matches('\r'))
-                    .map(|l| l.to_owned() + file_eol),
+                    .map(|l| l.to_owned() + prevailing_eol),
             );
             1
         } else {
@@ -1380,8 +1385,8 @@ fn write_file(
     })?;
     writeln!(
         output,
-        "{lines} lines ({bytes} bytes) written [EOL:{:?}]",
-        buffer.file_eol()
+        "{lines} lines ({bytes} bytes) written [EOL:{}]",
+        buffer.prevailing_eol().map_or("None", Eol::display_str)
     )
     .expect("stdout failure is fatal");
     output.flush().expect("stdout failure is fatal");
@@ -2714,7 +2719,6 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        eprintln!("{output:?}");
         assert!(output.contains("11.11.11\n"));
     }
 
@@ -4036,7 +4040,7 @@ mod tests {
             delete_cmd(&mut buffer, Some(Address::line(6))).expect("no error");
         let _ = show_diff_cmd(&buffer, &mut output, None).expect("no error");
         let output = str::from_utf8(&output).unwrap();
-        let expected = "10 lines (312 bytes) read [EOL:CRLF]\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
+        let expected = "10 lines (312 bytes) read [EOL:LF]\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
         assert_eq!(output, expected);
     }
 

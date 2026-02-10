@@ -5,7 +5,6 @@
 mod undo_stack;
 
 use std::cmp::{self, Ordering};
-use std::fmt::{self, Display, Formatter};
 use std::ops::{
     Index, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
     RangeToInclusive,
@@ -25,7 +24,7 @@ use crate::main_loop::LnedError;
 pub struct EditBuffer {
     current_line: usize,
     filename: Option<PathBuf>,
-    file_eol: Option<Eol>,
+    prevailing_eol: Option<Eol>,
     undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
     text: Vec<String>,
@@ -33,8 +32,8 @@ pub struct EditBuffer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Eol {
-    LF,
-    CRLF,
+    Lf,
+    Crlf,
 }
 
 trait EolTerminated {
@@ -153,7 +152,7 @@ impl EditBuffer {
             text: Vec::new(),
             current_line: 0,
             filename: None,
-            file_eol: None,
+            prevailing_eol: None,
             undo_stack: UndoStack::new(),
             clean_fingerprint: None,
         }
@@ -182,7 +181,7 @@ impl EditBuffer {
         let line_count = text.len();
         let text = text.iter().map(ToString::to_string).collect();
         let mut buf = EditBuffer::with_capacity(line_count);
-        buf.file_eol = Some(Eol::compute_file_eol(&text));
+        buf.prevailing_eol = Some(Eol::compute_prevailing_eol(&text));
         buf.append(0, text);
         buf.set_current_line(line_count);
         buf
@@ -283,13 +282,14 @@ impl EditBuffer {
     }
 
     pub fn append(&mut self, location: usize, mut lines: Vec<String>) -> bool {
-        let file_eol =
-            self.file_eol.get_or_insert_with(|| Eol::compute_file_eol(&lines));
+        let prevailing_eol = self
+            .prevailing_eol
+            .get_or_insert_with(|| Eol::compute_prevailing_eol(&lines));
         // Add missing EOL if necessary
         let mut eol_added = false;
         for l in &mut lines {
             if !l.is_eol_terminated() {
-                l.push_str(file_eol.as_str());
+                l.push_str(prevailing_eol.as_str());
                 eol_added = true;
             }
         }
@@ -518,37 +518,22 @@ impl EditBuffer {
     pub fn clear_text(&mut self) {
         self.text.clear();
         self.current_line = 0;
-        self.file_eol = None;
+        self.prevailing_eol = None;
     }
 
-    pub fn file_eol(&mut self) -> Eol {
-        *self.file_eol.get_or_insert_with(Eol::native)
-    }
-}
-
-impl Display for Eol {
-    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-        match self {
-            Eol::LF => write!(f, "\n"),
-            Eol::CRLF => write!(f, "\r\n"),
-        }
-    }
-}
-
-impl Into<&'static str> for Eol {
-    fn into(self) -> &'static str {
-        self.as_str()
+    pub fn prevailing_eol(&mut self) -> Option<Eol> {
+        self.prevailing_eol
     }
 }
 
 impl Eol {
     #[must_use]
     pub fn native() -> Eol {
-        if std::env::consts::FAMILY == "windows" { Eol::CRLF } else { Eol::LF }
+        if std::env::consts::FAMILY == "windows" { Eol::Crlf } else { Eol::Lf }
     }
 
     #[must_use]
-    fn compute_file_eol(
+    fn compute_prevailing_eol(
         lines: impl IntoIterator<Item = impl AsRef<str>>,
     ) -> Eol {
         let mut crlf = 0;
@@ -564,8 +549,8 @@ impl Eol {
         }
 
         match crlf.cmp(&lf) {
-            Ordering::Greater => Eol::CRLF,
-            Ordering::Less => Eol::LF,
+            Ordering::Greater => Eol::Crlf,
+            Ordering::Less => Eol::Lf,
             Ordering::Equal => Eol::native(),
         }
     }
@@ -573,8 +558,16 @@ impl Eol {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            Eol::LF => "\n",
-            Eol::CRLF => "\r\n",
+            Eol::Lf => "\n",
+            Eol::Crlf => "\r\n",
+        }
+    }
+
+    #[must_use]
+    pub fn display_str(self) -> &'static str {
+        match self {
+            Eol::Lf => "LF",
+            Eol::Crlf => "CRLF",
         }
     }
 }
@@ -642,36 +635,36 @@ mod tests {
     }
 
     /////
-    // Eol::compute_file_eol() tests
+    // Eol::compute_prevailing_eol() tests
 
     #[test]
-    fn file_eol_when_all_crlf() {
+    fn prevailing_eol_when_all_crlf() {
         let lines = vec!["L1\r\n", "L2\r\n", "L3\r\n"];
-        assert_eq!(Eol::compute_file_eol(&lines), Eol::CRLF);
+        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::Crlf);
     }
 
     #[test]
-    fn file_eol_when_all_lf() {
+    fn prevailing_eol_when_all_lf() {
         let lines = vec!["L1\n", "L2\n", "L3\n"];
-        assert_eq!(Eol::compute_file_eol(&lines), Eol::LF);
+        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::Lf);
     }
 
     #[test]
-    fn file_eol_when_most_crlf() {
+    fn prevailing_eol_when_most_crlf() {
         let lines = vec!["L1\r\n", "L2\n", "L3\r\n"];
-        assert_eq!(Eol::compute_file_eol(&lines), Eol::CRLF);
+        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::Crlf);
     }
 
     #[test]
-    fn file_eol_when_most_lf() {
+    fn prevailing_eol_when_most_lf() {
         let lines = vec!["L1\n", "L2\n", "L3\r\n"];
-        assert_eq!(Eol::compute_file_eol(&lines), Eol::LF);
+        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::Lf);
     }
 
     #[test]
-    fn file_eol_when_equal_lf_crlf() {
+    fn prevailing_eol_when_equal_lf_crlf() {
         let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n"];
-        assert_eq!(Eol::compute_file_eol(&lines), Eol::native());
+        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::native());
     }
 
     /////
