@@ -1,2 +1,4 @@
+edition = "2024"
 max_width = 80
 use_small_heuristics = "max"
+newline_style = "Unix"
