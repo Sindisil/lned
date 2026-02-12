@@ -15,7 +15,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli;
 use crate::command::{self, Address, Cmd, PrintAttributes, SubstitutionScope};
-use crate::edit_buffer::{Change, ChangeSet, Diff, EditBuffer, Eol};
+use crate::edit_buffer::{Change, ChangeSet, Diff, EditBuffer, PrevailingEol};
 
 use line_edit::LineEdit;
 
@@ -613,12 +613,12 @@ fn edit_cmd(
     let missing_eol = buffer.append(0, lines);
     writeln!(
         output,
-        "{lines_read} lines ({bytes_read} bytes) read [EOL:{}]",
-        buffer.prevailing_eol().map_or("None", Eol::display_str)
+        "{lines_read} lines ({bytes_read} bytes) read [{}]",
+        buffer.prevailing_eol().map_or("None", PrevailingEol::display_str)
     )
     .unwrap();
     if missing_eol {
-        writeln!(output, "missing final line terminator appended").unwrap();
+        writeln!(output, "missing final newline appended").unwrap();
     }
     output.flush().unwrap();
     buffer.set_current_line(buffer.len());
@@ -660,14 +660,13 @@ fn file_cmd(
     }
 
     let prevailing_eol =
-        buffer.prevailing_eol().map_or("None", Eol::display_str);
+        buffer.prevailing_eol().map_or("None", PrevailingEol::display_str);
     match buffer.filename() {
         None => {
-            writeln!(output, "no current filename [EOL:{prevailing_eol}]")
-                .unwrap();
+            writeln!(output, "no current filename [{prevailing_eol}]").unwrap();
         }
         Some(f) => {
-            writeln!(output, "{} [EOL:{prevailing_eol}]", f.display()).unwrap();
+            writeln!(output, "{} [{prevailing_eol}]", f.display()).unwrap();
         }
     }
     output.flush().unwrap();
@@ -1071,7 +1070,7 @@ fn read_cmd(
     let lines_added = lines.len();
     if buffer.append(address.end(), lines) {
         output.flush().unwrap();
-        writeln!(output, "missing line terminator appended").unwrap();
+        writeln!(output, "missing final newline appended").unwrap();
     }
     buffer.set_current_line(address.end() + lines_added);
     changes.push(change, buffer.current_line());
@@ -1097,6 +1096,7 @@ fn substitute_cmd(
     let prevailing_eol = buffer
         .prevailing_eol()
         .expect("non-empty buffer has valid EOL")
+        .eol
         .as_str();
     let mut line_num = address.start();
     let mut last_line = address.end();
@@ -1385,8 +1385,8 @@ fn write_file(
     })?;
     writeln!(
         output,
-        "{lines} lines ({bytes} bytes) written [EOL:{}]",
-        buffer.prevailing_eol().map_or("None", Eol::display_str)
+        "{lines} lines ({bytes} bytes) written [{}]",
+        buffer.prevailing_eol().map_or("None", PrevailingEol::display_str)
     )
     .expect("stdout failure is fatal");
     output.flush().expect("stdout failure is fatal");
@@ -1614,7 +1614,7 @@ mod tests {
         let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         let mut output = Vec::new();
         file_cmd(&mut buffer, &mut output, None);
-        let expected = "no current filename [EOL:CRLF]\n";
+        let expected = "no current filename [CRLF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
         assert_eq!(None, buffer.filename());
     }
@@ -1626,7 +1626,7 @@ mod tests {
         let mut output = Vec::new();
         assert_eq!(None, buffer.filename());
         file_cmd(&mut buffer, &mut output, Some(Path::new(new_filename)));
-        let expected = format!("{new_filename} [EOL:LF]\n");
+        let expected = format!("{new_filename} [LF]\n");
         assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
@@ -1641,7 +1641,7 @@ mod tests {
         assert_eq!(Some(Path::new(new_filename)), buffer.filename());
         output.clear();
         file_cmd(&mut buffer, &mut output, None);
-        let expected = "a_new_filename.txt [EOL:LF]\n";
+        let expected = "a_new_filename.txt [LF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
     }
 
@@ -1654,7 +1654,7 @@ mod tests {
         file_cmd(&mut buffer, &mut output, Some(Path::new(orig_filename)));
         output.clear();
         file_cmd(&mut buffer, &mut output, Some(Path::new(new_filename)));
-        let expected = "a_new_filename.txt [EOL:LF]\n";
+        let expected = "a_new_filename.txt [LF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
@@ -4040,7 +4040,7 @@ mod tests {
             delete_cmd(&mut buffer, Some(Address::line(6))).expect("no error");
         let _ = show_diff_cmd(&buffer, &mut output, None).expect("no error");
         let output = str::from_utf8(&output).unwrap();
-        let expected = "10 lines (312 bytes) read [EOL:LF]\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
+        let expected = "10 lines (312 bytes) read [LF]\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
         assert_eq!(output, expected);
     }
 

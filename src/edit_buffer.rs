@@ -24,10 +24,16 @@ use crate::main_loop::LnedError;
 pub struct EditBuffer {
     current_line: usize,
     filename: Option<PathBuf>,
-    prevailing_eol: Option<Eol>,
+    prevailing_eol: Option<PrevailingEol>,
     undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
     text: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrevailingEol {
+    pub eol: Eol,
+    pub mixed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,9 +185,9 @@ impl EditBuffer {
     #[cfg(test)]
     pub fn with_text(text: &[&str]) -> EditBuffer {
         let line_count = text.len();
-        let text = text.iter().map(ToString::to_string).collect();
+        let text: Vec<_> = text.iter().map(ToString::to_string).collect();
         let mut buf = EditBuffer::with_capacity(line_count);
-        buf.prevailing_eol = Some(Eol::compute_prevailing_eol(&text));
+        buf.prevailing_eol = Eol::compute_prevailing_eol(&text);
         buf.append(0, text);
         buf.set_current_line(line_count);
         buf
@@ -282,14 +288,19 @@ impl EditBuffer {
     }
 
     pub fn append(&mut self, location: usize, mut lines: Vec<String>) -> bool {
-        let prevailing_eol = self
-            .prevailing_eol
-            .get_or_insert_with(|| Eol::compute_prevailing_eol(&lines));
+        let Some(new_eol) = Eol::compute_prevailing_eol(&lines) else {
+            // Nothing to do
+            return false;
+        };
+        let prevailing_eol = self.prevailing_eol.get_or_insert(new_eol);
+        if new_eol.mixed || (new_eol.eol != prevailing_eol.eol) {
+            prevailing_eol.mixed = true;
+        }
         // Add missing EOL if necessary
         let mut eol_added = false;
         for l in &mut lines {
             if !l.is_eol_terminated() {
-                l.push_str(prevailing_eol.as_str());
+                l.push_str(prevailing_eol.eol.as_str());
                 eol_added = true;
             }
         }
@@ -521,8 +532,21 @@ impl EditBuffer {
         self.prevailing_eol = None;
     }
 
-    pub fn prevailing_eol(&mut self) -> Option<Eol> {
+    pub fn prevailing_eol(&mut self) -> Option<PrevailingEol> {
         self.prevailing_eol
+    }
+}
+
+impl PrevailingEol {
+    pub fn display_str(self) -> &'static str {
+        if !self.mixed {
+            return self.eol.display_str();
+        }
+
+        match self.eol {
+            Eol::Crlf => "CRLF/mixed",
+            Eol::Lf => "LF/mixed",
+        }
     }
 }
 
@@ -533,14 +557,16 @@ impl Eol {
     }
 
     #[must_use]
-    fn compute_prevailing_eol(
-        lines: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> Eol {
+    fn compute_prevailing_eol(lines: &Vec<String>) -> Option<PrevailingEol> {
+        if lines.is_empty() {
+            // lines empty, nothing to compute
+            return None;
+        }
+
         let mut crlf = 0;
         let mut lf = 0;
 
         for line in lines {
-            let line = line.as_ref();
             if line.ends_with("\r\n") {
                 crlf += 1;
             } else if line.ends_with('\n') {
@@ -548,11 +574,13 @@ impl Eol {
             }
         }
 
-        match crlf.cmp(&lf) {
+        let mixed = crlf > 0 && lf > 0;
+        let eol = match crlf.cmp(&lf) {
             Ordering::Greater => Eol::Crlf,
             Ordering::Less => Eol::Lf,
             Ordering::Equal => Eol::native(),
-        }
+        };
+        Some(PrevailingEol { eol, mixed })
     }
 
     #[must_use]
@@ -639,32 +667,46 @@ mod tests {
 
     #[test]
     fn prevailing_eol_when_all_crlf() {
-        let lines = vec!["L1\r\n", "L2\r\n", "L3\r\n"];
-        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::Crlf);
+        let lines =
+            vec!["L1\r\n".to_owned(), "L2\r\n".to_owned(), "L3\r\n".to_owned()];
+        let expected = Some(PrevailingEol { eol: Eol::Crlf, mixed: false });
+        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
     }
 
     #[test]
     fn prevailing_eol_when_all_lf() {
-        let lines = vec!["L1\n", "L2\n", "L3\n"];
-        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::Lf);
+        let lines =
+            vec!["L1\n".to_owned(), "L2\n".to_owned(), "L3\n".to_owned()];
+        let expected = Some(PrevailingEol { eol: Eol::Lf, mixed: false });
+        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
     }
 
     #[test]
     fn prevailing_eol_when_most_crlf() {
-        let lines = vec!["L1\r\n", "L2\n", "L3\r\n"];
-        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::Crlf);
+        let lines =
+            vec!["L1\r\n".to_owned(), "L2\n".to_owned(), "L3\r\n".to_owned()];
+        let expected = Some(PrevailingEol { eol: Eol::Crlf, mixed: true });
+        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
     }
 
     #[test]
     fn prevailing_eol_when_most_lf() {
-        let lines = vec!["L1\n", "L2\n", "L3\r\n"];
-        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::Lf);
+        let lines =
+            vec!["L1\n".to_owned(), "L2\n".to_owned(), "L3\r\n".to_owned()];
+        let expected = Some(PrevailingEol { eol: Eol::Lf, mixed: true });
+        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
     }
 
     #[test]
     fn prevailing_eol_when_equal_lf_crlf() {
-        let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n"];
-        assert_eq!(Eol::compute_prevailing_eol(&lines), Eol::native());
+        let lines = vec![
+            "L1\n".to_owned(),
+            "L2\r\n".to_owned(),
+            "L3\r\n".to_owned(),
+            "L4\n".to_owned(),
+        ];
+        let expected = Some(PrevailingEol { eol: Eol::native(), mixed: true });
+        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
     }
 
     /////
