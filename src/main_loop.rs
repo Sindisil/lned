@@ -618,7 +618,7 @@ fn edit_cmd(
     )
     .unwrap();
     if missing_eol {
-        writeln!(output, "missing final newline appended").unwrap();
+        writeln!(output, "missing newline appended").unwrap();
     }
     output.flush().unwrap();
     buffer.set_current_line(buffer.len());
@@ -1070,7 +1070,7 @@ fn read_cmd(
     let lines_added = lines.len();
     if buffer.append(address.end(), lines) {
         output.flush().unwrap();
-        writeln!(output, "missing final newline appended").unwrap();
+        writeln!(output, "missing newline appended").unwrap();
     }
     buffer.set_current_line(address.end() + lines_added);
     changes.push(change, buffer.current_line());

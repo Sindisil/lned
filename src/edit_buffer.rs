@@ -45,12 +45,26 @@ pub enum Eol {
 trait EolTerminated {
     #[must_use]
     fn is_eol_terminated(&self) -> bool;
+
+    #[must_use]
+    fn get_eol(&self) -> Option<Eol>;
 }
 
 impl<T: AsRef<str>> EolTerminated for T {
     fn is_eol_terminated(&self) -> bool {
         let s = self.as_ref();
         s.ends_with("\r\n") || s.ends_with('\n')
+    }
+
+    fn get_eol(&self) -> Option<Eol> {
+        let s = self.as_ref();
+        if s.ends_with(Eol::Crlf.as_str()) {
+            return Some(Eol::Crlf);
+        }
+        if s.ends_with(Eol::Lf.as_str()) {
+            return Some(Eol::Lf);
+        }
+        None
     }
 }
 
@@ -292,14 +306,23 @@ impl EditBuffer {
             // Nothing to do
             return false;
         };
+
         let prevailing_eol = self.prevailing_eol.get_or_insert(new_eol);
         if new_eol.mixed || (new_eol.eol != prevailing_eol.eol) {
             prevailing_eol.mixed = true;
         }
-        // Add missing EOL if necessary
+
+        // Normalize EOLs of lines to add
         let mut eol_added = false;
         for l in &mut lines {
-            if !l.is_eol_terminated() {
+            let line_eol = l.get_eol();
+            if let Some(line_eol) = line_eol {
+                if line_eol != prevailing_eol.eol {
+                    // Wrong EOL -- replace with prevailing
+                    l.truncate(l.len() - line_eol.as_str().len());
+                    l.push_str(prevailing_eol.eol.as_str());
+                }
+            } else {
                 l.push_str(prevailing_eol.eol.as_str());
                 eol_added = true;
             }
@@ -737,7 +760,7 @@ mod tests {
     fn range_full() {
         let content = ["1\n", "2\n", "3\n", "4\n"];
         let buffer = EditBuffer::with_text(&content);
-        assert_eq!(content, buffer[..]);
+        assert_eq!(buffer[..], content);
     }
 
     #[test]
@@ -745,18 +768,18 @@ mod tests {
         let buffer = EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         assert_eq!(vec!["2\n", "3\n", "4\n"], buffer[2..5]);
         assert_eq!(
+            buffer[1..7],
             vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"],
-            buffer[1..7]
         );
     }
 
     #[test]
     fn range_inclusive_index() {
         let buffer = EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
-        assert_eq!(vec!["2\n", "3\n", "4\n"], buffer[2..=4]);
+        assert_eq!(buffer[2..=4], vec!["2\n", "3\n", "4\n"],);
         assert_eq!(
+            buffer[1..=6],
             vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"],
-            buffer[1..=6]
         );
     }
 
@@ -1625,5 +1648,18 @@ mod tests {
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), orig.current_line());
+    }
+
+    #[test]
+    fn append_normalizes_eols() {
+        let mut buf = EditBuffer::with_text(&["1\n", "2", "3"]);
+        let expected = ["1\n", "2\n", "a\n", "b\n", "c\n", "3\n"];
+        let added = buf.append(
+            2,
+            vec!["a\r\n".to_owned(), "b\r\n".to_owned(), "c\r\n".to_owned()],
+        );
+
+        assert!(!added);
+        assert_eq!(buf[..], expected);
     }
 }
