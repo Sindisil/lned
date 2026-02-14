@@ -14,6 +14,8 @@ use line_edit::EditorOptions;
 use line_edit::LineEdit;
 
 use crate::edit_buffer::EditBuffer;
+use crate::edit_buffer::PrevailingEol;
+use crate::eol::Eol;
 use crate::iter_utils::Peeking;
 
 pub static INDENT: LazyLock<Regex> =
@@ -36,6 +38,7 @@ pub enum Cmd {
     LineNumber(Option<Address>),
     List(Option<Address>),
     Move(Option<Address>, Address),
+    Newline(Option<PrevailingEol>),
     Null(Option<Address>),
     Print(Option<Address>),
     Quit,
@@ -84,6 +87,7 @@ pub enum Error {
     RepeatedSubstitutionScope,
     MissingPatternDelimiter,
     AddressTooLarge,
+    InvalidNewline,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -113,6 +117,7 @@ impl std::error::Error for Error {
             | Error::MissingDestination
             | Error::RepeatedSubstitutionScope
             | Error::MissingPatternDelimiter
+            | Error::InvalidNewline
             | Error::MissingEol => None,
             Error::ReadCommand { ref source } => Some(source),
         }
@@ -155,6 +160,9 @@ impl Display for Error {
             }
             Error::AddressTooLarge => {
                 write!(f, "address too large")
+            }
+            Error::InvalidNewline => {
+                write!(f, "invalid newline (valid: CR, CRLF)")
             }
         }
     }
@@ -390,6 +398,7 @@ impl Cmd {
                 address,
             ),
             Some("n") => parse_no_args(&mut graphemes, Cmd::Enumerate(address)),
+            Some("N") => parse_newline_cmd(&mut graphemes, address),
             None | Some("\n" | "\r\n") => Ok(Some((Cmd::Null(address), None))),
             Some("p") => parse_no_args(&mut graphemes, Cmd::Print(address)),
             Some("q") => parse_no_address(address, Cmd::Quit)
@@ -970,6 +979,37 @@ fn parse_join_cmd(
         }
     };
     Ok(Some((cmd, sfx)))
+}
+
+fn parse_newline_cmd<'a>(
+    graphemes: &mut impl Iterator<Item = &'a str>,
+    address: Option<Address>,
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+    if address.is_some() {
+        return Err(Error::UnexpectedAddress);
+    }
+    match graphemes.next() {
+        None | Some("\n" | "\r\n") => Ok(Some((Cmd::Newline(None), None))),
+        Some(" " | "\t") => {
+            let eol = graphemes
+                .take_while(|s| *s != "\n" && *s != "\r\n")
+                .collect::<String>()
+                .trim()
+                .to_owned();
+            if eol.is_empty() {
+                Ok(Some((Cmd::Newline(None), None)))
+            } else {
+                Ok(Some((
+                    Cmd::Newline(Some(
+                        eol.parse::<PrevailingEol>()
+                            .map_err(|_| Error::InvalidNewline)?,
+                    )),
+                    None,
+                )))
+            }
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
 }
 
 #[cfg(test)]
@@ -2303,5 +2343,51 @@ mod tests {
         assert!(
             matches!(res, Some((Cmd::Scroll(a, w, p), None)) if a == Some(Address::line(5)) && w == Some(10) && p.is_none())
         );
+    }
+
+    #[test]
+    fn parse_newline_no_print_suffix() {
+        let mut cmd_line = "\n".graphemes(true);
+        let res = parse_newline_cmd(&mut cmd_line, None).unwrap();
+        assert!(matches!(res, Some((_, None))));
+    }
+
+    #[test]
+    fn parse_newline_cmd_with_address() {
+        let mut cmd_line = " CRLF".graphemes(true);
+        let res = parse_newline_cmd(&mut cmd_line, Some(Address::line(1)))
+            .expect_err("unexpected addr");
+        assert!(matches!(res, Error::UnexpectedAddress));
+    }
+
+    #[test]
+    fn parse_newline_cmd_no_filename() {
+        let mut cmd_line = "\n".graphemes(true);
+        let res = parse_newline_cmd(&mut cmd_line, None).unwrap();
+        assert!(matches!(res, Some((Cmd::Newline(None), None))));
+    }
+
+    #[test]
+    fn parse_newline_cmd_bad_filename() {
+        let mut cmd_line = " HT\r\n".graphemes(true);
+        let res = parse_newline_cmd(&mut cmd_line, None).expect_err("bad eol");
+        assert!(matches!(res, Error::InvalidNewline));
+    }
+
+    #[test]
+    fn parse_newline_cmd_with_filename() {
+        let mut cmd_line = " LF\n".graphemes(true);
+        let res = parse_newline_cmd(&mut cmd_line, None).unwrap();
+        assert!(
+            matches!(&res, Some((Cmd::Newline(Some(eol)), None)) if eol.eol == Eol::Lf && !eol.mixed),
+        );
+    }
+
+    #[test]
+    fn parse_newline_cmd_invalid_suffix() {
+        let mut cmd_line = "LF\n".graphemes(true);
+        let res =
+            parse_newline_cmd(&mut cmd_line, None).expect_err("invalid suffix");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 }

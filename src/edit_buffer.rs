@@ -5,11 +5,13 @@
 mod undo_stack;
 
 use std::cmp::{self, Ordering};
+use std::fmt::{self, Display, Formatter};
 use std::ops::{
     Index, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
     RangeToInclusive,
 };
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use regex::Regex;
 
@@ -18,6 +20,7 @@ pub use crate::edit_buffer::undo_stack::Change;
 pub use crate::edit_buffer::undo_stack::ChangeSet;
 pub use crate::edit_buffer::undo_stack::Diff;
 use crate::edit_buffer::undo_stack::UndoStack;
+use crate::eol::{Eol, EolTerminated};
 use crate::main_loop::LnedError;
 
 #[derive(Debug, Clone)]
@@ -28,44 +31,6 @@ pub struct EditBuffer {
     undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
     text: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PrevailingEol {
-    pub eol: Eol,
-    pub mixed: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Eol {
-    Lf,
-    Crlf,
-}
-
-trait EolTerminated {
-    #[must_use]
-    fn is_eol_terminated(&self) -> bool;
-
-    #[must_use]
-    fn get_eol(&self) -> Option<Eol>;
-}
-
-impl<T: AsRef<str>> EolTerminated for T {
-    fn is_eol_terminated(&self) -> bool {
-        let s = self.as_ref();
-        s.ends_with("\r\n") || s.ends_with('\n')
-    }
-
-    fn get_eol(&self) -> Option<Eol> {
-        let s = self.as_ref();
-        if s.ends_with(Eol::Crlf.as_str()) {
-            return Some(Eol::Crlf);
-        }
-        if s.ends_with(Eol::Lf.as_str()) {
-            return Some(Eol::Lf);
-        }
-        None
-    }
 }
 
 impl Default for EditBuffer {
@@ -201,7 +166,7 @@ impl EditBuffer {
         let line_count = text.len();
         let text: Vec<_> = text.iter().map(ToString::to_string).collect();
         let mut buf = EditBuffer::with_capacity(line_count);
-        buf.prevailing_eol = Eol::compute_prevailing_eol(&text);
+        buf.prevailing_eol = PrevailingEol::compute_prevailing_eol(&text);
         buf.append(0, text);
         buf.set_current_line(line_count);
         buf
@@ -249,7 +214,11 @@ impl EditBuffer {
     }
 
     pub fn push_undo(&mut self, changes: ChangeSet) {
-        self.undo_stack.push_undo(changes, self.current_line);
+        self.undo_stack.push_undo(
+            changes,
+            self.current_line,
+            self.prevailing_eol,
+        );
     }
 
     pub fn find_line(&self, pattern: &Regex) -> Option<usize> {
@@ -285,9 +254,10 @@ impl EditBuffer {
         address: Option<Address>,
         lines: Vec<String>,
     ) -> Option<ChangeSet> {
-        let mut changes = ChangeSet::new(self.current_line);
+        let mut changes =
+            ChangeSet::new(self.current_line, self.prevailing_eol);
 
-        let mut change = Change::new(self.current_line);
+        let mut change = Change::new(self.current_line, self.prevailing_eol());
         let location = address.map_or(self.current_line, |addr| addr.end());
         if lines.is_empty() {
             self.current_line = location;
@@ -297,12 +267,13 @@ impl EditBuffer {
         self.append(location, lines.clone());
         self.current_line = location + lines.len();
         change.push_add(location, lines);
-        changes.push(change, self.current_line);
+        changes.push(change, self.current_line, self.prevailing_eol);
         Some(changes)
     }
 
     pub fn append(&mut self, location: usize, mut lines: Vec<String>) -> bool {
-        let Some(new_eol) = Eol::compute_prevailing_eol(&lines) else {
+        let Some(new_eol) = PrevailingEol::compute_prevailing_eol(&lines)
+        else {
             // Nothing to do
             return false;
         };
@@ -337,8 +308,9 @@ impl EditBuffer {
         address: Option<Address>,
         lines: Vec<String>,
     ) -> ChangeSet {
-        let mut changes = ChangeSet::new(self.current_line);
-        let mut change = Change::new(self.current_line);
+        let mut changes =
+            ChangeSet::new(self.current_line, self.prevailing_eol);
+        let mut change = Change::new(self.current_line, self.prevailing_eol());
 
         // handle deletion of addressed lines
         let b =
@@ -360,7 +332,7 @@ impl EditBuffer {
             change.push_add(b, lines);
         }
 
-        changes.push(change, self.current_line);
+        changes.push(change, self.current_line, self.prevailing_eol);
         changes
     }
 
@@ -372,11 +344,12 @@ impl EditBuffer {
 
         let removed: Vec<String> = self.text.splice(b - 1..e, None).collect();
 
-        let mut changes = ChangeSet::new(self.current_line);
-        let mut change = Change::new(self.current_line);
+        let mut changes =
+            ChangeSet::new(self.current_line, self.prevailing_eol);
+        let mut change = Change::new(self.current_line, self.prevailing_eol());
         self.current_line = usize::min(self.text.len(), b);
         change.push_remove(b - 1, removed);
-        changes.push(change, self.current_line);
+        changes.push(change, self.current_line, self.prevailing_eol);
         changes
     }
 
@@ -393,8 +366,9 @@ impl EditBuffer {
                 .map_or(self.current_line, |addr| addr.end())
                 .saturating_sub(1)
         };
-        let mut changes = ChangeSet::new(self.current_line);
-        let mut change = Change::new(self.current_line);
+        let mut changes =
+            ChangeSet::new(self.current_line, self.prevailing_eol);
+        let mut change = Change::new(self.current_line, self.prevailing_eol());
         if lines.is_empty() {
             self.current_line = location;
             return None;
@@ -403,7 +377,7 @@ impl EditBuffer {
         self.append(location, lines.clone());
         self.current_line = location + lines.len();
         change.push_add(location, lines);
-        changes.push(change, self.current_line);
+        changes.push(change, self.current_line, self.prevailing_eol);
         Some(changes)
     }
 
@@ -422,13 +396,9 @@ impl EditBuffer {
                 }
             },
         );
-        /*
-        let address = address.unwrap_or_else(|| {
-            Address::span(self.current_line, self.current_line + 1)
-        });
-        */
-        let mut changes = ChangeSet::new(self.current_line);
-        let mut change = Change::new(self.current_line);
+        let mut changes =
+            ChangeSet::new(self.current_line, self.prevailing_eol);
+        let mut change = Change::new(self.current_line, self.prevailing_eol());
 
         let mut joined =
             self[address.start()].lines().next().unwrap().to_owned();
@@ -455,7 +425,7 @@ impl EditBuffer {
         self.current_line = address.start();
         change.push_add(address.start() - 1, vec![joined]);
         change.push_remove(address.start(), replaced);
-        changes.push(change, self.current_line);
+        changes.push(change, self.current_line, self.prevailing_eol);
         changes
     }
 
@@ -474,13 +444,14 @@ impl EditBuffer {
             destination.end()
         };
 
-        let mut changes = ChangeSet::new(self.current_line);
-        let mut change = Change::new(self.current_line);
+        let mut changes =
+            ChangeSet::new(self.current_line, self.prevailing_eol);
+        let mut change = Change::new(self.current_line, self.prevailing_eol());
         change.push_remove(address.start() - 1, lines.clone());
         change.push_add(destination, lines.clone());
         self.text.splice(destination..destination, lines);
         self.current_line = destination + address.line_count();
-        changes.push(change, self.current_line);
+        changes.push(change, self.current_line, self.prevailing_eol);
         changes
     }
 
@@ -489,7 +460,6 @@ impl EditBuffer {
             return Err(LnedError::NothingToUndo);
         };
         for change in undo.changes().rev() {
-            self.current_line = change.current_line_after;
             for diff in change.diffs().rev() {
                 match diff {
                     Diff::Add(p, l) => {
@@ -498,11 +468,19 @@ impl EditBuffer {
                     Diff::Remove(p, l) => {
                         drop(self.text.splice(*p..*p, l.iter().cloned()));
                     }
+                    Diff::SetEol(span, old_eol, new_eol) => {
+                        for line in &mut self.text[span.clone()] {
+                            line.replace_range(
+                                line.len() - new_eol.as_str().len()..,
+                                old_eol.as_str(),
+                            );
+                        }
+                    }
                 }
             }
-            self.current_line = change.current_line_before;
         }
         self.current_line = undo.current_line_before;
+        self.prevailing_eol = undo.prevailing_eol_before;
         self.undo_stack.push_redo(undo);
         Ok(())
     }
@@ -512,7 +490,6 @@ impl EditBuffer {
             return Err(LnedError::NothingToRedo);
         };
         for change in redo.changes() {
-            self.current_line = change.current_line_before;
             for diff in change.diffs() {
                 match diff {
                     Diff::Add(p, l) => {
@@ -521,12 +498,20 @@ impl EditBuffer {
                     Diff::Remove(p, l) => {
                         self.text.splice(*p..*p + l.len(), None);
                     }
+                    Diff::SetEol(span, old_eol, new_eol) => {
+                        for line in &mut self.text[span.clone()] {
+                            line.replace_range(
+                                line.len() - old_eol.as_str().len()..,
+                                new_eol.as_str(),
+                            );
+                        }
+                    }
                 }
             }
-            self.current_line = change.current_line_after;
         }
         self.current_line = redo.current_line_after;
-        self.undo_stack.push_undo(redo, self.current_line);
+        self.prevailing_eol = redo.prevailing_eol_after;
+        self.undo_stack.push_undo(redo, self.current_line, self.prevailing_eol);
         Ok(())
     }
 
@@ -540,12 +525,13 @@ impl EditBuffer {
         let source = self.text[address.start() - 1..address.end()].to_vec();
         let destination = destination.end();
 
-        let mut changes = ChangeSet::new(self.current_line);
-        let mut change = Change::new(self.current_line);
+        let mut changes =
+            ChangeSet::new(self.current_line, self.prevailing_eol);
+        let mut change = Change::new(self.current_line, self.prevailing_eol());
         change.push_add(destination, source.clone());
         self.text.splice(destination..destination, source);
         self.current_line = destination + address.line_count();
-        changes.push(change, self.current_line);
+        changes.push(change, self.current_line, self.prevailing_eol);
         changes
     }
 
@@ -555,28 +541,70 @@ impl EditBuffer {
         self.prevailing_eol = None;
     }
 
-    pub fn prevailing_eol(&mut self) -> Option<PrevailingEol> {
+    #[must_use]
+    pub fn prevailing_eol(&self) -> Option<PrevailingEol> {
         self.prevailing_eol
+    }
+
+    pub fn set_prevailing_eol(&mut self, eol: Eol) -> Option<ChangeSet> {
+        if self.prevailing_eol.is_some_and(|v| v.eol == eol && !v.mixed) {
+            // Same prevailing eol && not mixed, so nothing to do
+            return None;
+        }
+
+        // Prepare change set for undo/redo
+        let mut changes =
+            ChangeSet::new(self.current_line, self.prevailing_eol);
+        let mut change = Change::new(self.current_line, self.prevailing_eol);
+
+        // Set new previaling eol & normalize buffer lines
+        self.prevailing_eol = Some(PrevailingEol { eol, mixed: false });
+        let mut corrections: Option<(Range<usize>, Eol)> = None;
+
+        for (i, line) in self.text.iter_mut().enumerate() {
+            let line_eol = line.get_eol().expect("all buffer lines terminated");
+            if line_eol != eol {
+                line.replace_range(
+                    line.len() - line_eol.as_str().len()..,
+                    eol.as_str(),
+                );
+                let corrections = corrections.get_or_insert((i..i, line_eol));
+                corrections.0.end += 1;
+            } else if let Some((span, line_eol)) = corrections.take() {
+                change.push_diff(Diff::SetEol(span, line_eol, eol));
+            }
+        }
+
+        if let Some(corrections) = corrections {
+            change.push_diff(Diff::SetEol(corrections.0, corrections.1, eol));
+        }
+
+        if !change.is_empty() {
+            changes.push(change, self.current_line, self.prevailing_eol);
+        }
+        Some(changes)
     }
 }
 
 impl PrevailingEol {
-    pub fn display_str(self) -> &'static str {
-        if !self.mixed {
-            return self.eol.display_str();
-        }
-
-        match self.eol {
-            Eol::Crlf => "CRLF/mixed",
-            Eol::Lf => "LF/mixed",
-        }
-    }
-}
-
-impl Eol {
     #[must_use]
-    pub fn native() -> Eol {
-        if std::env::consts::FAMILY == "windows" { Eol::Crlf } else { Eol::Lf }
+    pub fn lf(mixed: bool) -> PrevailingEol {
+        PrevailingEol { eol: Eol::Lf, mixed }
+    }
+
+    #[must_use]
+    pub fn crlf(mixed: bool) -> PrevailingEol {
+        PrevailingEol { eol: Eol::Crlf, mixed }
+    }
+
+    #[must_use]
+    pub fn display_str(self) -> &'static str {
+        match self.eol {
+            Eol::Lf if self.mixed => "LF/mixed",
+            Eol::Lf => "LF",
+            Eol::Crlf if self.mixed => "CRLF/mixed",
+            Eol::Crlf => "CRLF",
+        }
     }
 
     #[must_use]
@@ -605,20 +633,43 @@ impl Eol {
         };
         Some(PrevailingEol { eol, mixed })
     }
+}
 
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Eol::Lf => "\n",
-            Eol::Crlf => "\r\n",
-        }
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrevailingEol {
+    pub eol: Eol,
+    pub mixed: bool,
+}
+
+impl Display for PrevailingEol {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.display_str())
     }
+}
 
-    #[must_use]
-    pub fn display_str(self) -> &'static str {
-        match self {
-            Eol::Lf => "LF",
-            Eol::Crlf => "CRLF",
+#[derive(Debug)]
+pub struct ParsePrevailingEolError;
+
+impl std::error::Error for ParsePrevailingEolError {}
+
+impl Display for ParsePrevailingEolError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid prevailing EOL string")
+    }
+}
+
+impl FromStr for PrevailingEol {
+    type Err = ParsePrevailingEolError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.to_lowercase();
+        if s == "crlf" {
+            Ok(PrevailingEol::crlf(false))
+        } else if s == "lf" {
+            Ok(PrevailingEol::lf(false))
+        } else {
+            Err(ParsePrevailingEolError)
         }
     }
 }
@@ -686,14 +737,14 @@ mod tests {
     }
 
     /////
-    // Eol::compute_prevailing_eol() tests
+    // PrevailingEol::compute_prevailing_eol() tests
 
     #[test]
     fn prevailing_eol_when_all_crlf() {
         let lines =
             vec!["L1\r\n".to_owned(), "L2\r\n".to_owned(), "L3\r\n".to_owned()];
         let expected = Some(PrevailingEol { eol: Eol::Crlf, mixed: false });
-        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
+        assert_eq!(PrevailingEol::compute_prevailing_eol(&lines), expected);
     }
 
     #[test]
@@ -701,7 +752,7 @@ mod tests {
         let lines =
             vec!["L1\n".to_owned(), "L2\n".to_owned(), "L3\n".to_owned()];
         let expected = Some(PrevailingEol { eol: Eol::Lf, mixed: false });
-        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
+        assert_eq!(PrevailingEol::compute_prevailing_eol(&lines), expected);
     }
 
     #[test]
@@ -709,7 +760,7 @@ mod tests {
         let lines =
             vec!["L1\r\n".to_owned(), "L2\n".to_owned(), "L3\r\n".to_owned()];
         let expected = Some(PrevailingEol { eol: Eol::Crlf, mixed: true });
-        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
+        assert_eq!(PrevailingEol::compute_prevailing_eol(&lines), expected);
     }
 
     #[test]
@@ -717,7 +768,7 @@ mod tests {
         let lines =
             vec!["L1\n".to_owned(), "L2\n".to_owned(), "L3\r\n".to_owned()];
         let expected = Some(PrevailingEol { eol: Eol::Lf, mixed: true });
-        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
+        assert_eq!(PrevailingEol::compute_prevailing_eol(&lines), expected);
     }
 
     #[test]
@@ -729,7 +780,7 @@ mod tests {
             "L4\n".to_owned(),
         ];
         let expected = Some(PrevailingEol { eol: Eol::native(), mixed: true });
-        assert_eq!(Eol::compute_prevailing_eol(&lines), expected);
+        assert_eq!(PrevailingEol::compute_prevailing_eol(&lines), expected);
     }
 
     /////

@@ -231,6 +231,21 @@ the line content by two spaces.
 
 The last line written becomes the current line.
 
+### Newline ('N')
+
+#### Syntax
+
+N [CR|CRLF]
+
+#### Behavior
+
+Set the buffer's prevailing EOL to the one specified, if any. If an EOL is
+specified, the buffers's lines are normalized to that EOL. Regardless of
+whether a new EOL is specified, the buffer's prevailing EOL is printed to
+stdout.
+
+The current line is not affected by this command.
+
 ### File ('f')
 
 #### Syntax

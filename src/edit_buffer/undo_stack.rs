@@ -1,5 +1,3 @@
-use std::fmt;
-use std::mem;
 /// `UndoStack` ecapsulates the undo and redo stacks, with methods that
 /// maintain the correct invarients.
 ///
@@ -10,8 +8,14 @@ use std::mem;
 /// redo stack onto the undo stack (both verbatum and inversed) in
 /// order to allow "undoing the undos" (i.e., not losing any edit
 /// history).
+use std::fmt;
+use std::mem;
+use std::ops::Range;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::vec::Drain;
+
+use crate::edit_buffer::{Eol, PrevailingEol};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct UndoStack {
@@ -19,11 +23,13 @@ pub struct UndoStack {
     redo: Vec<ChangeSet>,
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChangeSet {
     id: Option<u64>,
     pub current_line_before: usize,
     pub current_line_after: usize,
+    pub prevailing_eol_before: Option<PrevailingEol>,
+    pub prevailing_eol_after: Option<PrevailingEol>,
     changes: Vec<Change>,
 }
 
@@ -31,13 +37,16 @@ pub struct ChangeSet {
 pub struct Change {
     pub current_line_before: usize,
     pub current_line_after: usize,
+    pub prevailing_eol_before: Option<PrevailingEol>,
+    pub prevailing_eol_after: Option<PrevailingEol>,
     diffs: Vec<Diff>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Diff {
-    Add(usize, Vec<String>),    // Add/Insert of lines
-    Remove(usize, Vec<String>), // Removal of lines
+    Add(usize, Vec<String>),        // Add/Insert of lines
+    Remove(usize, Vec<String>),     // Removal of lines
+    SetEol(Range<usize>, Eol, Eol), // Eol change
 }
 
 #[derive(Debug)]
@@ -67,12 +76,19 @@ impl TryFrom<ChangeSet> for Change {
         }
     }
 }
+
 impl ChangeSet {
-    pub fn new(current_line: usize) -> Self {
+    pub fn new(
+        current_line: usize,
+        prevailing_eol: Option<PrevailingEol>,
+    ) -> Self {
         ChangeSet {
+            id: None,
             current_line_before: current_line,
             current_line_after: current_line,
-            ..Default::default()
+            prevailing_eol_before: prevailing_eol,
+            prevailing_eol_after: prevailing_eol,
+            changes: Vec::new(),
         }
     }
 
@@ -80,8 +96,14 @@ impl ChangeSet {
         self.changes.is_empty()
     }
 
-    pub fn push(&mut self, mut change: Change, current_line: usize) {
+    pub fn push(
+        &mut self,
+        mut change: Change,
+        current_line: usize,
+        eol: Option<PrevailingEol>,
+    ) {
         change.current_line_after = current_line;
+        change.prevailing_eol_after = eol;
         self.changes.push(change);
     }
 
@@ -91,6 +113,7 @@ impl ChangeSet {
 
     pub fn drain(&mut self) -> Drain<'_, Change> {
         self.current_line_after = self.current_line_before;
+        self.prevailing_eol_after = self.prevailing_eol_before;
         self.changes.drain(..)
     }
 
@@ -99,15 +122,24 @@ impl ChangeSet {
             &mut change_set.current_line_before,
             &mut change_set.current_line_after,
         );
+        mem::swap(
+            &mut change_set.prevailing_eol_before,
+            &mut change_set.prevailing_eol_after,
+        );
         for change in &mut change_set.changes {
             mem::swap(
                 &mut change.current_line_before,
                 &mut change.current_line_after,
             );
+            mem::swap(
+                &mut change.prevailing_eol_before,
+                &mut change.prevailing_eol_after,
+            );
             for diff in &mut change.diffs {
                 let new_diff = match diff {
                     Diff::Add(p, l) => Diff::Remove(*p, mem::take(l)),
                     Diff::Remove(p, l) => Diff::Add(*p, mem::take(l)),
+                    Diff::SetEol(r, o, n) => Diff::SetEol(mem::take(r), *n, *o),
                 };
                 *diff = new_diff;
             }
@@ -119,10 +151,15 @@ impl ChangeSet {
 }
 
 impl Change {
-    pub fn new(current_line: usize) -> Self {
+    pub fn new(
+        current_line: usize,
+        prevailing_eol: Option<PrevailingEol>,
+    ) -> Self {
         Change {
             current_line_before: current_line,
             current_line_after: current_line,
+            prevailing_eol_before: prevailing_eol,
+            prevailing_eol_after: prevailing_eol,
             diffs: Vec::new(),
         }
     }
@@ -135,8 +172,15 @@ impl Change {
         self.diffs.push(Diff::Remove(position, lines_removed));
     }
 
+    pub fn push_diff(&mut self, diff: Diff) {
+        self.diffs.push(diff);
+    }
+
     pub fn diffs(&self) -> impl DoubleEndedIterator<Item = &Diff> {
         self.diffs.iter()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.diffs.is_empty()
     }
 }
 
@@ -158,7 +202,12 @@ impl UndoStack {
     ///
     /// This will preserve full history, including the undo
     /// commands issued before the current change.
-    pub fn push_undo(&mut self, mut change: ChangeSet, current_line: usize) {
+    pub fn push_undo(
+        &mut self,
+        mut change: ChangeSet,
+        current_line: usize,
+        eol: Option<PrevailingEol>,
+    ) {
         if change.is_empty() {
             return;
         }
@@ -172,6 +221,7 @@ impl UndoStack {
             }
         }
         change.current_line_after = current_line;
+        change.prevailing_eol_after = eol;
         self.undo.push(change);
     }
 
@@ -223,17 +273,18 @@ mod tests {
 
     #[test]
     fn undo_stack_non_empty_fingerprint() {
+        let eol = Some(PrevailingEol::lf(false));
         let mut s = UndoStack::new();
-        let mut cs = ChangeSet::new(0);
-        let ch = Change::new(0);
-        cs.push(ch, 0);
-        s.push_undo(cs, 0);
+        let mut cs = ChangeSet::new(0, eol);
+        let ch = Change::new(0, eol);
+        cs.push(ch, 0, eol);
+        s.push_undo(cs, 0, eol);
         let fp1 = s.fingerprint();
         assert!(fp1.is_some());
-        let mut cs = ChangeSet::new(0);
-        let ch = Change::new(0);
-        cs.push(ch, 0);
-        s.push_undo(cs, 0);
+        let mut cs = ChangeSet::new(0, eol);
+        let ch = Change::new(0, Some(PrevailingEol::lf(false)));
+        cs.push(ch, 0, eol);
+        s.push_undo(cs, 0, eol);
         let fp2 = s.fingerprint();
         assert!(fp2.is_some() && fp1 != fp2);
         assert!(!s.undo.is_empty());
@@ -246,12 +297,14 @@ mod tests {
 
     #[test]
     fn invert_swaps_add_and_remove() {
-        let mut orig = ChangeSet::new(13);
-        let mut orig_change = Change::new(13);
+        let eol = Some(PrevailingEol::lf(false));
+        let mut orig = ChangeSet::new(13, eol);
+        let mut orig_change = Change::new(13, eol);
         orig_change.current_line_after = 42;
         orig_change.push_add(2, vec!["added\n".to_owned()]);
         orig_change.push_remove(1, vec!["removed\n".to_owned()]);
-        orig.push(orig_change.clone(), orig_change.current_line_after);
+        orig_change.push_diff(Diff::SetEol(1..4, Eol::Lf, Eol::Crlf));
+        orig.push(orig_change.clone(), orig_change.current_line_after, eol);
         let inverted = ChangeSet::invert(orig.clone());
         let inverted_change = &inverted.changes[0];
         assert_eq!(
@@ -272,19 +325,23 @@ mod tests {
                     assert_eq!(*p, 2);
                     assert_eq!(*l, vec!["added\n".to_owned()]);
                 }
+                Diff::SetEol(span, old, new) => {
+                    assert_eq!(*span, 1..4);
+                    assert_eq!(*old, Eol::Crlf);
+                    assert_eq!(*new, Eol::Lf);
+                }
             }
         }
     }
 
     #[test]
     fn try_from_changeset() {
-        let good =
-            ChangeSet { changes: vec![Change::new(1)], ..Default::default() };
-        let bad = ChangeSet::new(0);
-        let bad2 = ChangeSet {
-            changes: vec![Change::new(1), Change::new(1)],
-            ..Default::default()
-        };
+        let eol = Some(PrevailingEol::lf(false));
+        let mut good = ChangeSet::new(0, eol);
+        good.changes = vec![Change::new(1, eol)];
+        let bad = ChangeSet::new(0, eol);
+        let mut bad2 = ChangeSet::new(0, eol);
+        bad2.changes = vec![Change::new(1, eol), Change::new(1, eol)];
         Change::try_from(good).expect("successful conversion");
         Change::try_from(bad).expect_err("should fail because no Changes");
         Change::try_from(bad2).expect_err("should fail because > 1 Change");
