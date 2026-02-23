@@ -20,30 +20,10 @@ impl Eol {
             Eol::Crlf => "\r\n",
         }
     }
-}
-
-impl Display for Eol {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-pub trait EolTerminated {
-    #[must_use]
-    fn is_eol_terminated(&self) -> bool;
 
     #[must_use]
-    fn get_eol(&self) -> Option<Eol>;
-}
-
-impl<T: AsRef<str>> EolTerminated for T {
-    fn is_eol_terminated(&self) -> bool {
-        let s = self.as_ref();
-        s.ends_with("\r\n") || s.ends_with('\n')
-    }
-
-    fn get_eol(&self) -> Option<Eol> {
-        let s = self.as_ref();
+    pub fn get_eol<T: AsRef<str>>(s: T) -> Option<Eol> {
+        let s = s.as_ref();
         if s.ends_with(Eol::Crlf.as_str()) {
             return Some(Eol::Crlf);
         }
@@ -54,7 +34,13 @@ impl<T: AsRef<str>> EolTerminated for T {
     }
 }
 
+impl Display for Eol {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    // Eol and associated trait impl tests
+    // Eol tests
 }

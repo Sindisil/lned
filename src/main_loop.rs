@@ -15,7 +15,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli;
 use crate::command::{self, Address, Cmd, PrintAttributes, SubstitutionScope};
-use crate::edit_buffer::{Change, ChangeSet, Diff, EditBuffer, PrevailingEol};
+use crate::edit_buffer::{Change, ChangeSet, EditBuffer, PrevailingEol};
 
 use line_edit::LineEdit;
 
@@ -394,7 +394,7 @@ fn dispatch_cmd(
         Cmd::Move(address, destination) => {
             move_cmd(buffer, *address, *destination)
         }
-        Cmd::Newline(eol) => newline_cmd(buffer, output, *eol),
+        Cmd::Newline(eol) => Ok(newline_cmd(buffer, output, *eol)),
         Cmd::Null(address) => null_cmd(buffer, output, *address),
         Cmd::Print(address) => print_cmd(buffer, output, *address),
         Cmd::Quit => quit_cmd(buffer, state.previous_cmd.as_ref())
@@ -774,9 +774,7 @@ fn do_global_cmds(
             if let Some(mut cs) = cs {
                 for change in cs.drain() {
                     adjust_global_list(&mut matched_lines, &change);
-                    let cl_after = change.current_line_after;
-                    let eol_after = change.prevailing_eol_after;
-                    changes.push(change, cl_after, eol_after);
+                    changes.push(change);
                 }
                 if let Some(attrs) = sfx {
                     print_lines(
@@ -794,28 +792,26 @@ fn do_global_cmds(
 }
 
 fn adjust_global_list(list: &mut VecDeque<usize>, change: &Change) {
-    for diff in change.diffs() {
-        match diff {
-            Diff::Remove(start, lines) => {
-                let end = start + lines.len();
-                list.retain_mut(|n| {
-                    if *n < *start {
-                        true
-                    } else if *n > end {
-                        *n -= lines.len();
-                        true
-                    } else {
-                        false
-                    }
-                });
-            }
-            Diff::Add(start, lines) => {
-                for n in list.iter_mut().filter(|n| **n > *start) {
-                    *n += lines.len();
+    match change {
+        Change::Remove(start, lines) => {
+            let end = start + lines.len();
+            list.retain_mut(|n| {
+                if *n < *start {
+                    true
+                } else if *n > end {
+                    *n -= lines.len();
+                    true
+                } else {
+                    false
                 }
-            }
-            Diff::SetEol(..) => (), // SetEol doesn't change list
+            });
         }
+        Change::Add(start, lines) => {
+            for n in list.iter_mut().filter(|n| **n > *start) {
+                *n += lines.len();
+            }
+        }
+        Change::SetEol(..) => (), // SetEol doesn't change list
     }
 }
 
@@ -916,7 +912,7 @@ fn newline_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     eol: Option<PrevailingEol>,
-) -> Result<Option<ChangeSet>, LnedError> {
+) -> Option<ChangeSet> {
     let changes = eol.and_then(|eol| buffer.set_prevailing_eol(eol.eol));
 
     writeln!(
@@ -926,7 +922,7 @@ fn newline_cmd(
     )
     .unwrap();
 
-    Ok(changes)
+    changes
 }
 
 fn null_cmd(
@@ -1087,16 +1083,13 @@ fn read_cmd(
     writeln!(output, "{lines_read} lines ({bytes_read} bytes) read").unwrap();
     let mut changes =
         ChangeSet::new(buffer.current_line(), buffer.prevailing_eol());
-    let mut change =
-        Change::new(buffer.current_line(), buffer.prevailing_eol());
-    change.push_add(address.end(), lines.clone());
+    changes.push(Change::Add(address.end(), lines.clone()));
     let lines_added = lines.len();
     if buffer.append(address.end(), lines) {
         output.flush().unwrap();
         writeln!(output, "missing newline appended").unwrap();
     }
     buffer.set_current_line(address.end() + lines_added);
-    changes.push(change, buffer.current_line(), buffer.prevailing_eol());
     Ok(Some(changes))
 }
 
@@ -1162,17 +1155,15 @@ fn substitute_cmd(
             if let Some(span_start) = span_start.take() {
                 let step =
                     replacement_lines.len() - (line_num - span_start) + 1;
-                let change = buffer.do_change(
-                    Some(Address::span(span_start, line_num - 1)),
-                    replacement_lines,
-                );
-                let change = Change::try_from(change)
-                    .expect("do_change always returns single Change ChangeSet");
-                changes.push(
-                    change,
-                    buffer.current_line(),
-                    buffer.prevailing_eol(),
-                );
+                for change in buffer
+                    .do_change(
+                        Some(Address::span(span_start, line_num - 1)),
+                        replacement_lines,
+                    )
+                    .drain()
+                {
+                    changes.push(change);
+                }
                 replacement_lines = Vec::new();
                 step
             } else {
@@ -1181,17 +1172,15 @@ fn substitute_cmd(
         };
         if line_num == last_line {
             if let Some(span_start) = span_start {
-                let change = buffer.do_change(
-                    Some(Address::span(span_start, line_num)),
-                    replacement_lines,
-                );
-                let change = Change::try_from(change)
-                    .expect("always returns single Change ChangeSet");
-                changes.push(
-                    change,
-                    buffer.current_line(),
-                    buffer.prevailing_eol(),
-                );
+                for change in buffer
+                    .do_change(
+                        Some(Address::span(span_start, line_num)),
+                        replacement_lines,
+                    )
+                    .drain()
+                {
+                    changes.push(change);
+                }
             }
             break;
         }
@@ -4130,10 +4119,22 @@ mod tests {
     }
 
     #[test]
+    fn newline_cmd_same_eol_not_mixed_does_nothing() {
+        let mut buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
+        let mut output = Vec::new();
+        let res = newline_cmd(
+            &mut buffer,
+            &mut output,
+            Some(PrevailingEol::crlf(false)),
+        );
+        assert!(res.is_none());
+    }
+
+    #[test]
     fn newline_cmd_no_arg_prints_prevailing_eol() {
         let mut buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
         let mut output = Vec::new();
-        let res = newline_cmd(&mut buffer, &mut output, None).unwrap();
+        let res = newline_cmd(&mut buffer, &mut output, None);
         assert!(res.is_none());
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("prevailing newline: LF"));
@@ -4152,7 +4153,7 @@ mod tests {
     fn newline_cmd_with_arg_normalizes_and_prints_prevailing_eol() {
         let mut buffer = EditBuffer::with_text(&["1\n", "2\r\n", "3\n"]);
         let mut output = Vec::new();
-        let res = newline_cmd(&mut buffer, &mut output, None).unwrap();
+        let res = newline_cmd(&mut buffer, &mut output, None);
         assert!(res.is_none());
         let text = str::from_utf8(&output[..]).unwrap();
         assert!(text.contains("prevailing newline: LF/mixed"));
@@ -4161,8 +4162,7 @@ mod tests {
             &mut buffer,
             &mut output,
             Some(PrevailingEol::crlf(false)),
-        )
-        .unwrap();
+        );
         assert!(res.is_some());
         let text = str::from_utf8(&output[..]).unwrap();
         assert!(text.contains("prevailing newline: CRLF"));
@@ -4172,8 +4172,7 @@ mod tests {
             &mut buffer,
             &mut output,
             Some(PrevailingEol { eol: Eol::Lf, mixed: false }),
-        )
-        .unwrap();
+        );
         assert!(res.is_some());
         let text = str::from_utf8(&output[..]).unwrap();
         assert!(text.contains("prevailing newline: LF"));
@@ -4196,21 +4195,20 @@ mod tests {
             &mut buffer,
             &mut output,
             Some(PrevailingEol::crlf(false)),
-        )
-        .unwrap();
+        );
         buffer.push_undo(res.unwrap());
         assert_eq!(buffer[..], expected[..]);
         assert_eq!(buffer.current_line(), expected.current_line());
         assert_eq!(buffer.prevailing_eol(), expected.prevailing_eol());
 
-        let _ = buffer.do_undo().unwrap();
+        buffer.do_undo().unwrap();
         eprintln!("orig {:?}", &orig_buffer[..]);
         eprintln!("buffer {:?}", &buffer[..]);
         eprintln!("expected {:?}", &expected[..]);
         assert_eq!(buffer[..], orig_buffer[..]);
         assert_eq!(buffer.current_line(), orig_buffer.current_line());
         assert_eq!(buffer.prevailing_eol(), orig_buffer.prevailing_eol());
-        let _ = buffer.do_redo().unwrap();
+        buffer.do_redo().unwrap();
         eprintln!("orig {:?}", &orig_buffer[..]);
         eprintln!("buffer {:?}", &buffer[..]);
         eprintln!("expected {:?}", &expected[..]);

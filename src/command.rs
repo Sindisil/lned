@@ -15,7 +15,6 @@ use line_edit::LineEdit;
 
 use crate::edit_buffer::EditBuffer;
 use crate::edit_buffer::PrevailingEol;
-use crate::eol::Eol;
 use crate::iter_utils::Peeking;
 
 pub static INDENT: LazyLock<Regex> =
@@ -1017,6 +1016,8 @@ mod tests {
     use super::*;
 
     use similar_asserts::assert_eq;
+
+    use crate::eol::Eol;
 
     #[test]
     fn parse_valid_lone_cmd() {
