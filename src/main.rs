@@ -2,6 +2,7 @@
 mod cli;
 mod command;
 mod edit_buffer;
+mod eol;
 mod iter_utils;
 mod main_loop;
 

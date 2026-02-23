@@ -1,8 +1,2 @@
-# Auto detect text files and perform normalization
-*          text=auto
-
-*.rs       text diff=rust
-*.toml     text
-*.md       text diff=markdown
-Cargo.lock text
-test/assets/*.*     -text
+# Ensure git doesn't mess with any files
+* -text diff
