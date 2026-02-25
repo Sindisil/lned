@@ -699,8 +699,9 @@ fn global_cmd(
         matched_lines,
         &mut changes,
     );
+    let changes = if changes.is_empty() { None } else { Some(changes) };
     match res {
-        Ok(()) => Ok(Some(changes)),
+        Ok(()) => Ok(changes),
         Err(e) => match e {
             LnedError::NestedGlobalCmd => Err(LnedError::NestedGlobalCmd),
             LnedError::UnsupportedGlobalCmd => {
@@ -708,7 +709,7 @@ fn global_cmd(
             }
             e => Err(LnedError::GlobalCmdErrorStop {
                 source: Box::new(e),
-                changes: Some(changes),
+                changes,
             }),
         },
     }
@@ -1699,12 +1700,9 @@ mod tests {
             &pat,
             &commands,
             &mut prev_pattern,
-        );
-        match res {
-            Err(e) => panic!("unexpected error \"{e:?}\""),
-            Ok(Some(changes)) => assert!(changes.is_empty()),
-            Ok(None) => panic!("should have returned an empty ChangeSet"),
-        }
+        )
+        .expect("no error");
+        assert!(res.is_none(), "should be no changes");
         assert!(output.is_empty());
     }
 
@@ -1736,17 +1734,16 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "\n".to_owned();
-        let Ok(Some(changes)) = global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 3)),
             &pat,
             &commands,
             &mut prev_pattern,
-        ) else {
-            panic!("should have returned Ok(Some(ChangeSet))");
-        };
-        assert!(changes.is_empty());
+        )
+        .unwrap();
+        assert!(res.is_none(), "should be no changes");
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\r\nthree\r\n");
     }
 
@@ -1758,17 +1755,16 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "p\r\n".to_owned();
-        let Ok(Some(changes)) = global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             None,
             &pat,
             &commands,
             &mut prev_pattern,
-        ) else {
-            panic!("should have returned Ok(Some(ChangeSet))");
-        };
-        assert!(changes.is_empty());
+        )
+        .expect("no errors");
+        assert!(res.is_none(), "should be no changes");
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "two\nthree\n");
     }
 
@@ -1780,17 +1776,16 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "n\r\n".to_owned();
-        let Ok(Some(changes)) = global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 3)),
             &pat,
             &commands,
             &mut prev_pattern,
-        ) else {
-            panic!("should have returned Ok(Some(ChangeSet))");
-        };
-        assert!(changes.is_empty());
+        )
+        .expect("no error");
+        assert!(res.is_none(), "should be no changes");
         assert_eq!(str::from_utf8(&output[..]).unwrap(), "2  two\n3  three\n");
     }
 
@@ -1804,17 +1799,16 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
         let commands = "-1,.n\r\n".to_owned();
-        let Ok(Some(changes)) = global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(2, 5)),
             &pat,
             &commands,
             &mut prev_pattern,
-        ) else {
-            panic!("unexpected global_cmd error!");
-        };
-        assert!(changes.is_empty());
+        )
+        .expect("no error");
+        assert!(res.is_none(), "should be no changes");
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
             "2  two\n3  three\n4  four\n5  five\n"
@@ -1829,17 +1823,16 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("t..").unwrap();
         let commands = "l\r\n".to_owned();
-        let Ok(Some(changes)) = global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 3)),
             &pat,
             &commands,
             &mut prev_pattern,
-        ) else {
-            panic!("should have returned Ok(Some(ChangeSet))");
-        };
-        assert!(changes.is_empty());
+        )
+        .expect("no error");
+        assert!(res.is_none(), "should be no changes");
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
             "two\\n$\nthree\\n$\n"
@@ -1856,17 +1849,16 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
         let commands = "-1,.l\r\n".to_owned();
-        let Ok(Some(changes)) = global_cmd(
+        let res = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(2, 5)),
             &pat,
             &commands,
             &mut prev_pattern,
-        ) else {
-            panic!("unexpected global_cmd error!");
-        };
-        assert!(changes.is_empty());
+        )
+        .expect("no error");
+        assert!(res.is_none(), "should be no changes");
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
             "two\\n$\nthree\\n$\nfour\\n$\nfive\\n$\n"
@@ -1887,16 +1879,16 @@ mod tests {
         let mut prev_pattern: Option<Regex> = None;
         let pat = Regex::new("e$").unwrap();
         let commands = "a\nappend\n.\n".to_owned();
-        let Ok(Some(changes)) = global_cmd(
+        let changes = global_cmd(
             &mut buffer,
             &mut output,
             Some(Address::span(1, 6)),
             &pat,
             &commands,
             &mut prev_pattern,
-        ) else {
-            panic!("global_cmd's err return was Some() rather than None!")
-        };
+        )
+        .expect("no error")
+        .expect("some changes");
         assert!(!changes.is_empty());
         assert_eq!(&buffer[..], &expected[..]);
         assert_eq!(buffer.current_line(), 8);
