@@ -237,9 +237,18 @@ impl fmt::Display for LnedError {
     }
 }
 
+#[derive(Debug, Default, PartialEq)]
+enum FileWarning {
+    #[default]
+    None,
+    QuitUnsaved,
+    EditUnsaved,
+    WriteOverwrite(Option<Address>, Option<PathBuf>),
+}
+
 #[derive(Debug, Default)]
 struct EditorState {
-    previous_cmd: Option<Cmd>,
+    previous_file_warning: FileWarning,
     previous_pattern: Option<regex::Regex>,
     scroll_row_limit: Option<usize>,
 }
@@ -273,7 +282,7 @@ pub fn run(
             &mut buffer,
             &mut output,
             Some(file),
-            state.previous_cmd.as_ref(),
+            &mut state.previous_file_warning,
         )
     {
         writeln!(output, "{e}").unwrap();
@@ -293,7 +302,6 @@ pub fn run(
                         &mut input,
                         &mut state,
                     );
-                    state.previous_cmd = Some(cmd);
                     res.and_then(|exit| {
                         done = exit;
                         if let Some(attrs) = sfx {
@@ -363,7 +371,7 @@ fn dispatch_cmd(
             buffer,
             output,
             filename.as_deref(),
-            state.previous_cmd.as_ref(),
+            &mut state.previous_file_warning,
         ),
         Cmd::Enumerate(address) => enumerate_cmd(buffer, output, *address),
         Cmd::File(filename) => {
@@ -397,7 +405,7 @@ fn dispatch_cmd(
         Cmd::Newline(eol) => Ok(newline_cmd(buffer, output, *eol)),
         Cmd::Null(address) => null_cmd(buffer, output, *address),
         Cmd::Print(address) => print_cmd(buffer, output, *address),
-        Cmd::Quit => quit_cmd(buffer, state.previous_cmd.as_ref())
+        Cmd::Quit => quit_cmd(buffer, &mut state.previous_file_warning)
             .inspect(|_| done = true),
         Cmd::Read(address, filename) => {
             read_cmd(buffer, output, *address, filename.as_deref())
@@ -439,7 +447,7 @@ fn dispatch_cmd(
             output,
             *address,
             filename.as_deref(),
-            state.previous_cmd.as_ref(),
+            &mut state.previous_file_warning,
         ),
     };
 
@@ -575,12 +583,14 @@ fn edit_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     filename: Option<&Path>,
-    previous_cmd: Option<&Cmd>,
+    previous_file_warning: &mut FileWarning,
 ) -> Result<Option<ChangeSet>, LnedError> {
     if buffer.is_dirty() {
-        if matches!(previous_cmd, Some(Cmd::Edit(_))) {
+        if *previous_file_warning == FileWarning::EditUnsaved {
+            *previous_file_warning = FileWarning::None;
             buffer.reset_clean_fingerprint();
         } else {
+            *previous_file_warning = FileWarning::EditUnsaved;
             return Err(LnedError::EditUnwrittenChanges);
         }
     }
@@ -1035,12 +1045,15 @@ fn expand_escapes(s: &str) -> &str {
 /// buffer changes are detected.
 fn quit_cmd(
     buffer: &EditBuffer,
-    previous_cmd: Option<&Cmd>,
+    previous_file_warning: &mut FileWarning,
 ) -> Result<Option<ChangeSet>, LnedError> {
-    match previous_cmd {
-        Some(Cmd::Quit) => Ok(None),
+    match *previous_file_warning {
+        FileWarning::QuitUnsaved => Ok(None),
         _ if !buffer.is_dirty() => Ok(None),
-        _ => Err(LnedError::QuitUnwrittenChanges),
+        _ => {
+            *previous_file_warning = FileWarning::QuitUnsaved;
+            Err(LnedError::QuitUnwrittenChanges)
+        }
     }
 }
 
@@ -1346,16 +1359,44 @@ fn version_cmd(output: &mut impl Write) {
     writeln!(output, "{} {}", cli::APP_NAME, cli::APP_VERSION)
         .expect("reliable stdout");
 }
+
 fn write_cmd(
+    // "w" with no address range or filename is "save"
+    //     Sets sync and file fingerprints equal to buffer's on success.
+    //
+    //     Warnings:
+    //         * If file contents changed since last sync
+    //     Errors:
+    //         * If no associated filename
+    //
+    // "[addr]w [filename]" is "save as"
+    //     Sets associated filename if not already set, otherwise
+    //     associated filename is unchanged.
+    //
+    //     If full buffer is addressed and filename is same as associated
+    //     filename, overwrite warning is given, but command is otherwise
+    //     treated as a "save" with respect to fingerprint updates and the
+    //     like.
+    //
+    //     Warnings:
+    //         * If file already exists (overwwrite)
+    //     Errors:
+    //         * I/O errors
+    //
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     address: Option<Address>,
     filename: Option<&Path>,
-    previous_cmd: Option<&Cmd>,
+    previous_file_warning: &mut FileWarning,
 ) -> Result<Option<ChangeSet>, LnedError> {
     let buffer_filename_on_entry = buffer.filename().map(ToOwned::to_owned);
+    let cmd_filename = filename;
     let safe_to_overwrite = filename.is_none()
-        || matches!(previous_cmd, Some(Cmd::Write(a, f)) if *a == address && f.as_deref() == filename);
+        || matches!(
+            previous_file_warning,
+            FileWarning::WriteOverwrite(a, f)
+                if *a == address && f.as_deref() == filename,
+        );
 
     if buffer.filename().is_none() && filename.is_some() {
         buffer.set_filename(filename.map(ToOwned::to_owned));
@@ -1375,10 +1416,15 @@ fn write_cmd(
         }) {
             writeln!(output, "{e}").expect("reliable stdout");
         }
+        *previous_file_warning = FileWarning::WriteOverwrite(
+            address,
+            cmd_filename.map(ToOwned::to_owned),
+        );
         return Err(LnedError::WriteWouldOverwrite(filename));
     }
 
     write_file(buffer, output, address, &mut writer)?;
+    *previous_file_warning = FileWarning::None;
     Ok(None)
 }
 
@@ -3338,8 +3384,13 @@ mod tests {
     #[test]
     fn edit_cmd_no_filename_error() {
         let mut buffer = EditBuffer::new();
-        let res = edit_cmd(&mut buffer, &mut Vec::new(), None, None)
-            .expect_err("no filename");
+        let res = edit_cmd(
+            &mut buffer,
+            &mut Vec::new(),
+            None,
+            &mut FileWarning::None,
+        )
+        .expect_err("no filename");
         assert!(matches!(res, LnedError::NoFilename));
     }
 
@@ -3349,8 +3400,13 @@ mod tests {
         assert_eq!(buffer.len(), 3);
         let mut output = Vec::new();
         let not_a_file = Some(Path::new("non-existant_file.txt"));
-        let res = edit_cmd(&mut buffer, &mut output, not_a_file, None)
-            .expect_err("FileNotFound");
+        let res = edit_cmd(
+            &mut buffer,
+            &mut output,
+            not_a_file,
+            &mut FileWarning::None,
+        )
+        .expect_err("FileNotFound");
         assert!(matches!(res, LnedError::FileNotFound(_)));
         assert_eq!(buffer.filename(), not_a_file);
         assert!(buffer.is_empty());
@@ -3383,7 +3439,8 @@ mod tests {
         let filename2 =
             Some(Path::new(r"test/assets/text_with_no_final_eol.txt"));
 
-        edit_cmd(&mut buffer, &mut output, filename1, None).unwrap();
+        edit_cmd(&mut buffer, &mut output, filename1, &mut FileWarning::None)
+            .unwrap();
         assert_eq!(buffer.len(), 10);
         let out_text = str::from_utf8(&output[..]).unwrap();
         assert!(
@@ -3391,7 +3448,8 @@ mod tests {
         );
 
         output.clear();
-        edit_cmd(&mut buffer, &mut output, filename2, None).unwrap();
+        edit_cmd(&mut buffer, &mut output, filename2, &mut FileWarning::None)
+            .unwrap();
         assert_eq!(buffer.len(), 10);
         let out_text = str::from_utf8(&output[..]).unwrap();
         assert!(
@@ -3649,7 +3707,7 @@ mod tests {
             &mut output,
             None,
             Some(&new_filename),
-            None,
+            &mut FileWarning::None,
         )
         .expect("successful write to new_filename");
         assert!(matches!(fs::exists(&new_filename), Ok(true)));
@@ -3661,7 +3719,9 @@ mod tests {
     fn write_cmd_overwrite() {
         let tmp_dir = tempdir().expect("tmp dir created");
         let name = tmp_dir.path().join("filename.txt");
-        let cmd = Cmd::Write(None, Some(name.clone()));
+        let mut warning = FileWarning::None;
+        let expected_warning =
+            FileWarning::WriteOverwrite(None, Some(name.clone()));
         let mut buffer = EditBuffer::with_text(&["1\r\n", "2\r\n", "3\r\n"]);
         buffer.set_filename(Some(name.clone()));
         let mut output = Vec::new();
@@ -3671,12 +3731,25 @@ mod tests {
         )
         .expect("copy file for test");
 
-        let res = write_cmd(&mut buffer, &mut output, None, Some(&name), None)
-            .expect_err("overwrite warning");
+        let res = write_cmd(
+            &mut buffer,
+            &mut output,
+            None,
+            Some(&name),
+            &mut warning,
+        )
+        .expect_err("overwrite warning");
         assert!(matches!(res, LnedError::WriteWouldOverwrite(_)));
-        let _ =
-            write_cmd(&mut buffer, &mut output, None, Some(&name), Some(&cmd))
-                .expect("successful overwrite on second try");
+        assert_eq!(warning, expected_warning);
+        let _ = write_cmd(
+            &mut buffer,
+            &mut output,
+            None,
+            Some(&name),
+            &mut warning,
+        )
+        .expect("successful overwrite on second try");
+        assert_eq!(warning, FileWarning::None);
         let new_content = fs::read(&name).expect("successful read");
         assert_eq!(
             new_content,
@@ -3699,7 +3772,7 @@ mod tests {
     fn write_cmd_default_overwrite() {
         let tmp_dir = tempdir().expect("tmp dir created");
         let name = tmp_dir.path().join("filename.txt");
-        let cmd = Cmd::Write(None, Some(name.clone()));
+        let mut warning = FileWarning::WriteOverwrite(None, Some(name.clone()));
         let mut buffer = EditBuffer::with_text(&["1\r\n", "2\r\n", "3\r\n"]);
         buffer.set_filename(Some(name.clone()));
         let mut output = Vec::new();
@@ -3709,9 +3782,10 @@ mod tests {
         )
         .expect("copy file for test");
 
-        let _ = write_cmd(&mut buffer, &mut output, None, None, Some(&cmd))
+        let _ = write_cmd(&mut buffer, &mut output, None, None, &mut warning)
             .expect("successful overwrite because default filename");
         let new_content = fs::read(&name).expect("successful read");
+        assert_eq!(warning, FileWarning::None);
         assert_eq!(
             new_content,
             buffer[..]
@@ -3752,8 +3826,14 @@ mod tests {
             source,
             filename,
             backup_filename,
-        } = write_cmd(&mut buffer, &mut output, None, Some(&name), None)
-            .expect_err("backup file create fail")
+        } = write_cmd(
+            &mut buffer,
+            &mut output,
+            None,
+            Some(&name),
+            &mut FileWarning::None,
+        )
+        .expect_err("backup file create fail")
         {
             assert_eq!(source.kind(), io::ErrorKind::AlreadyExists);
             assert_eq!(filename, name);
@@ -4059,8 +4139,13 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let mut output = Vec::new();
         let name = Path::new(r"test/assets/text_with_final_eol.txt");
-        let _ = edit_cmd(&mut buffer, &mut output, Some(name), None)
-            .expect("no error");
+        let _ = edit_cmd(
+            &mut buffer,
+            &mut output,
+            Some(name),
+            &mut FileWarning::None,
+        )
+        .expect("no error");
         assert_eq!(buffer.filename(), Some(name));
 
         let _ =
