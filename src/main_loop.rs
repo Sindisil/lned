@@ -247,15 +247,15 @@ enum FileWarning {
 }
 
 #[derive(Debug, Default)]
-struct EditorState {
+struct Editor {
     previous_file_warning: FileWarning,
     previous_pattern: Option<regex::Regex>,
     scroll_row_limit: Option<usize>,
 }
 
-impl EditorState {
-    fn new() -> EditorState {
-        EditorState { ..Default::default() }
+impl Editor {
+    fn new() -> Editor {
+        Editor { ..Default::default() }
     }
 }
 
@@ -275,14 +275,14 @@ pub fn run(
 ) -> Result<(), LnedError> {
     let mut buffer = EditBuffer::new();
 
-    let mut state = EditorState::new();
+    let mut editor = Editor::new();
 
     if let Some(file) = &args.file
         && let Err(e) = edit_cmd(
             &mut buffer,
             &mut output,
             Some(file),
-            &mut state.previous_file_warning,
+            &mut editor.previous_file_warning,
         )
     {
         writeln!(output, "{e}").unwrap();
@@ -291,7 +291,7 @@ pub fn run(
     // Accept and process commands until fatal error or exit
     let mut done = false;
     while !done {
-        Cmd::read(&mut input, &mut buffer, &mut state.previous_pattern)
+        Cmd::read(&mut input, &mut buffer, &mut editor.previous_pattern)
             .map_err(LnedError::ParseCmd)
             .and_then(|res| match res {
                 Some((cmd, sfx)) => {
@@ -300,7 +300,7 @@ pub fn run(
                         &mut buffer,
                         &mut output,
                         &mut input,
-                        &mut state,
+                        &mut editor,
                     );
                     res.and_then(|exit| {
                         done = exit;
@@ -349,7 +349,7 @@ fn dispatch_cmd(
     buffer: &mut EditBuffer,
     output: &mut impl Write,
     input: &mut impl LineEdit,
-    state: &mut EditorState,
+    editor: &mut Editor,
 ) -> Result<bool, LnedError> {
     let mut done = false;
     let res = match cmd {
@@ -371,7 +371,7 @@ fn dispatch_cmd(
             buffer,
             output,
             filename.as_deref(),
-            &mut state.previous_file_warning,
+            &mut editor.previous_file_warning,
         ),
         Cmd::Enumerate(address) => enumerate_cmd(buffer, output, *address),
         Cmd::File(filename) => {
@@ -384,7 +384,7 @@ fn dispatch_cmd(
             *address,
             pattern,
             commands,
-            &mut state.previous_pattern,
+            &mut editor.previous_pattern,
         ),
         Cmd::Insert(address) => {
             insert_cmd(buffer, input, *address, IndentMode::Auto)
@@ -405,7 +405,7 @@ fn dispatch_cmd(
         Cmd::Newline(eol) => Ok(newline_cmd(buffer, output, *eol)),
         Cmd::Null(address) => null_cmd(buffer, output, *address),
         Cmd::Print(address) => print_cmd(buffer, output, *address),
-        Cmd::Quit => quit_cmd(buffer, &mut state.previous_file_warning)
+        Cmd::Quit => quit_cmd(buffer, &mut editor.previous_file_warning)
             .inspect(|_| done = true),
         Cmd::Read(address, filename) => {
             read_cmd(buffer, output, *address, filename.as_deref())
@@ -415,8 +415,8 @@ fn dispatch_cmd(
             let (cols, term_rows): (usize, usize) = terminal::size()
                 .map_or((80, 24), |(cols, rows)| (cols.into(), rows.into()));
             let rows = *match cmd_rows {
-                Some(rows) => state.scroll_row_limit.insert(*rows),
-                None => state
+                Some(rows) => editor.scroll_row_limit.insert(*rows),
+                None => editor
                     .scroll_row_limit
                     .get_or_insert_with(|| term_rows.saturating_sub(2)),
             };
@@ -447,7 +447,7 @@ fn dispatch_cmd(
             output,
             *address,
             filename.as_deref(),
-            &mut state.previous_file_warning,
+            &mut editor.previous_file_warning,
         ),
     };
 
@@ -4060,28 +4060,28 @@ mod tests {
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
         let mut buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
-        let mut state = EditorState { ..Default::default() };
+        let mut editor = Editor { ..Default::default() };
         let mut input = b"" as &[u8];
         dispatch_cmd(
             &Cmd::Scroll(Some(Address::line(10)), Some(3), None),
             &mut buffer,
             &mut output,
             &mut input,
-            &mut state,
+            &mut editor,
         )
         .expect("scroll 10..12");
         assert_eq!(buffer.current_line(), 12);
-        assert_eq!(state.scroll_row_limit, Some(3));
+        assert_eq!(editor.scroll_row_limit, Some(3));
         dispatch_cmd(
             &Cmd::Scroll(None, None, None),
             &mut buffer,
             &mut output,
             &mut input,
-            &mut state,
+            &mut editor,
         )
         .expect("scroll 13..15");
         assert_eq!(buffer.current_line(), 15);
-        assert_eq!(state.scroll_row_limit, Some(3));
+        assert_eq!(editor.scroll_row_limit, Some(3));
     }
 
     #[test]
@@ -4089,7 +4089,7 @@ mod tests {
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\n")).collect();
         let mut buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
-        let mut state = EditorState { ..Default::default() };
+        let mut editor = Editor { ..Default::default() };
         let mut input = b"" as &[u8];
         dispatch_cmd(
             &Cmd::Scroll(
@@ -4100,7 +4100,7 @@ mod tests {
             &mut buffer,
             &mut output,
             &mut input,
-            &mut state,
+            &mut editor,
         )
         .expect("scroll 10..12");
         assert_eq!(buffer.current_line(), 12);
@@ -4122,7 +4122,7 @@ mod tests {
             &mut buffer,
             &mut output,
             &mut input,
-            &mut state,
+            &mut editor,
         )
         .expect("scroll 13..15");
         assert_eq!(buffer.current_line(), 15);
