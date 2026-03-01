@@ -10,7 +10,6 @@ use std::ops::{
     Index, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
     RangeToInclusive,
 };
-use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use regex::Regex;
@@ -23,7 +22,6 @@ use crate::main_loop::LnedError;
 #[derive(Debug, Clone)]
 pub struct EditBuffer {
     current_line: usize,
-    filename: Option<PathBuf>,
     prevailing_eol: Option<PrevailingEol>,
     undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
@@ -133,7 +131,6 @@ impl EditBuffer {
         EditBuffer {
             text: Vec::new(),
             current_line: 0,
-            filename: None,
             prevailing_eol: None,
             undo_stack: UndoStack::new(),
             clean_fingerprint: None,
@@ -195,14 +192,6 @@ impl EditBuffer {
         } else {
             self.current_line = line;
         }
-    }
-
-    pub fn filename(&self) -> Option<&Path> {
-        self.filename.as_deref()
-    }
-
-    pub fn set_filename(&mut self, filename: Option<PathBuf>) {
-        self.filename = filename;
     }
 
     pub fn reset_clean_fingerprint(&mut self) -> Option<u64> {
