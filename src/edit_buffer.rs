@@ -19,19 +19,13 @@ pub use crate::edit_buffer::undo_stack::{Change, ChangeSet, UndoStack};
 use crate::eol::Eol;
 use crate::main_loop::LnedError;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct EditBuffer {
     current_line: usize,
     prevailing_eol: Option<PrevailingEol>,
     undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
     text: Vec<String>,
-}
-
-impl Default for EditBuffer {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl From<Vec<String>> for EditBuffer {
@@ -128,13 +122,7 @@ impl EditBuffer {
     #[inline]
     #[must_use]
     pub fn new() -> EditBuffer {
-        EditBuffer {
-            text: Vec::new(),
-            current_line: 0,
-            prevailing_eol: None,
-            undo_stack: UndoStack::new(),
-            clean_fingerprint: None,
-        }
+        EditBuffer::default()
     }
 
     /// Creates a new empty `EditBuffer` with room for at least `capacity`

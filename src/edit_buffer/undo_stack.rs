@@ -16,7 +16,7 @@ use std::vec::Drain;
 
 use crate::edit_buffer::{Eol, PrevailingEol};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct UndoStack {
     undo: Vec<ChangeSet>,
     redo: Vec<ChangeSet>,
