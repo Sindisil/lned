@@ -237,22 +237,22 @@ impl fmt::Display for LnedError {
     }
 }
 
+#[derive(Debug, Default)]
+struct Editor {
+    previous_warning: Warning,
+    previous_pattern: Option<regex::Regex>,
+    scroll_row_limit: Option<usize>,
+    current_file: Option<PathBuf>,
+    buffer: EditBuffer,
+}
+
 #[derive(Debug, Default, PartialEq)]
-enum FileWarning {
+enum Warning {
     #[default]
     None,
     QuitUnsaved,
     EditUnsaved,
     WriteOverwrite(Option<Address>, Option<PathBuf>),
-}
-
-#[derive(Debug, Default)]
-struct Editor {
-    previous_file_warning: FileWarning,
-    previous_pattern: Option<regex::Regex>,
-    scroll_row_limit: Option<usize>,
-    current_file: Option<PathBuf>,
-    buffer: EditBuffer,
 }
 
 impl Editor {
@@ -373,6 +373,7 @@ impl Editor {
         address: Option<Address>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         if address.is_some_and(|a| a.end() > self.buffer.len()) {
             return Err(LnedError::InvalidAddress);
         }
@@ -398,6 +399,7 @@ impl Editor {
         address: Option<Address>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         if address.is_some_and(|a| a.end() > self.buffer.len()) {
             return Err(LnedError::InvalidAddress);
         }
@@ -430,6 +432,7 @@ impl Editor {
         &mut self,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         match address {
             Some(addr) if addr.start() == 0 => Err(LnedError::InvalidAddress),
             None if self.buffer.current_line() == 0 => {
@@ -446,6 +449,7 @@ impl Editor {
         attrs: Option<PrintAttributes>,
         window: ScrollWindow,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         // create addressed span to print from specified address
         // and max_rows
         let start = if let Some(addr) = address {
@@ -471,6 +475,7 @@ impl Editor {
         output: &mut impl Write,
         filename: Option<&Path>,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         let filename = filename
             .or(self.current_file.as_deref())
             .ok_or(LnedError::NoFilename)?;
@@ -493,11 +498,11 @@ impl Editor {
         filename: Option<&Path>,
     ) -> Result<Option<ChangeSet>, LnedError> {
         if self.buffer.is_dirty() {
-            if self.previous_file_warning == FileWarning::EditUnsaved {
-                self.previous_file_warning = FileWarning::None;
+            if self.previous_warning == Warning::EditUnsaved {
+                self.previous_warning = Warning::None;
                 self.buffer.reset_clean_fingerprint();
             } else {
-                self.previous_file_warning = FileWarning::EditUnsaved;
+                self.previous_warning = Warning::EditUnsaved;
                 return Err(LnedError::EditUnwrittenChanges);
             }
         }
@@ -551,6 +556,7 @@ impl Editor {
         address: Option<Address>,
         filename: Option<&Path>,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         let address = if let Some(address) = address {
             if address.end() > self.buffer.len() {
                 return Err(LnedError::InvalidAddress);
@@ -606,6 +612,7 @@ impl Editor {
         replacement: &str,
         scope: SubstitutionScope,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         let address = address
             .unwrap_or_else(|| Address::line(self.buffer.current_line()));
         if address.start() == 0
@@ -713,6 +720,7 @@ impl Editor {
         mut address: Option<Address>,
         destination: Address,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         if destination.end() > self.buffer.len() {
             return Err(LnedError::InvalidAddress);
         }
@@ -731,6 +739,7 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         let address = address
             .or_else(|| {
                 if self.buffer.current_line() == 0 {
@@ -747,6 +756,7 @@ impl Editor {
     }
 
     fn file_cmd(&mut self, output: &mut impl Write, filename: Option<&Path>) {
+        self.previous_warning = Warning::None;
         if let Some(filename) = filename {
             self.current_file = Some(filename.to_owned());
         }
@@ -773,6 +783,7 @@ impl Editor {
         pattern: &Regex,
         commands: &str,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         let mut changes = ChangeSet::new(
             self.buffer.current_line(),
             self.buffer.prevailing_eol(),
@@ -890,6 +901,7 @@ impl Editor {
         output: &mut impl Write,
         eol: Option<PrevailingEol>,
     ) -> Option<ChangeSet> {
+        self.previous_warning = Warning::None;
         let changes =
             eol.and_then(|eol| self.buffer.set_prevailing_eol(eol.eol));
 
@@ -910,6 +922,7 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         let address = Some(Address::line(
             address.map_or_else(|| self.buffer.current_line() + 1, |a| a.end()),
         ));
@@ -921,6 +934,7 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         let address = address
             .or_else(|| {
                 if self.buffer.current_line() == 0 {
@@ -942,6 +956,7 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         let address = address
             .or_else(|| {
                 if self.buffer.current_line() == 0 {
@@ -964,6 +979,7 @@ impl Editor {
         mut address: Option<Address>,
         destination: Address,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         if destination.end() > self.buffer.len() {
             return Err(LnedError::InvalidAddress);
         }
@@ -1008,8 +1024,8 @@ impl Editor {
         let cmd_filename = filename;
         let safe_to_overwrite = filename.is_none()
             || matches!(
-                &self.previous_file_warning,
-                FileWarning::WriteOverwrite(a, f)
+                &self.previous_warning,
+                Warning::WriteOverwrite(a, f)
                     if *a == address && f.as_deref() == filename,
             );
 
@@ -1029,7 +1045,7 @@ impl Editor {
             }) {
                 writeln!(output, "{e}").expect("reliable stdout");
             }
-            self.previous_file_warning = FileWarning::WriteOverwrite(
+            self.previous_warning = Warning::WriteOverwrite(
                 address,
                 cmd_filename.map(ToOwned::to_owned),
             );
@@ -1041,7 +1057,7 @@ impl Editor {
         if self.current_file.is_none() {
             self.current_file = Some(filename.to_owned());
         }
-        self.previous_file_warning = FileWarning::None;
+        self.previous_warning = Warning::None;
         Ok(None)
     }
 
@@ -1051,6 +1067,7 @@ impl Editor {
         address: Option<Address>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         if address.is_some_and(|a| a.end() > self.buffer.len()) {
             return Err(LnedError::InvalidAddress);
         }
@@ -1077,6 +1094,7 @@ impl Editor {
         address: Option<Address>,
         separator: Option<&str>,
     ) -> Result<Option<ChangeSet>, LnedError> {
+        self.previous_warning = Warning::None;
         match address {
             None if self.buffer.current_line() == self.buffer.len() => {
                 Err(LnedError::InvalidAddress)
@@ -1093,6 +1111,7 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Option<ChangeSet> {
+        self.previous_warning = Warning::None;
         match address {
             None => {
                 writeln!(output, "{}", self.buffer.len()).unwrap();
@@ -1109,11 +1128,11 @@ impl Editor {
     /// Displays warning and doesn't actually exit if unwritten
     /// buffer changes are detected.
     fn quit_cmd(&mut self) -> Result<Option<ChangeSet>, LnedError> {
-        match self.previous_file_warning {
-            FileWarning::QuitUnsaved => Ok(None),
+        match self.previous_warning {
+            Warning::QuitUnsaved => Ok(None),
             _ if !self.buffer.is_dirty() => Ok(None),
             _ => {
-                self.previous_file_warning = FileWarning::QuitUnsaved;
+                self.previous_warning = Warning::QuitUnsaved;
                 Err(LnedError::QuitUnwrittenChanges)
             }
         }
@@ -3654,10 +3673,10 @@ mod tests {
         let tmp_dir = tempdir().expect("tmp dir created");
         let name = tmp_dir.path().join("filename.txt");
         let mut editor = Editor::new();
-        editor.previous_file_warning = FileWarning::None;
+        editor.previous_warning = Warning::None;
         editor.current_file = Some(name.clone());
         let expected_warning =
-            FileWarning::WriteOverwrite(None, Some(name.clone()));
+            Warning::WriteOverwrite(None, Some(name.clone()));
         editor.buffer = EditBuffer::with_text(&["1\r\n", "2\r\n", "3\r\n"]);
         let mut output = Vec::new();
         fs::copy(
@@ -3670,11 +3689,11 @@ mod tests {
             .write_cmd(&mut output, None, Some(&name))
             .expect_err("overwrite warning");
         assert!(matches!(res, LnedError::WriteWouldOverwrite(_)));
-        assert_eq!(editor.previous_file_warning, expected_warning);
+        assert_eq!(editor.previous_warning, expected_warning);
         let _ = editor
             .write_cmd(&mut output, None, Some(&name))
             .expect("successful overwrite on second try");
-        assert_eq!(editor.previous_file_warning, FileWarning::None);
+        assert_eq!(editor.previous_warning, Warning::None);
         let new_content = fs::read(&name).expect("successful read");
         assert_eq!(
             new_content,
@@ -3700,8 +3719,8 @@ mod tests {
         let mut editor = Editor::new();
         editor.buffer = EditBuffer::with_text(&["1\r\n", "2\r\n", "3\r\n"]);
         editor.current_file = Some(name.clone());
-        editor.previous_file_warning =
-            FileWarning::WriteOverwrite(None, Some(name.clone()));
+        editor.previous_warning =
+            Warning::WriteOverwrite(None, Some(name.clone()));
         let mut output = Vec::new();
         fs::copy(
             Path::new(r"test/assets/text_with_final_eol.txt"),
@@ -3713,7 +3732,7 @@ mod tests {
             .write_cmd(&mut output, None, None)
             .expect("successful overwrite because default filename");
         let new_content = fs::read(&name).expect("successful read");
-        assert_eq!(editor.previous_file_warning, FileWarning::None);
+        assert_eq!(editor.previous_warning, Warning::None);
         assert_eq!(
             new_content,
             editor.buffer[..]
@@ -4004,7 +4023,7 @@ mod tests {
 
     #[test]
     fn scroll_cmd_with_print_sfx() {
-        let mut editor = Editor { ..Default::default() };
+        let mut editor = Editor::new();
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\n")).collect();
         editor.buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
