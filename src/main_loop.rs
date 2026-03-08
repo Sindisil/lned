@@ -532,7 +532,8 @@ impl Editor {
         };
 
         let mut lines = Vec::new();
-        let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
+        let bytes_read = read_lines(&mut source, &mut lines)?;
+        let lines_read = lines.len();
         self.buffer.clear_text();
         let missing_eol = self.buffer.append(0, lines);
         write!(output, "{lines_read} lines ({bytes_read} bytes) read",)
@@ -588,20 +589,20 @@ impl Editor {
         };
 
         let mut lines = Vec::new();
-        let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
-        writeln!(output, "{lines_read} lines ({bytes_read} bytes) read")
+        let bytes_read = read_lines(&mut source, &mut lines)?;
+        let lines_read = lines.len();
+        writeln!(output, "{} lines ({bytes_read} bytes) read", lines.len())
             .unwrap();
         let mut changes = ChangeSet::new(
             self.buffer.current_line(),
             self.buffer.prevailing_eol(),
         );
         changes.push(Change::Add(address.end(), lines.clone()));
-        let lines_added = lines.len();
         if self.buffer.append(address.end(), lines) {
             output.flush().unwrap();
             writeln!(output, "missing newline appended").unwrap();
         }
-        self.buffer.set_current_line(address.end() + lines_added);
+        self.buffer.set_current_line(address.end() + lines_read);
         Ok(Some(changes))
     }
 
@@ -1316,10 +1317,9 @@ fn expand_escapes(s: &str) -> &str {
 fn read_lines(
     source: &mut impl BufRead,
     lines: &mut Vec<String>,
-) -> Result<(usize, usize), LnedError> {
+) -> Result<usize, LnedError> {
     let mut line = String::new();
     let mut bytes_read = 0;
-    let mut lines_read = 0;
     loop {
         let len = source
             .read_line(&mut line)
@@ -1328,13 +1328,12 @@ fn read_lines(
             break;
         }
         bytes_read += len;
-        lines_read += 1;
         line.shrink_to_fit();
         lines.push(line);
         line = String::new();
     }
 
-    Ok((lines_read, bytes_read))
+    Ok(bytes_read)
 }
 
 trait FileWrite {
@@ -3366,14 +3365,14 @@ mod tests {
     }
 
     #[test]
-    fn read_lines_returns_correct_counts() {
+    fn read_lines_returns_correct_count() {
         let source = b"one\r\ntwo\r\nthree\r\nfour\r\n";
         let source_bytes = source.len();
         let mut lines = Vec::new();
-        let (line_count, byte_count) =
+        let byte_count =
             read_lines(&mut &source[..], &mut lines).expect("no error");
         assert_eq!(byte_count, source_bytes);
-        assert_eq!(line_count, lines.len());
+        assert_eq!(lines.len(), 4);
     }
 
     #[test]
