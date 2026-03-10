@@ -33,7 +33,6 @@ impl From<Vec<String>> for EditBuffer {
         let line_count = lines.len();
         let mut buf = EditBuffer::with_capacity(line_count);
         buf.append(0, lines);
-        buf.set_current_line(line_count);
         buf
     }
 }
@@ -150,7 +149,6 @@ impl EditBuffer {
         let mut buf = EditBuffer::with_capacity(line_count);
         buf.prevailing_eol = PrevailingEol::compute_prevailing_eol(&text);
         buf.append(0, text);
-        buf.set_current_line(line_count);
         buf
     }
 
@@ -238,7 +236,6 @@ impl EditBuffer {
         }
 
         self.append(location, lines.clone());
-        self.current_line = location + lines.len();
         changes.push(Change::Add(location, lines));
         Some(changes)
     }
@@ -271,6 +268,7 @@ impl EditBuffer {
             }
         }
 
+        self.current_line = location + lines.len();
         self.text.splice(location..location, lines);
         eol_added
     }
@@ -299,7 +297,6 @@ impl EditBuffer {
         } else {
             let b = b.saturating_sub(1);
             self.append(b, lines.clone());
-            self.current_line = b + lines.len();
             changes.push(Change::Add(b, lines));
         }
 
@@ -342,7 +339,6 @@ impl EditBuffer {
         }
 
         self.append(location, lines.clone());
-        self.current_line = location + lines.len();
         changes.push(Change::Add(location, lines));
         Some(changes)
     }

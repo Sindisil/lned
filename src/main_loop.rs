@@ -547,7 +547,6 @@ impl Editor {
             writeln!(output, "missing newline appended").unwrap();
         }
         output.flush().unwrap();
-        self.buffer.set_current_line(self.buffer.len());
         Ok(None)
     }
 
@@ -590,7 +589,6 @@ impl Editor {
 
         let mut lines = Vec::new();
         let bytes_read = read_lines(&mut source, &mut lines)?;
-        let lines_read = lines.len();
         writeln!(output, "{} lines ({bytes_read} bytes) read", lines.len())
             .unwrap();
         let mut changes = ChangeSet::new(
@@ -602,7 +600,6 @@ impl Editor {
             output.flush().unwrap();
             writeln!(output, "missing newline appended").unwrap();
         }
-        self.buffer.set_current_line(address.end() + lines_read);
         Ok(Some(changes))
     }
 
