@@ -6,6 +6,7 @@ mod undo_stack;
 
 use std::cmp::{self, Ordering};
 use std::fmt::{self, Display, Formatter};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::{
     Index, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
     RangeToInclusive,
@@ -17,7 +18,7 @@ use regex::Regex;
 use crate::command::Address;
 pub use crate::edit_buffer::undo_stack::{Change, ChangeSet, UndoStack};
 use crate::eol::Eol;
-use crate::main_loop::LnedError;
+use crate::main_loop;
 
 #[derive(Debug, Default, Clone)]
 pub struct EditBuffer {
@@ -25,6 +26,7 @@ pub struct EditBuffer {
     prevailing_eol: Option<PrevailingEol>,
     undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
+    content_hash: Option<u64>,
     text: Vec<String>,
 }
 
@@ -161,6 +163,17 @@ impl EditBuffer {
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    pub fn content_hash(&self) -> Option<u64> {
+        self.content_hash
+    }
+
+    pub fn update_content_hash(&mut self) -> Option<u64> {
+        let mut h = DefaultHasher::new();
+        self.text.hash(&mut h);
+        self.content_hash = Some(h.finish());
+        self.content_hash
     }
 
     /// Returns true if buffer has been changed since last write.
@@ -413,9 +426,9 @@ impl EditBuffer {
         changes
     }
 
-    pub fn do_undo(&mut self) -> Result<(), LnedError> {
+    pub fn do_undo(&mut self) -> Result<(), main_loop::Error> {
         let Some(undo) = self.undo_stack.pop_undo() else {
-            return Err(LnedError::NothingToUndo);
+            return Err(main_loop::Error::NothingToUndo);
         };
         for change in undo.changes().rev() {
             match change {
@@ -441,9 +454,9 @@ impl EditBuffer {
         Ok(())
     }
 
-    pub fn do_redo(&mut self) -> Result<(), LnedError> {
+    pub fn do_redo(&mut self) -> Result<(), main_loop::Error> {
         let Some(redo) = self.undo_stack.pop_redo() else {
-            return Err(LnedError::NothingToRedo);
+            return Err(main_loop::Error::NothingToRedo);
         };
         for change in redo.changes() {
             match change {
@@ -1443,7 +1456,7 @@ mod tests {
         assert_eq!(buffer[..], expected_final[..]);
 
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(LnedError::NothingToUndo, _ret));
+        assert!(matches!(main_loop::Error::NothingToUndo, _ret));
         // Undo stack should be empty here, so buffer shouldn't change
         assert_eq!(buffer[..], expected_final[..]);
     }
@@ -1477,7 +1490,7 @@ mod tests {
         assert!(!buffer.is_dirty());
 
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(LnedError::NothingToUndo, _ret));
+        assert!(matches!(main_loop::Error::NothingToUndo, _ret));
         assert!(!buffer.is_dirty()); // still not dirty
     }
 
@@ -1510,7 +1523,7 @@ mod tests {
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], buffer_orig[..]);
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(LnedError::NothingToUndo, _ret));
+        assert!(matches!(main_loop::Error::NothingToUndo, _ret));
         assert_eq!(buffer[..], buffer_orig[..]); // buffer unchanged
 
         buffer.do_redo().unwrap();
@@ -1520,7 +1533,7 @@ mod tests {
         assert_eq!(buffer[..], expected_final[..]);
 
         let _ret = buffer.do_redo().expect_err("nothing to redo");
-        assert!(matches!(LnedError::NothingToRedo, _ret));
+        assert!(matches!(main_loop::Error::NothingToRedo, _ret));
         assert_eq!(buffer[..], expected_final[..]); // buffer unchanged
     }
     #[test]
@@ -1582,7 +1595,7 @@ mod tests {
         assert!(!buffer.is_dirty());
 
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(LnedError::NothingToUndo, _ret));
+        assert!(matches!(main_loop::Error::NothingToUndo, _ret));
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), 0);
     }
