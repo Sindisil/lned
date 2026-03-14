@@ -225,12 +225,9 @@ The current line is not affected by this command.
 
 ### 'f' Filename
 
-    f [filename]
+    f
 
-Set the current filename to the specified value, if any. Regardless of
-whether a new filename is specified, the currently current filename is
-printed to stdout.
-
+Prints the current filename and the prevailing newline.
 The current line is not affected by this command.
 
 ### 'g' Global 

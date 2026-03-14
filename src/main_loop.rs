@@ -299,8 +299,8 @@ impl Editor {
                 self.change_cmd(input, *address, IndentMode::Raw)
             }
             Cmd::Enumerate(address) => self.enumerate_cmd(output, *address),
-            Cmd::File(filename) => {
-                self.file_cmd(output, filename.as_deref());
+            Cmd::File => {
+                self.file_cmd(output);
                 Ok(None)
             }
             Cmd::Global(address, pattern, commands) => {
@@ -400,7 +400,6 @@ impl Editor {
         address: Option<Address>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         if address.is_some_and(|a| a.end() > self.buffer.len()) {
             return Err(Error::InvalidAddress);
         }
@@ -426,7 +425,6 @@ impl Editor {
         address: Option<Address>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         if address.is_some_and(|a| a.end() > self.buffer.len()) {
             return Err(Error::InvalidAddress);
         }
@@ -459,7 +457,6 @@ impl Editor {
         &mut self,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         match address {
             Some(addr) if addr.start() == 0 => Err(Error::InvalidAddress),
             None if self.buffer.current_line() == 0 => {
@@ -476,7 +473,6 @@ impl Editor {
         attrs: Option<PrintAttributes>,
         window: ScrollWindow,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         // create addressed span to print from specified address
         // and max_rows
         let start = if let Some(addr) = address {
@@ -502,7 +498,6 @@ impl Editor {
         output: &mut impl Write,
         filename: Option<&Path>,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         let filename = filename
             .or(self.current_file.as_deref())
             .ok_or(Error::NoFilename)?;
@@ -638,7 +633,6 @@ impl Editor {
         address: Option<Address>,
         filename: Option<&Path>,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         let address = if let Some(address) = address {
             if address.end() > self.buffer.len() {
                 return Err(Error::InvalidAddress);
@@ -692,7 +686,6 @@ impl Editor {
         replacement: &str,
         scope: SubstitutionScope,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         let address = address
             .unwrap_or_else(|| Address::line(self.buffer.current_line()));
         if address.start() == 0
@@ -796,7 +789,6 @@ impl Editor {
         mut address: Option<Address>,
         destination: Address,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         if destination.end() > self.buffer.len() {
             return Err(Error::InvalidAddress);
         }
@@ -815,7 +807,6 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         let address = address
             .or_else(|| {
                 if self.buffer.current_line() == 0 {
@@ -831,12 +822,7 @@ impl Editor {
         Ok(None)
     }
 
-    fn file_cmd(&mut self, output: &mut impl Write, filename: Option<&Path>) {
-        self.previous_warning = None;
-        if let Some(filename) = filename {
-            self.current_file = Some(filename.to_owned());
-        }
-
+    fn file_cmd(&self, output: &mut impl Write) {
         if let Some(filename) = &self.current_file {
             write!(output, "{}", filename.display()).unwrap();
         } else {
@@ -859,7 +845,6 @@ impl Editor {
         pattern: &Regex,
         commands: &str,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         let mut changes = ChangeSet::new(
             self.buffer.current_line(),
             self.buffer.prevailing_eol(),
@@ -975,7 +960,6 @@ impl Editor {
         output: &mut impl Write,
         eol: Option<PrevailingEol>,
     ) -> Option<ChangeSet> {
-        self.previous_warning = None;
         let changes =
             eol.and_then(|eol| self.buffer.set_prevailing_eol(eol.eol));
 
@@ -996,7 +980,6 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         let address = Some(Address::line(
             address.map_or_else(|| self.buffer.current_line() + 1, |a| a.end()),
         ));
@@ -1008,7 +991,6 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         let address = address
             .or_else(|| {
                 if self.buffer.current_line() == 0 {
@@ -1030,7 +1012,6 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         let address = address
             .or_else(|| {
                 if self.buffer.current_line() == 0 {
@@ -1053,7 +1034,6 @@ impl Editor {
         mut address: Option<Address>,
         destination: Address,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         if destination.end() > self.buffer.len() {
             return Err(Error::InvalidAddress);
         }
@@ -1073,7 +1053,6 @@ impl Editor {
         address: Option<Address>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         if address.is_some_and(|a| a.end() > self.buffer.len()) {
             return Err(Error::InvalidAddress);
         }
@@ -1100,7 +1079,6 @@ impl Editor {
         address: Option<Address>,
         separator: Option<&str>,
     ) -> Result<Option<ChangeSet>, Error> {
-        self.previous_warning = None;
         match address {
             None if self.buffer.current_line() == self.buffer.len() => {
                 Err(Error::InvalidAddress)
@@ -1117,7 +1095,6 @@ impl Editor {
         output: &mut impl Write,
         address: Option<Address>,
     ) -> Option<ChangeSet> {
-        self.previous_warning = None;
         match address {
             None => {
                 writeln!(output, "{}", self.buffer.len()).unwrap();
@@ -1877,60 +1854,23 @@ mod tests {
         let mut editor = Editor::new();
         editor.buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         let mut output = Vec::new();
-        editor.file_cmd(&mut output, None);
+        editor.file_cmd(&mut output);
         let expected = "no filename set [CRLF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
         assert!(editor.current_file.is_none());
     }
 
     #[test]
-    fn set_filename() {
-        let mut editor = Editor::new();
-        let new_filename = "a_new_filename.txt";
-        editor.buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
-        let mut output = Vec::new();
-        editor.file_cmd(&mut output, Some(Path::new(new_filename)));
-        let expected = format!("{new_filename} [LF]\n");
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), &expected);
-        assert_eq!(
-            Some(Path::new(new_filename.trim())),
-            editor.current_file.as_deref()
-        );
-    }
-
-    #[test]
     fn print_filename() {
-        let new_filename = "a_new_filename.txt";
         let mut editor = Editor::new();
         editor.buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
+        editor.current_file = Some(PathBuf::from("a_new_filename.txt"));
         let mut output = Vec::new();
-        editor.file_cmd(&mut output, Some(Path::new(new_filename)));
-        assert_eq!(
-            Some(Path::new(new_filename)),
-            editor.current_file.as_deref()
-        );
+        editor.file_cmd(&mut output);
         output.clear();
-        editor.file_cmd(&mut output, None);
+        editor.file_cmd(&mut output);
         let expected = "a_new_filename.txt [LF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
-    }
-
-    #[test]
-    fn change_filename() {
-        let mut editor = Editor::new();
-        let orig_filename = "a_filename.md";
-        let new_filename = "a_new_filename.txt";
-        editor.buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
-        let mut output = Vec::new();
-        editor.file_cmd(&mut output, Some(Path::new(orig_filename)));
-        output.clear();
-        editor.file_cmd(&mut output, Some(Path::new(new_filename)));
-        let expected = "a_new_filename.txt [LF]\n";
-        assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
-        assert_eq!(
-            Some(Path::new(new_filename.trim())),
-            editor.current_file.as_deref()
-        );
     }
 
     #[test]
@@ -2745,13 +2685,12 @@ mod tests {
 
     #[test]
     fn file_cmd_dispatch() {
-        let input = b"f\nf new_filename.txt\nq\n";
+        let input = b"f\nq\n";
         let mut output = Vec::new();
         let args = CmdArgs { file: None };
         run(&input[..], &mut output, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("no filename set"));
-        assert!(output.contains("new_filename.txt"));
     }
 
     #[test]

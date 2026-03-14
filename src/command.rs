@@ -29,7 +29,7 @@ pub enum Cmd {
     Delete(Option<Address>),
     Edit(PathBuf),
     Enumerate(Option<Address>),
-    File(Option<PathBuf>),
+    File,
     Global(Option<Address>, Regex, String),
     Insert(Option<Address>),
     InsertRaw(Option<Address>),
@@ -383,7 +383,7 @@ impl Cmd {
             Some("d") => parse_no_args(&mut graphemes, Cmd::Delete(address)),
             Some("e") => parse_edit_cmd(&mut graphemes, address),
             Some("E") => parse_simple_cmd(address, &mut graphemes, Cmd::Reload),
-            Some("f") => parse_file_cmd(&mut graphemes, address),
+            Some("f") => parse_simple_cmd(address, &mut graphemes, Cmd::File),
             Some("g") => parse_global_cmd(
                 &mut graphemes,
                 address,
@@ -830,31 +830,6 @@ fn parse_number<'a>(
             })
         })
         .ok_or(Error::NumberParse)
-}
-
-fn parse_file_cmd<'a>(
-    graphemes: &mut impl Iterator<Item = &'a str>,
-    address: Option<Address>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
-    if address.is_some() {
-        return Err(Error::UnexpectedAddress);
-    }
-    match graphemes.next() {
-        None | Some("\n" | "\r\n") => Ok(Some((Cmd::File(None), None))),
-        Some(" " | "\t") => {
-            let filename = graphemes
-                .take_while(|s| *s != "\n" && *s != "\r\n")
-                .collect::<String>()
-                .trim()
-                .to_owned();
-            if filename.is_empty() {
-                Err(Error::MissingFilename)
-            } else {
-                Ok(Some((Cmd::File(Some(PathBuf::from(filename))), None)))
-            }
-        }
-        _ => Err(Error::InvalidCmdSuffix),
-    }
 }
 
 fn parse_global_command_line(
@@ -1857,53 +1832,6 @@ mod tests {
         let mut cmd_line = "filename.rs\n".graphemes(true).peekable();
         let res =
             parse_read_cmd(&mut cmd_line, None).expect_err("invalid suffix");
-        assert!(matches!(res, Error::InvalidCmdSuffix));
-    }
-
-    #[test]
-    fn parse_file_no_print_suffix() {
-        let mut cmd_line = "\n".graphemes(true);
-        let res = parse_file_cmd(&mut cmd_line, None).unwrap();
-        assert!(matches!(res, Some((_, None))));
-    }
-
-    #[test]
-    fn parse_file_cmd_with_address() {
-        let mut cmd_line = " filename.rs".graphemes(true);
-        let res = parse_file_cmd(&mut cmd_line, Some(Address::line(1)))
-            .expect_err("unexpected addr");
-        assert!(matches!(res, Error::UnexpectedAddress));
-    }
-
-    #[test]
-    fn parse_file_cmd_no_filename() {
-        let mut cmd_line = "\n".graphemes(true);
-        let res = parse_file_cmd(&mut cmd_line, None).unwrap();
-        assert!(matches!(res, Some((Cmd::File(None), None))));
-    }
-
-    #[test]
-    fn parse_file_cmd_bad_filename() {
-        let mut cmd_line = " \r\n".graphemes(true);
-        let res =
-            parse_file_cmd(&mut cmd_line, None).expect_err("bad filename");
-        assert!(matches!(res, Error::MissingFilename));
-    }
-
-    #[test]
-    fn parse_file_cmd_with_filename() {
-        let mut cmd_line = " a/filename.rs\r\n".graphemes(true);
-        let res = parse_file_cmd(&mut cmd_line, None).unwrap();
-        assert!(
-            matches!(&res, Some((Cmd::File(Some(f)), None)) if f.to_str().unwrap() == "a/filename.rs"),
-        );
-    }
-
-    #[test]
-    fn parse_file_cmd_invalid_suffix() {
-        let mut cmd_line = "filename.rs\n".graphemes(true);
-        let res =
-            parse_file_cmd(&mut cmd_line, None).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
