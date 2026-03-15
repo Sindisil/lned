@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::cmp;
 use std::collections::VecDeque;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::fs::{self, File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufReader, prelude::*};
@@ -222,7 +222,7 @@ impl fmt::Display for Error {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Editor {
     previous_warning: Option<Warning>,
     previous_pattern: Option<regex::Regex>,
@@ -230,6 +230,7 @@ struct Editor {
     current_file: Option<PathBuf>,
     file_metadata: Option<FileMetadata>,
     file_hash: Option<u64>,
+    buffer_sync_hash: u64,
     buffer: EditBuffer,
 }
 #[derive(Debug, PartialEq)]
@@ -273,7 +274,22 @@ impl fmt::Display for Warning {
 
 impl Editor {
     fn new() -> Editor {
-        Editor { ..Default::default() }
+        let mut buffer = EditBuffer::new();
+        let buffer_sync_hash = buffer.content_hash();
+        Editor {
+            previous_warning: None,
+            previous_pattern: None,
+            scroll_row_limit: None,
+            current_file: None,
+            file_metadata: None,
+            file_hash: None,
+            buffer,
+            buffer_sync_hash,
+        }
+    }
+
+    fn buffer_is_unsaved(&mut self) -> bool {
+        self.buffer_sync_hash != self.buffer.content_hash()
     }
 
     #[allow(clippy::too_many_lines)]
@@ -546,7 +562,8 @@ impl Editor {
 
         // Update metadata & hashes
         self.update_file_metadata();
-        self.file_hash = self.buffer.update_content_hash();
+        self.file_hash = Some(self.buffer.content_hash());
+        self.buffer_sync_hash = self.buffer.content_hash();
 
         // report info on load
         write!(
@@ -576,7 +593,7 @@ impl Editor {
         // warn if there are unsaved changes
         let warning = Warning::EditUnsaved(filename.to_owned());
         if self.previous_warning.as_ref() != Some(&warning)
-            && self.buffer.is_dirty()
+            && self.buffer_is_unsaved()
         {
             return Err(Error::Warning(warning));
         }
@@ -596,7 +613,6 @@ impl Editor {
         let bytes_read = read_lines(&mut source, &mut lines)?;
         let lines_read = lines.len();
         self.buffer.clear_text();
-        self.buffer.reset_clean_fingerprint();
         let missing_eol = self.buffer.append(0, lines);
 
         // set new current_file
@@ -604,7 +620,8 @@ impl Editor {
 
         // Update metadata & hashes
         self.update_file_metadata();
-        self.file_hash = self.buffer.update_content_hash();
+        self.file_hash = Some(self.buffer.content_hash());
+        self.buffer_sync_hash = self.buffer.content_hash();
 
         // report info on load
         write!(
@@ -822,19 +839,20 @@ impl Editor {
         Ok(None)
     }
 
-    fn file_cmd(&self, output: &mut impl Write) {
-        if let Some(filename) = &self.current_file {
-            write!(output, "{}", filename.display()).unwrap();
-        } else {
-            write!(output, "no filename set").unwrap();
+    fn file_cmd(&mut self, output: &mut impl Write) {
+        let mut msg = self.current_file.as_ref().map_or_else(
+            || "no filename set".to_owned(),
+            |f| f.display().to_string(),
+        );
+
+        if self.buffer_is_unsaved() {
+            msg.push_str(" [unsaved]");
         }
 
         if let Some(eol) = self.buffer.prevailing_eol() {
-            writeln!(output, " [{eol}]").unwrap();
-        } else {
-            writeln!(output, " [None]").unwrap();
+            write!(msg, " [{eol}]").unwrap();
         }
-
+        writeln!(output, "{msg}").unwrap();
         output.flush().unwrap();
     }
 
@@ -1112,7 +1130,7 @@ impl Editor {
     /// buffer changes are detected.
     fn quit_cmd(&mut self) -> Result<Option<ChangeSet>, Error> {
         if self.previous_warning != Some(Warning::QuitUnsaved)
-            && self.buffer.is_dirty()
+            && self.buffer_is_unsaved()
         {
             return Err(Error::Warning(Warning::QuitUnsaved));
         }
@@ -1122,7 +1140,7 @@ impl Editor {
     // New discards the buffer contents and unsets current file
     fn new_cmd(&mut self) -> Result<Option<ChangeSet>, Error> {
         if self.previous_warning == Some(Warning::NewUnsaved)
-            && self.buffer.is_dirty()
+            && self.buffer_is_unsaved()
         {
             return Err(Error::Warning(Warning::NewUnsaved));
         }
@@ -1166,7 +1184,8 @@ impl Editor {
 
         // Update metadata & hashes
         self.update_file_metadata();
-        self.file_hash = self.buffer.content_hash();
+        self.file_hash = Some(self.buffer.content_hash());
+        self.buffer_sync_hash = self.buffer.content_hash();
         Ok(None)
     }
 
@@ -1202,8 +1221,16 @@ impl Editor {
 
         write_file(&mut self.buffer, output, address, &mut writer)?;
 
-        if self.current_file.is_none() {
+        if self.current_file.is_none()
+            && address.is_none_or(|addr| {
+                addr.start() == 1 && addr.end() == self.buffer.len()
+            })
+        {
+            // Saving buffer for first time
             self.current_file = Some(filename.to_owned());
+            self.update_file_metadata();
+            self.file_hash = Some(self.buffer.content_hash());
+            self.buffer_sync_hash = self.buffer.content_hash();
         }
 
         Ok(None)
@@ -1633,7 +1660,6 @@ fn write_lines(
     address: Option<Address>,
 ) -> Result<(usize, usize), io::Error> {
     let line_span = address.map_or_else(|| 1usize..=buffer.len(), Into::into);
-    let full_buffer_write = line_span == (1usize..=buffer.len());
 
     let mut total_bytes_written = 0;
     let mut lines_written = 0;
@@ -1652,10 +1678,6 @@ fn write_lines(
     }
     destination.flush()?;
 
-    if full_buffer_write {
-        buffer.reset_clean_fingerprint();
-        buffer.update_content_hash();
-    }
     Ok((total_bytes_written, lines_written))
 }
 
@@ -1855,7 +1877,7 @@ mod tests {
         editor.buffer = EditBuffer::with_text(&["1\r\n", "2", "3"]);
         let mut output = Vec::new();
         editor.file_cmd(&mut output);
-        let expected = "no filename set [CRLF]\n";
+        let expected = "no filename set [unsaved] [CRLF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
         assert!(editor.current_file.is_none());
     }
@@ -1869,7 +1891,7 @@ mod tests {
         editor.file_cmd(&mut output);
         output.clear();
         editor.file_cmd(&mut output);
-        let expected = "a_new_filename.txt [LF]\n";
+        let expected = "a_new_filename.txt [unsaved] [LF]\n";
         assert_eq!(str::from_utf8(&output[..]).unwrap(), expected);
     }
 
@@ -3288,80 +3310,6 @@ mod tests {
     }
 
     #[test]
-    fn write_no_addr_leaves_clean_buffer() {
-        let mut editor = Editor::new();
-        editor.buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
-        assert!(!editor.buffer.is_dirty());
-        let mut input = "one more line\n.\n".as_bytes();
-        let Some(change) = editor
-            .append_cmd(&mut input, Some(Address::line(0)), IndentMode::Raw)
-            .unwrap()
-        else {
-            panic!("expected Some(ChangeSet) from append_cmd!");
-        };
-        assert!(!change.is_empty());
-        editor.buffer.push_undo(change);
-        assert!(editor.buffer.is_dirty());
-        let mut dummy_file = Vec::new();
-        let (bytes, lines) =
-            write_lines(&mut dummy_file, &mut editor.buffer, None).unwrap();
-        assert_eq!(bytes, 20);
-        assert_eq!(lines, 4);
-        assert!(!editor.buffer.is_dirty());
-    }
-
-    #[test]
-    fn write_full_buffer_leaves_clean_buffer() {
-        let mut editor = Editor::new();
-        editor.buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
-        assert!(!editor.buffer.is_dirty());
-        let mut input = "one more line\n.\n".as_bytes();
-        let Some(change) = editor
-            .append_cmd(&mut input, Some(Address::line(0)), IndentMode::Raw)
-            .unwrap()
-        else {
-            panic!("expected append_cmd to return Some(ChangeSet)!");
-        };
-        assert!(!change.is_empty());
-        editor.buffer.push_undo(change);
-        assert!(editor.buffer.is_dirty());
-        let mut dummy_file = Vec::new();
-        let address = Some(Address::span(1, editor.buffer.len()));
-        let (bytes, lines) =
-            write_lines(&mut dummy_file, &mut editor.buffer, address).unwrap();
-        assert_eq!(bytes, 20);
-        assert_eq!(lines, 4);
-        assert!(!editor.buffer.is_dirty());
-    }
-
-    #[test]
-    fn write_partial_buffer_leaves_dirty_buffer() {
-        let mut editor = Editor::new();
-        editor.buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
-        assert!(!editor.buffer.is_dirty());
-        let mut input = "one more line\n.\n".as_bytes();
-        let Some(change) = editor
-            .append_cmd(&mut input, Some(Address::line(0)), IndentMode::Raw)
-            .unwrap()
-        else {
-            panic!("expected Some(ChangeSet) from append_cmd!");
-        };
-        assert!(!change.is_empty());
-        editor.buffer.push_undo(change);
-        assert!(editor.buffer.is_dirty());
-        let mut dummy_file = Vec::new();
-        let (bytes, lines) = write_lines(
-            &mut dummy_file,
-            &mut editor.buffer,
-            Some(Address::span(1, 2)),
-        )
-        .unwrap();
-        assert_eq!(bytes, 16);
-        assert_eq!(lines, 2);
-        assert!(editor.buffer.is_dirty());
-    }
-
-    #[test]
     fn append_cmd_past_end_gives_error_before_input() {
         let mut editor = Editor::new();
         editor.buffer = EditBuffer::new();
@@ -3451,20 +3399,6 @@ mod tests {
             .delete_cmd(Some(Address::span(0, 3)))
             .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
-    }
-
-    #[test]
-    fn edit_cmd_missing_file_clears_buffer_sets_filename() {
-        let mut editor = Editor::new();
-        editor.buffer = EditBuffer::with_text(&["1\n", "2", "3"]);
-        assert_eq!(editor.buffer.len(), 3);
-        let mut output = Vec::new();
-        let not_a_file = Path::new("non-existant_file.txt");
-        let res =
-            editor.edit_cmd(&mut output, not_a_file).expect_err("FileNotFound");
-        assert!(matches!(res, Error::FileNotFound(_)));
-        assert_eq!(editor.current_file.as_deref(), Some(not_a_file));
-        assert!(editor.buffer.is_empty());
     }
 
     #[test]

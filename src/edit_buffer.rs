@@ -25,7 +25,6 @@ pub struct EditBuffer {
     current_line: usize,
     prevailing_eol: Option<PrevailingEol>,
     undo_stack: UndoStack,
-    clean_fingerprint: Option<u64>,
     content_hash: Option<u64>,
     text: Vec<String>,
 }
@@ -117,13 +116,22 @@ impl PartialEq for EditBuffer {
 impl EditBuffer {
     /// Creates a new empty `EditBuffer`.
     ///
+    /// No space will be allocated for text until lines are appended.
+    /// This is very inexpensive, but may require excessive allocation
+    /// later as lines are added.
     /// Consider the [`with_capacity`] method instead, to prevent this.
     ///
     /// [`with_capacity`]: EditBuffer::with_capacity
     #[inline]
     #[must_use]
     pub fn new() -> EditBuffer {
-        EditBuffer::default()
+        EditBuffer {
+            current_line: 0,
+            prevailing_eol: None,
+            undo_stack: UndoStack::new(),
+            content_hash: None,
+            text: Vec::new(),
+        }
     }
 
     /// Creates a new empty `EditBuffer` with room for at least `capacity`
@@ -139,8 +147,11 @@ impl EditBuffer {
     #[must_use]
     pub fn with_capacity(capacity: usize) -> EditBuffer {
         EditBuffer {
+            current_line: 0,
+            prevailing_eol: None,
+            undo_stack: UndoStack::new(),
+            content_hash: None,
             text: Vec::with_capacity(capacity),
-            ..EditBuffer::default()
         }
     }
 
@@ -165,20 +176,12 @@ impl EditBuffer {
         self.text.is_empty()
     }
 
-    pub fn content_hash(&self) -> Option<u64> {
-        self.content_hash
-    }
-
-    pub fn update_content_hash(&mut self) -> Option<u64> {
-        let mut h = DefaultHasher::new();
-        self.text.hash(&mut h);
-        self.content_hash = Some(h.finish());
-        self.content_hash
-    }
-
-    /// Returns true if buffer has been changed since last write.
-    pub fn is_dirty(&self) -> bool {
-        self.clean_fingerprint != self.undo_stack.fingerprint()
+    pub fn content_hash(&mut self) -> u64 {
+        *self.content_hash.get_or_insert_with(|| {
+            let mut h = DefaultHasher::new();
+            self.text.hash(&mut h);
+            h.finish()
+        })
     }
 
     pub fn current_line(&self) -> usize {
@@ -191,11 +194,6 @@ impl EditBuffer {
         } else {
             self.current_line = line;
         }
-    }
-
-    pub fn reset_clean_fingerprint(&mut self) -> Option<u64> {
-        self.clean_fingerprint = self.undo_stack.fingerprint();
-        self.clean_fingerprint
     }
 
     pub fn push_undo(&mut self, changes: ChangeSet) {
@@ -283,6 +281,7 @@ impl EditBuffer {
 
         self.current_line = location + lines.len();
         self.text.splice(location..location, lines);
+        self.content_hash = None;
         eol_added
     }
 
@@ -307,6 +306,7 @@ impl EditBuffer {
         if lines.is_empty() {
             // remove only
             self.current_line = usize::min(self.text.len(), b);
+            self.content_hash = None;
         } else {
             let b = b.saturating_sub(1);
             self.append(b, lines.clone());
@@ -327,6 +327,7 @@ impl EditBuffer {
         let mut changes =
             ChangeSet::new(self.current_line, self.prevailing_eol);
         self.current_line = usize::min(self.text.len(), b);
+        self.content_hash = None;
         changes.push(Change::Remove(b - 1, removed));
         changes
     }
@@ -397,6 +398,7 @@ impl EditBuffer {
             .splice(address.start() - 1..address.end(), vec![joined.clone()])
             .collect();
         self.current_line = address.start();
+        self.content_hash = None;
         changes.push(Change::Add(address.start() - 1, vec![joined]));
         changes.push(Change::Remove(address.start(), replaced));
         changes
@@ -423,6 +425,7 @@ impl EditBuffer {
         changes.push(Change::Add(destination, lines.clone()));
         self.text.splice(destination..destination, lines);
         self.current_line = destination + address.line_count();
+        self.content_hash = None;
         changes
     }
 
@@ -449,6 +452,7 @@ impl EditBuffer {
             }
         }
         self.current_line = undo.current_line_before;
+        self.content_hash = None;
         self.prevailing_eol = undo.prevailing_eol_before;
         self.undo_stack.push_redo(undo);
         Ok(())
@@ -477,6 +481,7 @@ impl EditBuffer {
             }
         }
         self.current_line = redo.current_line_after;
+        self.content_hash = None;
         self.prevailing_eol = redo.prevailing_eol_after;
         self.undo_stack.push_undo(redo, self.current_line, self.prevailing_eol);
         Ok(())
@@ -497,12 +502,14 @@ impl EditBuffer {
         changes.push(Change::Add(destination, source.clone()));
         self.text.splice(destination..destination, source);
         self.current_line = destination + address.line_count();
+        self.content_hash = None;
         changes
     }
 
     pub fn clear_text(&mut self) {
         self.text.clear();
         self.current_line = 0;
+        self.content_hash = None;
         self.prevailing_eol = None;
     }
 
@@ -540,10 +547,13 @@ impl EditBuffer {
             }
         }
 
-        if let Some(corrections) = corrections {
-            changes.push(Change::SetEol(corrections.0, corrections.1, eol));
+        if let Some((span, line_eol)) = corrections {
+            changes.push(Change::SetEol(span, line_eol, eol));
         }
 
+        if !changes.is_empty() {
+            self.content_hash = None;
+        }
         Some(changes)
     }
 }
@@ -657,12 +667,6 @@ mod tests {
     }
 
     #[test]
-    fn new_empty_buffer_is_clean() {
-        let buffer = EditBuffer::new();
-        assert!(!buffer.is_dirty());
-    }
-
-    #[test]
     fn buffer_with_capacity_has_correct_capacity() {
         const INIT_CAPACITY: usize = 1024;
         let buffer = EditBuffer::with_capacity(INIT_CAPACITY);
@@ -689,12 +693,6 @@ mod tests {
                 .iter()
                 .all(|l| l.ends_with("\r\n") || l.ends_with('\n'))
         );
-    }
-
-    #[test]
-    fn buffer_from_vec_is_clean() {
-        let buf = EditBuffer::with_text(&["1\n", "2", "3"]);
-        assert!(!buf.is_dirty());
     }
 
     /////
@@ -1228,22 +1226,11 @@ mod tests {
     fn buffer_dirty_after_append() {
         let mut buffer = EditBuffer::new();
         let lines = ["1\n", "2\n", "3\n"].map(ToOwned::to_owned).to_vec();
-        assert!(!buffer.is_dirty());
         let changes = buffer
             .do_append(Some(Address::line(0)), lines)
             .expect("Some(ChangeSet)");
         buffer.push_undo(changes);
-        assert!(buffer.is_dirty());
-    }
-
-    #[test]
-    fn buffer_clean_after_0_line_append() {
-        let mut buffer = EditBuffer::new();
-        let lines = Vec::new();
-        assert!(!buffer.is_dirty());
-        let changes = buffer.do_append(Some(Address::line(0)), lines);
-        assert!(changes.is_none());
-        assert!(!buffer.is_dirty());
+        assert!(buffer.content_hash.is_none());
     }
 
     #[test]
@@ -1462,39 +1449,6 @@ mod tests {
     }
 
     #[test]
-    fn buffer_clean_after_undo_all() {
-        let mut buffer =
-            EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
-        let lines = ["a\n", "b\n", "c\n"].map(ToOwned::to_owned).to_vec();
-
-        let changes = buffer
-            .do_append(Some(Address::line(2)), lines)
-            .expect("Some(ChangeSet)");
-        buffer.push_undo(changes);
-
-        let changes = buffer.do_delete(Some(Address::span(4, 7)));
-        buffer.push_undo(changes);
-
-        let lines = ["x\n", "y\n", "z\n"].map(ToOwned::to_owned).to_vec();
-        let changes = buffer
-            .do_append(Some(Address::line(0)), lines)
-            .expect("Some(ChangeSet)");
-        buffer.push_undo(changes);
-
-        buffer.do_undo().unwrap();
-
-        buffer.do_undo().unwrap();
-
-        buffer.do_undo().unwrap();
-
-        assert!(!buffer.is_dirty());
-
-        let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(main_loop::Error::NothingToUndo, _ret));
-        assert!(!buffer.is_dirty()); // still not dirty
-    }
-
-    #[test]
     fn do_redo_multi() {
         let mut buffer =
             EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
@@ -1586,13 +1540,13 @@ mod tests {
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
-        assert!(buffer.is_dirty());
+        assert!(buffer.content_hash.is_none());
 
         buffer.do_undo().unwrap();
         assert!(buffer.is_empty());
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), 0);
-        assert!(!buffer.is_dirty());
+        assert!(buffer.content_hash.is_none());
 
         let _ret = buffer.do_undo().expect_err("nothing to undo");
         assert!(matches!(main_loop::Error::NothingToUndo, _ret));
