@@ -19,10 +19,13 @@ _command mode_ and _input mode_.
 
 ### Command mode
 
+Commands consist of zero or more line addresses, followed by a command,
+possibly folowed by additional parameters:
+
+	[address[,address]]command[parameters]
+
 The specific syntax of _lned_'s commands are listed in the
-[_Commands_](#commands) section, below, but in general they consist of
-zero or more line addresses, followed by a one character command
-specifier, possibly followed by any arguments to the specific command.
+[_Commands_](#commands) section, below.
 
 In command mode, a ':' prompt is presented, and a single command is
 accepted. If the command accepts lines of text, those are entered in
@@ -38,11 +41,6 @@ while in _input mode_.
 ## Line Addressing
 
 All lned commands act on whole lines or spans of lines.
-
-Commands consist of zero or more line addresses, followed by a command,
-possibly folowed by additional parameters:
-
-	[address[,address]]command[parameters]
 
 The addresses specify the line or span of lines the command will affect.
 Default addresses apply if fewer addresses are specified than the command
@@ -94,7 +92,6 @@ number, to add or subtract that number from the address. If no number is
 specified, it is assumed to be 1, and if no '+' or '-' is specified,
 addition will be assumed.
 
-
 Addresses are separated by ',' (comma) or ';' (semicolon). Comma is a
 simple separator, but semi-colon causes the _current line_ to take the
 value of the preceding address before evaluating the next. This has
@@ -127,15 +124,26 @@ suffix applied, commands supplied to the global command can.
 
 ## Commands
 
-### Append ('a')
+### '' Null command
 
-#### Syntax
+    (.,+1)
 
-(.)a
-\<input text\>
-.
+An address alone on a line will display the addressed line. A newline
+alone on a line will display the next line (i.e., equivalent to +1p). The
+line displayed becomes the current line.
 
-#### Behavior
+### '=' Line Number 
+
+    ($)=
+
+Writes the line number of the addressed line to stdout.
+The current line number will be unchanged.
+
+### 'a' Append 
+
+    (.)a
+    \<input text\>
+    .
 
 Text is accepted in input mode, and the resulting lines are apended after
 the addressed line. The last appended line, or, if none, the addressed
@@ -143,15 +151,11 @@ line, becomes the current line. A line address of '0' is valid for the
 append command; the input text will then be placed at the beginning of the
 buffer.
 
-### Change ('c')
+### 'c' Change 
 
-#### Syntax
-
-(.,.)c
-\<input text\>
-.
-
-#### Behavior
+    (.,.)c
+    \<input text\>
+    .
 
 Text is accepted in input mode, the addressed lines are deleted, and the
 input text is inserted in their place. After a change command, the
@@ -168,17 +172,9 @@ replacement text inserted at the beginning of the buffer. An address with
 a lower bound of 0 is also valid, and will be interpreted in this case as
 the first line in the buffer (i.e., 0 if empty, 1 otherwise).
 
-### Copy ('t')
+### 'd' Delete
 
-See Transfer.
-
-### Delete ('d')
-
-#### Syntax
-
-(.,.)d
-
-#### Behavior
+    (.,.)d
 
 The addressed lines are deleted from the buffer.
 
@@ -187,86 +183,56 @@ deleted lines were atthe end of the buffer, the new last line becomes the
 current line. If the buffer is empty after addressed lines are deleted,
 the current line becomes 0.
 
-### Edit ('e')
+### 'e' Reload
 
-#### Syntax
+    e
 
-e [file]
+Reload the current file, replacing the current buffer contents.
 
-#### Behavior
+Line terminators are normalized to the prevailing newline, and a final
+newline is appended if missing. The current line number is set to the
+address of the last line in the buffer. The number of lines and bytes
+read is displayed, as is the prevailing newline.
 
-If buffer not empty, delete contents, then read specified file into
-buffer. If the last line of the file isn't terminated, a line terminator
-will be appended.
+If there are unsaved buffer changes, the user will be warned. Repeating
+the command will procede, discarding changes.
 
-The current line number will be set to the address of the last line in the
-buffer.
+### 'E' Edit  (a.k.a. Open)
 
-If no filename is specified, the currently remembered filename will be
-used, if it is set, otherwise an error message will be output.
+    E file
 
-If a file is read, the number of bytes read are displayed.
+Load the specified file, replacing the current buffer contents.
 
-The remembered filename will be changed to the filename specified, if any.
+Line terminators are normalized to the prevailing newline, and a final
+newline is appended if missing. The specified file becomes the new
+current filename. The current line number is set to the address of the last
+line in the buffer. The number of lines and bytes read is displayed, as
+is the prevailing newline.
 
-It is not an error for the filename to not exist, though a message will be
-displayed in that case.
+If there are unsaved buffer changes, the user will be warned. Repeating
+the command will procede, discarding changes.
 
-If the buffer has changed since the last time the entire buffer has been
-written, the user will be warned. As with the quit command, a second
-successive edit command will proceed, even if the buffer has been changed.
+### 'L' Line Terminator (a.k.a. Newline)
 
-### Enumerate ('n')
+    L [CR|CRLF]
 
-#### Syntax
-
-(.,.)n
-
-#### Behavior
-
-Write the addressed lines to stdout, prefixing each line with its line
-number. The line number will be right justified within a field wide enough
-to hold the largest line number in the file, and will be separated from
-the line content by two spaces.
-
-The last line written becomes the current line.
-
-### Newline ('N')
-
-#### Syntax
-
-N [CR|CRLF]
-
-#### Behavior
-
-Set the buffer's prevailing EOL to the one specified, if any. If an EOL is
-specified, the buffers's lines are normalized to that EOL. Regardless of
-whether a new EOL is specified, the buffer's prevailing EOL is printed to
-stdout.
+Set the buffer's prevailing newline to the one specified, if any. If a
+newline is specified, buffer lines are normalized to that newline.
+Regardless of whether a new newline is specified, the prevailing newline
+is printed to stdout.
 
 The current line is not affected by this command.
 
-### File ('f')
+### 'f' Filename
 
-#### Syntax
+    f
 
-f [filename]
-
-#### Behavior
-
-Set the buffer's remembered filename to the specified value, if any.
-Regardless of whether a new filename is specified, the buffer's currently
-remembered filename is printed to stdout.
-
+Prints the current filename and the prevailing newline.
 The current line is not affected by this command.
 
-### Global ('g')
+### 'g' Global 
 
-#### Syntax
-
-(1,$)g/__RE__/__commands__
-
-#### Behavior
+    (1,$)g/__RE__/__commands__
 
 The g command will first note every line matching the specified regex.
 Then, working from beginning to end, the command list will be executed for
@@ -297,15 +263,11 @@ given.
 Only those commands in the command list that successfully modify the edit
 buffer will be included when *undo*ing or *redo*ing a global command.
 
-### Insert ('i')
+### 'i' Insert 
 
-#### Syntax
-
-(.)i
-\<input text\>
-.
-
-#### Behavior
+    (.)i
+    \<input text\>
+    .
 
 Text is accepted in input mode, and the resulting lines are inserted
 before the addressed line. The last inserted line, or, if none, the
@@ -313,13 +275,9 @@ addressed line, becomes the current line. A line address of '0' is valid
 for the insert command; the input text will then be placed at the
 beginning of the buffer.
 
-### Join ('j')
+### 'j' Join 
 
-#### Syntax
-
-(.,.+1)j[/separator/]
-
-#### Behavior
+    (.,.+1)j[/separator/]
 
 Join addressed contiguous lines by removing the intervening line
 terminators, optionally inserting a separator string between each.
@@ -337,24 +295,9 @@ If any lines are joined, the current line will be set to the address of
 the resulting joined line, otherwise the current line number will not
 be set.
 
-### Line Number ('=')
+### 'l' List 
 
-#### Syntax
-
-($)=
-
-#### Behavior
-
-Writes the line number of the addressed line to stdout.
-The current line number will be unchanged.
-
-### List ('l')
-
-#### Syntax
-
-(.)l
-
-#### Behavior
+    (.)l
 
 The addressed lines are written to stdout with the
 some special characters, and the end of line, displayed
@@ -367,172 +310,101 @@ visually as follows:
 * $ within text:         \$
 
 
-### Move ('m')
+### 'm' Move 
 
-#### Syntax
-
-(.,.)m\<destination\>
-
-#### Behavior
+    (.,.)m\<destination\>
 
 Move the addressed lines to just after the last line specified by
 \<destination\>.
 
-If '0' is specified as the destination, the addressed lines are moved to the
-beginning of the buffer. The destination may not fall within the span of moved
-lines.
+If '0' is specified as the destination, the addressed lines are moved to
+the beginning of the buffer. The destination may not fall within the
+span of moved lines.
 
-The current line number will be set to the resulting address of the last line
-moved.
+The current line number will be set to the resulting address of the last
+line moved.
 
-### Null command ('')
+### 'n' Enumerate
 
-#### Syntax
+    (.,.)n
 
-(.,+1)
+Write the addressed lines to stdout, prefixing each line with its line
+number. The line number will be right justified within a field wide enough
+to hold the largest line number in the file, and will be separated from
+the line content by two spaces.
 
-#### Behavior
+The last line written becomes the current line.
 
-An address alone on a line will display the addressed line. A newline
-alone on a line will display the next line (i.e., equivalent to +1p). The
-line displayed becomes the current line.
+### 'N' New
 
-### Print ('p')
+Discard the buffer contents and unset current file.
 
-#### Syntax
+A waring will be given if there are unsaved buffer changes. Repeating
+the command will procede, discarding changes.
 
-(.,.)p
+### 'p' Print 
 
-#### Behavior
+    (.,.)p
 
 The addressed lines are written to stdout. The last line written becomes
 the current line.
 
-### Quit ('q')
+### 'q' Quit 
 
-#### Syntax
-
-q
-
-#### Behavior
+    q
 
 Exits the editor. If there are unsaved changes, a warning will be
-printed. Repeating the Quit command will discard the changes and
-exit.
+printed. Repeating the command will discard the changes and exit.
 
-### Read ('r')
+### 'r' Read 
 
-#### Syntax
+    ($)r [file]
 
-($)r [file]
+Inserts the contents of the specified file (or the current file, if none
+is specified) into the buffer after the specified address (or after the
+current_line if no address is specified).
 
-#### Behavior
-
-Inserts the contents of the specified file into the buffer after
-the specified address, or after the current_line if no address
-is specified.
-
-If the last line of the file isn't terminated, a line terminator
-will be appended.
-
-The current line number will be set to the address of the last line
-inserted.
-
-If no filename is specified, the currently rememberd filename will be
-used, if it is set, otherwise an error message will be output.
-
-If a file is read, the number of lines and bytes read are displayed.
-
-The remembered filename will be set to the filename specified, if any.
-
-If the filename doesn't exist, an error message will be displayed,
-and the current line will not change.
+Line terminators are normalized to the prevailing newline, and a final
+newline is appended if missing. The current line number is set to the
+address of the last line inserted. The number of lines and bytes
+read is displayed, as is the prevailing newline.
 
 A read may be undone as if it were an Insert command. As such, if
 a Read is undone, then redone by issuing a Redo command, the file
 is *not* reread; the lines previously read are simply reinserted.
 
-### Redo ('U')
+### 'S' Show diff 
 
-#### Syntax
+    S [filename]
 
-U
+Shows the differences between the current buffer contents and the
+specified filename's contents.
 
-#### Behavior
+If no filename is specified, the current current filename is used if it
+is set, otherwise an error is given.
 
-Reverts the most recently undone command.
-The most recent item is popped from the undo stack and executed.
+The current current filename is not changed by this command.
 
-As with direct commands, the redone command is then pushed to the
-undo stack.
+### 's' Substitute 
 
-For more details about the undo/redo system, see the 'u' (undo) command.
-
-### Scroll ('z')
-
-#### Syntax
-
-(.)z[count]
-
-#### Behavior
-
-Prints 'count' display lines from buffer, setting the scroll window size
-to 'count'. Printing will begin with the addressed line, or current_line
-if no address is given.
-
-If 'count' is not given, the current scroll window size is used.
-The scroll window size defaults to display height - 2, or 22 if
-the display height can't be determined.
-
-Note that the scroll window size is a number of display lines, not buffer
-lines.
-
-The current_line is set to one past the last line displayed, or buffer
-end, whichever is smaller.
-
-If any print suffixes are specified, all lines will be displayed
-accordingly.
-
-### Show diff ('S')
-
-#### Syntax
-
-S [filename]
-
-#### Behavior
-
-Shows the differences between the current buffer contents and
-the specified filename's contents.
-
-If no filename is specified, the current remembered filename is
-used if it is set, otherwise an error is given.
-
-The current remembered filename is not changed by this command.
-
-### Substitute ('s')
-
-#### Syntax
-
-(.,.)s/regex/replacement/flags
-
-#### Behavior
+    (.,.)s/regex/replacement/flags
 
 Matches each line in the addressed range witht he specified regular
 expression pattern, replacing one or all (depending upon flags)
-non-overlapping occurances with the specified replacement pattern.
-An error will be reported if no matches are found.
+non-overlapping occurances with the specified replacement pattern. An
+error will be reported if no matches are found.
 
 Any character other than ' ' (space) or '\n' (new line) may be used
-instead of '/' (slash) to delimit the regex, and within the regex
-the delimiter may be used as a literal character if escaped by a
-'\' (backslash) character.
+instead of '/' (slash) to delimit the regex, and within the regex the
+delimiter may be used as a literal character if escaped by a '\'
+(backslash) character.
 
 The current line will be set to the line on which the last replacement
 was made.
 
-The regex syntax is that supported by the Rust regex crate, and
-the replacement pattern syntax is that supported by that crate's
-replace() method.
+The regex syntax is that supported by the Rust regex crate, and the
+replacement pattern syntax is that supported by that crate's replace()
+method.
 
 See the regex crate's documentation for more details:
 
@@ -542,37 +414,26 @@ See the regex crate's documentation for more details:
 Flags may be either (but not both) of:
 
 * 'g'    Globaly replace all non-overlapping of regex with replacement
-* _number_    Replace the _number_th occurrance of regex with replacement
+* _number_    Replace the _number_th occurrance of regex with
+  replacement
 
-### Copy ('t')
+### 't' Transfer (a.k.a. Copy)
 
-See Transfer.
-
-### Transfer ('t')
-
-#### Syntax
-
-(., .)t\<destination\>
-
-#### Behavior
+    (., .)t\<destination\>
 
 Copy the addressed lines to just after the last line specified by
 \<destination\>.
 
-If '0' is specified as the destination address, the
-addressed lines are copied to the beginning of the buffer. The
-destination may not fall within the span of copied lines.
+If '0' is specified as the destination address, the addressed lines are
+copied to the beginning of the buffer. The destination may not fall
+within the span of copied lines.
 
-The current line number will be set to the resulting address of the
-last line copied.
+The current line number will be set to the resulting address of the last
+line copied.
 
-### Undo ('u')
+### 'u' Undo 
 
-#### Syntax
-
-u
-
-#### Behavior
+    u
 
 The most recent command is reverted.
 
@@ -596,31 +457,63 @@ reverse order, then in forward order but with inverted effect (i.e.,
 deletes become inserts, transfers become deletes, etc.). This is so
 that no history of edit actions are lost, including 'undo' commands.
 
-### Write ('w')
+### 'U' Redo 
 
-#### Syntax
+    U
 
-(1,$)w [filename]
+Reverts the most recently undone command.
 
-#### Behavior
+The most recent item is popped from the redo stack and executed. As with
+direct commands, the redone command is then pushed to the undo stack.
 
-The *w* command writes the addressed lines into the file with the
-specified filename. If no filename is given, the currently remembered
-filename will be used, or an error shown if there is none.
+For more details about the undo/redo system, see the 'u' (Undo) command.
+
+### 'w' Write (a.k.a. Save)
+
+    w
+
+Writes the buffer contents to the current file.
+
+A warning will be displayed if the current file contents has changed
+since last loaded or saved. Repeating the command will overwrite the
+current file.
+
+### 'W' Write As (a.k.a. Save As)
+
+    (1,$)w [filename]
+
+Writes the addressed lines into the file with the specified filename.
 
 If the file named doesn't exist, it will be created. If it already
-exists, a warning will be displayed and no write will occur, nor will
-the remembered filename be changed. A second identical write command
-will override the warning, overwriting the file's contents. No warning
-will be displayed if the remembered filename is used (i.e., if no
-filename is specified) -- this is essentially a "save" command.
+exists, a warning will be displayed and no write will occur. A second
+identical write command will override the warning, overwriting the
+file's contents.
 
-If the file is written, the remembered filename will be set to the
-specified filename if it had not already been set, otherwise it will
-remain unchanged.
+If the full buffer is written and the current filename had not yet been
+set, the current filename is set to the specified filename and the
+buffer is considered to be saved.
 
-The current line number will not be changed.
+The current line number will not be changed in any case.
 
-The number of bytes written  is printed to stdout if successful.
+The number of lines and bytes written is printed to stdout if successful.
 
-If the full buffer is written, buffer is marked clean.
+### 'z' Scroll 
+
+    (.)z[count]
+
+Prints 'count' display lines from buffer, setting the scroll window size
+to 'count'. Printing will begin with the addressed line, or current_line
+if no address is given.
+
+If 'count' is not given, the current scroll window size is used. The
+scroll window size defaults to display height - 2, or 22 if the display
+height can't be determined.
+
+Note that the scroll window size is a number of display lines, not
+buffer lines.
+
+The current_line is set to one past the last line displayed, or buffer
+end, whichever is smaller.
+
+If any print suffixes are specified, all lines will be displayed
+accordingly.

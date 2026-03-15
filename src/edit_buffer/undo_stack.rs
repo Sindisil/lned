@@ -16,7 +16,7 @@ use std::vec::Drain;
 
 use crate::edit_buffer::{Eol, PrevailingEol};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct UndoStack {
     undo: Vec<ChangeSet>,
     redo: Vec<ChangeSet>,
@@ -31,6 +31,7 @@ pub struct ChangeSet {
     pub prevailing_eol_after: Option<PrevailingEol>,
     changes: Vec<Change>,
 }
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     Add(usize, Vec<String>),        // Add/Insert of lines
@@ -152,16 +153,6 @@ impl UndoStack {
     pub fn pop_redo(&mut self) -> Option<ChangeSet> {
         self.redo.pop()
     }
-
-    /// Return the id of the top item in the undo stack,
-    /// or None if the stack is empty.
-    ///
-    /// Used to determine if undo stack has changed,
-    /// as a proxy for an `EditBuffer` with changes
-    /// that have not been written.
-    pub fn fingerprint(&self) -> Option<u64> {
-        self.undo.last().and_then(|i| i.id)
-    }
 }
 
 #[cfg(test)]
@@ -173,36 +164,6 @@ mod tests {
     #[test]
     fn create_new_undo_stack() {
         let s = UndoStack::new();
-        assert!(s.undo.is_empty());
-    }
-
-    #[test]
-    fn undo_stack_empty_fingerprint() {
-        let s = UndoStack::new();
-        assert!(s.undo.is_empty());
-        assert!(s.fingerprint().is_none());
-    }
-
-    #[test]
-    fn undo_stack_non_empty_fingerprint() {
-        let eol = Some(PrevailingEol::lf(false));
-        let mut s = UndoStack::new();
-        let cs = ChangeSet::new(0, eol);
-        s.push_undo(cs, 0, eol);
-        let fp1 = s.fingerprint();
-        assert!(fp1.is_some());
-
-        let cs = ChangeSet::new(0, eol);
-        s.push_undo(cs, 0, Some(PrevailingEol::lf(false)));
-        let fp2 = s.fingerprint();
-        assert!(fp2.is_some() && fp1 != fp2);
-        assert!(!s.undo.is_empty());
-
-        s.pop_undo();
-        assert!(s.fingerprint() == fp1);
-
-        s.pop_undo();
-        assert!(s.fingerprint().is_none());
         assert!(s.undo.is_empty());
     }
 
