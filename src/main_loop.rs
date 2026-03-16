@@ -9,7 +9,7 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crossterm::terminal;
+use crossterm::{ExecutableCommand, terminal};
 use regex::Regex;
 use similar::TextDiff;
 use unicode_segmentation::UnicodeSegmentation;
@@ -840,26 +840,33 @@ impl Editor {
     }
 
     fn file_cmd(&mut self, output: &mut impl Write) {
-        let mut msg = self.current_file.as_ref().map_or_else(
-            || "no filename set".to_owned(),
-            |f| f.display().to_string(),
-        );
+        let mut msg = String::new();
+        self.format_file_info(&mut msg);
+        writeln!(output, "{msg}").unwrap();
+        output.flush().unwrap();
+    }
+
+    fn format_file_info(&mut self, buf: &mut String) {
+        if let Some(f) = &self.current_file {
+            write!(buf, "{}", f.display()).unwrap();
+        } else {
+            buf.push_str("no filename set");
+        }
 
         if self.buffer_is_unsaved() {
-            msg.push_str(" [unsaved]");
+            buf.push_str(" [unsaved]");
         }
 
         if let Some(eol) = self.buffer.prevailing_eol() {
-            write!(msg, " [{eol}]").unwrap();
+            write!(buf, " [{eol}]").unwrap();
         }
-        writeln!(output, "{msg}").unwrap();
-        output.flush().unwrap();
     }
 
     fn global_cmd(
         &mut self,
         output: &mut impl Write,
         address: Option<Address>,
+
         pattern: &Regex,
         commands: &str,
     ) -> Result<Option<ChangeSet>, Error> {
@@ -1261,7 +1268,12 @@ pub fn run(
 
     // Accept and process commands until fatal error or exit
     let mut done = false;
+    let mut title = String::new();
     while !done {
+        title.clear();
+        title.push_str("lned - ");
+        editor.format_file_info(&mut title);
+        output.execute(terminal::SetTitle(&title)).unwrap();
         Cmd::read(&mut input, &mut editor.buffer, &mut editor.previous_pattern)
             .map_err(Error::ParseCmd)
             .and_then(|res| match res {
@@ -2617,7 +2629,8 @@ mod tests {
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("    two\n"));
-        assert!(output.contains("\nappended"));
+        assert!(output.contains("appended"));
+        assert!(!output.contains(" appended"));
         assert!(output.contains("unsaved changes"));
         assert!(!output.contains("one"));
     }
@@ -2734,7 +2747,8 @@ mod tests {
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("two\n"));
         assert!(output.contains("unsaved changes"));
-        assert!(output.contains("\ninserted"));
+        assert!(output.contains("inserted"));
+        assert!(!output.contains(" inserted"));
         assert!(!output.contains("one"));
     }
 
@@ -2767,12 +2781,13 @@ mod tests {
 
     #[test]
     fn line_number_cmd_dispatch() {
-        let input = b"a\n1\n2\n3\n4\n.\n2n\n=\n.=\nq\nq\n";
+        let input = b"a\none\ntwo\nthree\nfour\n.\n2n\n=\n.=\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("\n2\n"));
-        assert!(output.contains("\n4\n"));
+        eprintln!("{output}");
+        assert!(output.contains("2\n"));
+        assert!(output.contains("4\n"));
     }
 
     #[test]
@@ -2842,7 +2857,6 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        eprintln!("output: {output}");
         assert!(output.contains("no filename"));
     }
 
