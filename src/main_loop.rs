@@ -1391,13 +1391,14 @@ fn print_lines(
     for (n, l) in
         (address.into_iter()).zip(&buffer[RangeInclusive::from(address)])
     {
+        let mut cols = 0;
         if attributes.enumerate {
             write!(output, "{n:>ln_num_cols$}  ").expect("reliable stdout");
+            cols += ln_num_cols + 2;
         }
         let graphs = l.graphemes(true).map(|gr| {
             if attributes.expand_escapes { expand_escapes(gr) } else { gr }
         });
-        let mut cols = 0;
         for gr in graphs {
             cols += if gr == "\t" {
                 let gr_width = 8 - (cols % 8);
@@ -1405,9 +1406,13 @@ fn print_lines(
                     .expect("reliable stdout");
                 gr_width
             } else {
-                use unicode_width::UnicodeWidthStr;
                 write!(output, "{gr}").expect("reliable stdout");
-                gr.width()
+                if gr == "\n" || gr == "\r\n" {
+                    0
+                } else {
+                    use unicode_width::UnicodeWidthStr;
+                    gr.width()
+                }
             };
         }
 
@@ -2785,7 +2790,6 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        eprintln!("{output}");
         assert!(output.contains("2\n"));
         assert!(output.contains("4\n"));
     }
@@ -4078,6 +4082,26 @@ mod tests {
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("60\r\n61\r\n62\r\n63\r\n64\r\n"));
         assert_eq!(editor.buffer.current_line(), 64);
+    }
+
+    #[test]
+    fn scroll_cmd_long_lines() {
+        let mut editor = Editor::new();
+        let lines: Vec<String> =
+            (1..=64).map(|n| format!("{n} {}\r\n", "*".repeat(80))).collect();
+        editor.buffer = EditBuffer::from(lines);
+        editor.buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let res = editor
+            .scroll_cmd(
+                &mut output,
+                None,
+                None,
+                ScrollWindow { cols: 80, rows: 24 },
+            )
+            .expect("scroll to end");
+        assert!(res.is_none());
+        assert_eq!(editor.buffer.current_line(), 13);
     }
 
     #[test]
