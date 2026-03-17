@@ -360,9 +360,9 @@ impl Editor {
                     });
                 let rows = *match cmd_rows {
                     Some(rows) => self.scroll_row_limit.insert(*rows),
-                    None => self
-                        .scroll_row_limit
-                        .get_or_insert_with(|| term_rows.saturating_sub(2)),
+                    None => self.scroll_row_limit.get_or_insert_with(|| {
+                        (term_rows.saturating_sub(3)) / 2
+                    }),
                 };
                 self.scroll_cmd(
                     output,
