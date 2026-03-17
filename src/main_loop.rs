@@ -353,17 +353,21 @@ impl Editor {
             Cmd::WriteAs(address, filename) => {
                 self.write_as_cmd(output, *address, filename)
             }
-            Cmd::Scroll(address, cmd_rows, attrs) => {
+            Cmd::Scroll(address, cmd_row_limit, attrs) => {
                 let (cols, term_rows): (usize, usize) = terminal::size()
                     .map_or((80, 24), |(cols, rows)| {
                         (cols.into(), rows.into())
                     });
-                let rows = *match cmd_rows {
-                    Some(rows) => self.scroll_row_limit.insert(*rows),
-                    None => self.scroll_row_limit.get_or_insert_with(|| {
-                        (term_rows.saturating_sub(3)) / 2
-                    }),
-                };
+                if let Some(n) = cmd_row_limit {
+                    if *n == 0 {
+                        self.scroll_row_limit = None;
+                    } else {
+                        self.scroll_row_limit = Some(*n);
+                    }
+                }
+                let rows = *self
+                    .scroll_row_limit
+                    .get_or_insert_with(|| (term_rows.saturating_sub(3)) / 2);
                 self.scroll_cmd(
                     output,
                     *address,
@@ -4129,6 +4133,41 @@ mod tests {
             .expect("scroll 13..15");
         assert_eq!(editor.buffer.current_line(), 15);
         assert_eq!(editor.scroll_row_limit, Some(3));
+    }
+
+    #[test]
+    fn scroll_cmd_resets_window() {
+        let mut editor = Editor::new();
+        let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
+        editor.buffer = EditBuffer::from(lines);
+        let mut output = Vec::new();
+        let mut input = b"" as &[u8];
+        editor
+            .dispatch_cmd(
+                &Cmd::Scroll(Some(Address::line(1)), None, None),
+                &mut output,
+                &mut input,
+            )
+            .unwrap();
+        let orig_window = editor.scroll_row_limit;
+        editor
+            .dispatch_cmd(
+                &Cmd::Scroll(Some(Address::line(10)), Some(3), None),
+                &mut output,
+                &mut input,
+            )
+            .expect("scroll 10..12");
+        assert_eq!(editor.buffer.current_line(), 12);
+        assert_eq!(editor.scroll_row_limit, Some(3));
+        editor
+            .dispatch_cmd(
+                &Cmd::Scroll(None, Some(0), None),
+                &mut output,
+                &mut input,
+            )
+            .unwrap();
+        assert_eq!(editor.scroll_row_limit, orig_window);
+        assert_eq!(editor.buffer.current_line(), 12 + orig_window.unwrap());
     }
 
     #[test]
