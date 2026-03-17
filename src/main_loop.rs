@@ -538,13 +538,15 @@ impl Editor {
         &mut self,
         output: &mut impl Write,
     ) -> Result<Option<ChangeSet>, Error> {
+        let unsaved = self.buffer_is_unsaved();
+
         // make sure current_file set
         let Some(filename) = self.current_file.as_ref() else {
             return Err(Error::NoFilename);
         };
 
         // warn if there are unsaved changes
-        if self.previous_warning != Some(Warning::ReloadUnsaved) {
+        if self.previous_warning != Some(Warning::ReloadUnsaved) && unsaved {
             return Err(Error::Warning(Warning::ReloadUnsaved));
         }
 
@@ -3462,6 +3464,60 @@ mod tests {
         let out_text = str::from_utf8(&output[..]).unwrap();
         assert!(
             out_text.contains("10 lines") && out_text.contains("318 bytes")
+        );
+    }
+
+    #[test]
+    fn reload_cmd_reads_file() {
+        let mut editor = Editor::new();
+        let mut output = Vec::new();
+        let filename1 = Path::new(r"test/assets/text_with_final_eol.txt");
+        let filename2 = Path::new(r"test/assets/text_with_no_final_eol.txt");
+        let tmp_dir = tempdir().unwrap();
+        let current_filename = tmp_dir.path().join("file.txt");
+        fs::copy(filename1, &current_filename).unwrap();
+
+        editor.edit_cmd(&mut output, &current_filename).unwrap();
+        assert_eq!(editor.buffer.len(), 10);
+        let out_text = str::from_utf8(&output[..]).unwrap();
+        assert!(
+            out_text.contains("10 lines") && out_text.contains("312 bytes")
+        );
+
+        fs::copy(filename2, &current_filename).unwrap();
+        output.clear();
+        editor.reload_cmd(&mut output).unwrap();
+        assert_eq!(editor.buffer.len(), 10);
+        let out_text = str::from_utf8(&output[..]).unwrap();
+        assert!(
+            out_text.contains("10 lines") && out_text.contains("318 bytes")
+        );
+    }
+
+    #[test]
+    fn reload_warns_when_unsaved() {
+        let mut editor = Editor::new();
+        let mut output = Vec::new();
+        let filename1 = Path::new(r"test/assets/text_with_final_eol.txt");
+
+        editor.edit_cmd(&mut output, filename1).unwrap();
+        assert_eq!(editor.buffer.len(), 10);
+        let out_text = str::from_utf8(&output[..]).unwrap();
+        assert!(
+            out_text.contains("10 lines") && out_text.contains("312 bytes")
+        );
+
+        output.clear();
+        editor.delete_cmd(Some(Address::line(1))).unwrap();
+        assert_eq!(editor.buffer.len(), 9);
+        let ret = editor.reload_cmd(&mut output).expect_err("unsaved");
+        assert!(matches!(ret, Error::Warning(Warning::ReloadUnsaved)));
+        editor.previous_warning = Some(Warning::ReloadUnsaved);
+        editor.reload_cmd(&mut output).unwrap();
+        assert_eq!(editor.buffer.len(), 10);
+        let out_text = str::from_utf8(&output[..]).unwrap();
+        assert!(
+            out_text.contains("10 lines") && out_text.contains("312 bytes")
         );
     }
 
