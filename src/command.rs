@@ -40,12 +40,13 @@ pub enum Cmd {
     Newline(Option<PrevailingEol>),
     New,
     Null(Option<Address>),
+    PageDown(Option<Address>, Option<usize>, Option<PrintAttributes>),
+    PageUp(Option<Address>, Option<usize>, Option<PrintAttributes>),
     Print(Option<Address>),
     Reload,
     Quit,
     Read(Option<Address>, Option<PathBuf>),
     Redo,
-    Scroll(Option<Address>, Option<usize>, Option<PrintAttributes>),
     ShowDiff(Option<PathBuf>),
     Substitute(Option<Address>, Regex, String, SubstitutionScope),
     Transfer(Option<Address>, Address),
@@ -88,7 +89,6 @@ pub enum Error {
     MissingDestination,
     RepeatedSubstitutionScope,
     MissingPatternDelimiter,
-    AddressTooLarge,
     InvalidNewline,
 }
 
@@ -102,7 +102,6 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
             Error::Unknown(_)
-            | Error::AddressTooLarge
             | Error::UnexpectedAddress
             | Error::OffsetTooLarge
             | Error::OffsetTooSmall
@@ -160,9 +159,6 @@ impl Display for Error {
             Error::MissingPatternDelimiter => {
                 write!(f, "missing pattern delimiter")
             }
-            Error::AddressTooLarge => {
-                write!(f, "address too large")
-            }
             Error::InvalidNewline => {
                 write!(f, "invalid newline (valid: CR, CRLF)")
             }
@@ -187,8 +183,12 @@ impl Address {
         self.last
     }
 
-    pub fn as_last(&self) -> Self {
-        Self::line(self.last)
+    pub fn is_valid(&self, buffer: &EditBuffer) -> bool {
+        0 < self.first && self.first <= self.last && self.last <= buffer.len()
+    }
+
+    pub fn is_valid_0_ok(&self, buffer: &EditBuffer) -> bool {
+        self.first <= self.last && self.last <= buffer.len()
     }
 
     pub fn contains(&self, line: usize) -> bool {
@@ -218,7 +218,7 @@ impl Address {
                     graphemes.next();
                     left = Some(match right {
                         Some(r) if r > buffer.len() => {
-                            return Err(Error::AddressTooLarge);
+                            return Err(Error::InvalidAddress);
                         }
                         Some(r) => {
                             buffer.set_current_line(r);
@@ -293,18 +293,28 @@ impl Address {
             }
         }
 
-        if let Some(right) = right {
-            let left = left.map_or(right, |l| l);
-            if right > buffer.len() {
-                Err(Error::AddressTooLarge)
-            } else if left > right || left > buffer.len() {
-                Err(Error::InvalidAddress)
+        right.map_or(Ok(None), |right| {
+            let addr = Address::span(left.unwrap_or(right), right);
+            if addr.is_valid_0_ok(buffer) {
+                Ok(Some(addr))
             } else {
-                Ok(Some(Address::span(left, right)))
+                Err(Error::InvalidAddress)
             }
-        } else {
-            Ok(None)
-        }
+        })
+        /*
+                if let Some(right) = right {
+                    let left = left.map_or(right, |l| l);
+                    if right > buffer.len() {
+                        Err(Error::InvalidAddress)
+                    } else if left > right || left > buffer.len() {
+                        Err(Error::InvalidAddress)
+                    } else {
+                        Ok(Some(Address::span(left, right)))
+                    }
+                } else {
+                    Ok(None)
+                }
+        */
     }
 }
 
@@ -427,7 +437,8 @@ impl Cmd {
             Some("U") => parse_simple_cmd(address, &mut graphemes, Cmd::Redo),
             Some("w") => parse_simple_cmd(address, &mut graphemes, Cmd::Write),
             Some("W") => parse_write_as_cmd(&mut graphemes, address),
-            Some("z") => parse_scroll_cmd(&mut graphemes, address),
+            Some("z") => parse_page_down_cmd(&mut graphemes, address),
+            Some("Z") => parse_page_up_cmd(&mut graphemes, address),
             Some("=") => {
                 parse_no_args(&mut graphemes, Cmd::LineNumber(address))
             }
@@ -477,18 +488,22 @@ fn parse_write_as_cmd<'a>(
     }
 }
 
-fn parse_scroll_cmd(
+fn parse_page_down_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<Address>,
 ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
-    let has_window = graphemes
-        .peek()
-        .is_some_and(|gr| gr.starts_with(|c: char| c.is_ascii_digit()));
-    let window: Option<usize> =
-        if has_window { Some(parse_number(graphemes)?) } else { None };
-
+    let window = parse_number(graphemes).ok();
     let print_sfx = parse_print_suffix(graphemes)?;
-    Ok(Some((Cmd::Scroll(address, window, print_sfx), None)))
+    Ok(Some((Cmd::PageDown(address, window, print_sfx), None)))
+}
+
+fn parse_page_up_cmd(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+    address: Option<Address>,
+) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+    let window = parse_number(graphemes).ok();
+    let print_sfx = parse_print_suffix(graphemes)?;
+    Ok(Some((Cmd::PageUp(address, window, print_sfx), None)))
 }
 
 fn parse_show_cmd<'a>(
@@ -1532,7 +1547,7 @@ mod tests {
         assert_eq!(buffer.current_line(), 6);
         let res = Address::eval(&mut input, &mut buffer, &mut None)
             .expect_err("invalid address");
-        assert!(matches!(res, Error::AddressTooLarge));
+        assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
@@ -1620,9 +1635,9 @@ mod tests {
             EditBuffer::with_text(&["1\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None)
-            .expect_err("AddressTooLarge");
+            .expect_err("InvalidAddress");
         assert_eq!(input.next(), Some("p"));
-        assert!(matches!(res, Error::AddressTooLarge));
+        assert!(matches!(res, Error::InvalidAddress));
 
         let mut input = "-p\n".graphemes(true).peekable();
         let mut buffer =
@@ -2257,13 +2272,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_valid_scroll_cmd() {
+    fn parse_valid_page_down_cmd() {
         let mut input = "5z10\n".as_bytes();
         let mut buffer =
             EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
         let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
         assert!(
-            matches!(res, Some((Cmd::Scroll(a, w, p), None)) if a == Some(Address::line(5)) && w == Some(10) && p.is_none())
+            matches!(res, Some((Cmd::PageDown(a, w, p), None)) if a == Some(Address::line(5)) && w == Some(10) && p.is_none())
+        );
+    }
+
+    #[test]
+    fn parse_valid_page_up_cmd() {
+        let mut input = "5Z10\n".as_bytes();
+        let mut buffer =
+            EditBuffer::with_text(&["1\r\n", "2", "3", "4", "5", "6"]);
+        let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
+        assert!(
+            matches!(res, Some((Cmd::PageUp(a, w, p), None)) if a == Some(Address::line(5)) && w == Some(10) && p.is_none())
         );
     }
 
