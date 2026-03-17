@@ -353,17 +353,21 @@ impl Editor {
             Cmd::WriteAs(address, filename) => {
                 self.write_as_cmd(output, *address, filename)
             }
-            Cmd::Scroll(address, cmd_rows, attrs) => {
+            Cmd::Scroll(address, cmd_row_limit, attrs) => {
                 let (cols, term_rows): (usize, usize) = terminal::size()
                     .map_or((80, 24), |(cols, rows)| {
                         (cols.into(), rows.into())
                     });
-                let rows = *match cmd_rows {
-                    Some(rows) => self.scroll_row_limit.insert(*rows),
-                    None => self
-                        .scroll_row_limit
-                        .get_or_insert_with(|| term_rows.saturating_sub(2)),
-                };
+                if let Some(n) = cmd_row_limit {
+                    if *n == 0 {
+                        self.scroll_row_limit = None;
+                    } else {
+                        self.scroll_row_limit = Some(*n);
+                    }
+                }
+                let rows = *self
+                    .scroll_row_limit
+                    .get_or_insert_with(|| (term_rows.saturating_sub(3)) / 2);
                 self.scroll_cmd(
                     output,
                     *address,
@@ -1391,13 +1395,14 @@ fn print_lines(
     for (n, l) in
         (address.into_iter()).zip(&buffer[RangeInclusive::from(address)])
     {
+        let mut cols = 0;
         if attributes.enumerate {
             write!(output, "{n:>ln_num_cols$}  ").expect("reliable stdout");
+            cols += ln_num_cols + 2;
         }
         let graphs = l.graphemes(true).map(|gr| {
             if attributes.expand_escapes { expand_escapes(gr) } else { gr }
         });
-        let mut cols = 0;
         for gr in graphs {
             cols += if gr == "\t" {
                 let gr_width = 8 - (cols % 8);
@@ -1405,9 +1410,13 @@ fn print_lines(
                     .expect("reliable stdout");
                 gr_width
             } else {
-                use unicode_width::UnicodeWidthStr;
                 write!(output, "{gr}").expect("reliable stdout");
-                gr.width()
+                if gr == "\n" || gr == "\r\n" {
+                    0
+                } else {
+                    use unicode_width::UnicodeWidthStr;
+                    gr.width()
+                }
             };
         }
 
@@ -2785,7 +2794,6 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        eprintln!("{output}");
         assert!(output.contains("2\n"));
         assert!(output.contains("4\n"));
     }
@@ -4081,6 +4089,26 @@ mod tests {
     }
 
     #[test]
+    fn scroll_cmd_long_lines() {
+        let mut editor = Editor::new();
+        let lines: Vec<String> =
+            (1..=64).map(|n| format!("{n} {}\r\n", "*".repeat(80))).collect();
+        editor.buffer = EditBuffer::from(lines);
+        editor.buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let res = editor
+            .scroll_cmd(
+                &mut output,
+                None,
+                None,
+                ScrollWindow { cols: 80, rows: 24 },
+            )
+            .expect("scroll to end");
+        assert!(res.is_none());
+        assert_eq!(editor.buffer.current_line(), 13);
+    }
+
+    #[test]
     fn scroll_cmd_saves_windows() {
         let mut editor = Editor::new();
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
@@ -4105,6 +4133,41 @@ mod tests {
             .expect("scroll 13..15");
         assert_eq!(editor.buffer.current_line(), 15);
         assert_eq!(editor.scroll_row_limit, Some(3));
+    }
+
+    #[test]
+    fn scroll_cmd_resets_window() {
+        let mut editor = Editor::new();
+        let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
+        editor.buffer = EditBuffer::from(lines);
+        let mut output = Vec::new();
+        let mut input = b"" as &[u8];
+        editor
+            .dispatch_cmd(
+                &Cmd::Scroll(Some(Address::line(1)), None, None),
+                &mut output,
+                &mut input,
+            )
+            .unwrap();
+        let orig_window = editor.scroll_row_limit;
+        editor
+            .dispatch_cmd(
+                &Cmd::Scroll(Some(Address::line(10)), Some(3), None),
+                &mut output,
+                &mut input,
+            )
+            .expect("scroll 10..12");
+        assert_eq!(editor.buffer.current_line(), 12);
+        assert_eq!(editor.scroll_row_limit, Some(3));
+        editor
+            .dispatch_cmd(
+                &Cmd::Scroll(None, Some(0), None),
+                &mut output,
+                &mut input,
+            )
+            .unwrap();
+        assert_eq!(editor.scroll_row_limit, orig_window);
+        assert_eq!(editor.buffer.current_line(), 12 + orig_window.unwrap());
     }
 
     #[test]
