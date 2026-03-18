@@ -94,8 +94,8 @@ pub enum Error {
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct Address {
-    start: usize,
-    end: usize,
+    first: usize,
+    last: usize,
 }
 
 impl std::error::Error for Error {
@@ -171,32 +171,32 @@ impl Display for Error {
 }
 
 impl Address {
-    pub fn span(start: usize, end: usize) -> Address {
-        Address { start, end }
+    pub fn span(first: usize, last: usize) -> Address {
+        Address { first, last }
     }
 
     pub fn line(line: usize) -> Address {
-        Address { start: line, end: line }
+        Address { first: line, last: line }
     }
 
-    pub fn start(&self) -> usize {
-        self.start
+    pub fn first(&self) -> usize {
+        self.first
     }
 
-    pub fn end(&self) -> usize {
-        self.end
+    pub fn last(&self) -> usize {
+        self.last
     }
 
-    pub fn as_end(&self) -> Self {
-        Self::line(self.end)
+    pub fn as_last(&self) -> Self {
+        Self::line(self.last)
     }
 
     pub fn contains(&self, line: usize) -> bool {
-        self.start <= line && line <= self.end
+        self.first <= line && line <= self.last
     }
 
     pub fn line_count(&self) -> usize {
-        self.end - self.start + 1
+        self.last - self.first + 1
     }
 
     fn eval(
@@ -318,8 +318,8 @@ impl IntoIterator for Address {
 }
 
 impl From<Address> for RangeInclusive<usize> {
-    fn from(value: Address) -> Self {
-        value.start()..=value.end()
+    fn from(address: Address) -> Self {
+        address.first()..=address.last()
     }
 }
 
@@ -2082,7 +2082,7 @@ mod tests {
         let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
         assert!(matches!(
             res,
-            Some((Cmd::Transfer(None, Address { start: 2, end: 2 }), None))
+            Some((Cmd::Transfer(None, Address { first: 2, last: 2 }), None))
         ));
     }
 
@@ -2153,7 +2153,7 @@ mod tests {
         let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
         assert!(matches!(
             res,
-            Some((Cmd::Move(None, Address { start: 4, end: 4 }), None))
+            Some((Cmd::Move(None, Address { first: 4, last: 4 }), None))
         ));
     }
 

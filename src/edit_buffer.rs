@@ -240,7 +240,7 @@ impl EditBuffer {
         let mut changes =
             ChangeSet::new(self.current_line, self.prevailing_eol);
 
-        let location = address.map_or(self.current_line, |addr| addr.end());
+        let location = address.map_or(self.current_line, |addr| addr.last());
         if lines.is_empty() {
             self.current_line = location;
             return None;
@@ -295,8 +295,8 @@ impl EditBuffer {
 
         // handle deletion of addressed lines
         let b =
-            cmp::max(1, address.map_or(self.current_line, |addr| addr.start()));
-        let e = address.map_or(self.current_line, |addr| addr.end());
+            cmp::max(1, address.map_or(self.current_line, |addr| addr.first()));
+        let e = address.map_or(self.current_line, |addr| addr.last());
         if b <= e {
             let removed = self.text.splice(b - 1..e, None).collect();
             changes.push(Change::Remove(b - 1, removed));
@@ -319,7 +319,7 @@ impl EditBuffer {
     pub fn do_delete(&mut self, address: Option<Address>) -> ChangeSet {
         let (b, e) = address
             .map_or((self.current_line, self.current_line), |addr| {
-                (addr.start(), addr.end())
+                (addr.first(), addr.last())
             });
 
         let removed: Vec<String> = self.text.splice(b - 1..e, None).collect();
@@ -338,11 +338,11 @@ impl EditBuffer {
         lines: Vec<String>,
     ) -> Option<ChangeSet> {
         let location = if lines.is_empty() {
-            address.map_or(self.current_line, |addr| addr.end())
+            address.map_or(self.current_line, |addr| addr.last())
         } else {
             // insertion point is just before addressed line
             address
-                .map_or(self.current_line, |addr| addr.end())
+                .map_or(self.current_line, |addr| addr.last())
                 .saturating_sub(1)
         };
         let mut changes =
@@ -366,7 +366,7 @@ impl EditBuffer {
             || Address::span(self.current_line, self.current_line + 1),
             |addr| {
                 if addr.line_count() == 1 {
-                    Address::span(addr.end(), addr.end() + 1)
+                    Address::span(addr.last(), addr.last() + 1)
                 } else {
                     addr
                 }
@@ -376,31 +376,31 @@ impl EditBuffer {
             ChangeSet::new(self.current_line, self.prevailing_eol);
 
         let mut joined =
-            self[address.start()].lines().next().unwrap().to_owned();
+            self[address.first()].lines().next().unwrap().to_owned();
         if let Some(separator) = separator {
             joined.push_str(separator);
-            for l in &self[address.start() + 1..address.end()] {
+            for l in &self[address.first() + 1..address.last()] {
                 joined.push_str(l.trim_start().lines().next().unwrap());
                 joined.push_str(separator);
             }
-            joined.push_str(self[address.end()].trim_start());
+            joined.push_str(self[address.last()].trim_start());
         } else {
             joined.extend(
-                self[address.start() + 1..address.end()]
+                self[address.first() + 1..address.last()]
                     .iter()
                     .map(|l| l.lines().next().unwrap()),
             );
-            joined.push_str(&self[address.end()]);
+            joined.push_str(&self[address.last()]);
         }
 
         let replaced: Vec<_> = self
             .text
-            .splice(address.start() - 1..address.end(), vec![joined.clone()])
+            .splice(address.first() - 1..address.last(), vec![joined.clone()])
             .collect();
-        self.current_line = address.start();
+        self.current_line = address.first();
         self.content_hash = None;
-        changes.push(Change::Add(address.start() - 1, vec![joined]));
-        changes.push(Change::Remove(address.start(), replaced));
+        changes.push(Change::Add(address.first() - 1, vec![joined]));
+        changes.push(Change::Remove(address.first(), replaced));
         changes
     }
 
@@ -412,16 +412,16 @@ impl EditBuffer {
         let address =
             address.unwrap_or_else(|| Address::line(self.current_line));
         let lines: Vec<String> =
-            self.text.drain(address.start() - 1..address.end()).collect();
-        let destination = if destination.end() >= address.end() {
-            destination.end() - address.line_count()
+            self.text.drain(address.first() - 1..address.last()).collect();
+        let destination = if destination.last() >= address.last() {
+            destination.last() - address.line_count()
         } else {
-            destination.end()
+            destination.last()
         };
 
         let mut changes =
             ChangeSet::new(self.current_line, self.prevailing_eol);
-        changes.push(Change::Remove(address.start() - 1, lines.clone()));
+        changes.push(Change::Remove(address.first() - 1, lines.clone()));
         changes.push(Change::Add(destination, lines.clone()));
         self.text.splice(destination..destination, lines);
         self.current_line = destination + address.line_count();
@@ -494,8 +494,8 @@ impl EditBuffer {
     ) -> ChangeSet {
         let address =
             address.unwrap_or_else(|| Address::line(self.current_line));
-        let source = self.text[address.start() - 1..address.end()].to_vec();
-        let destination = destination.end();
+        let source = self.text[address.first() - 1..address.last()].to_vec();
+        let destination = destination.last();
 
         let mut changes =
             ChangeSet::new(self.current_line, self.prevailing_eol);

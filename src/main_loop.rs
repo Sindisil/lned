@@ -420,12 +420,12 @@ impl Editor {
         address: Option<Address>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, Error> {
-        if address.is_some_and(|a| a.end() > self.buffer.len()) {
+        if address.is_some_and(|a| a.last() > self.buffer.len()) {
             return Err(Error::InvalidAddress);
         }
         let indent = match indent_mode {
             IndentMode::Auto => self.buffer[..=address
-                .map_or_else(|| self.buffer.current_line(), |a| a.end())]
+                .map_or_else(|| self.buffer.current_line(), |a| a.last())]
                 .iter()
                 .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
                 .and_then(|l| command::INDENT.captures(l))
@@ -445,19 +445,19 @@ impl Editor {
         address: Option<Address>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, Error> {
-        if address.is_some_and(|a| a.end() > self.buffer.len()) {
+        if address.is_some_and(|a| a.last() > self.buffer.len()) {
             return Err(Error::InvalidAddress);
         }
         let to_change = address.map_or_else(
             || Address::line(cmp::max(self.buffer.current_line(), 1)),
-            |a| Address::span(cmp::max(a.start(), 1), cmp::max(a.end(), 1)),
+            |a| Address::span(cmp::max(a.first(), 1), cmp::max(a.last(), 1)),
         );
         let indent = match indent_mode {
             IndentMode::Auto => self.buffer[RangeInclusive::from(to_change)]
                 .iter()
                 .find(|l| l.contains(|c: char| !c.is_whitespace()))
                 .or_else(|| {
-                    self.buffer[..to_change.start()]
+                    self.buffer[..to_change.first()]
                         .iter()
                         .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
                 })
@@ -478,7 +478,7 @@ impl Editor {
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, Error> {
         match address {
-            Some(addr) if addr.start() == 0 => Err(Error::InvalidAddress),
+            Some(addr) if addr.first() == 0 => Err(Error::InvalidAddress),
             None if self.buffer.current_line() == 0 => {
                 Err(Error::InvalidAddress)
             }
@@ -496,7 +496,7 @@ impl Editor {
         // create addressed span to print from specified address
         // and max_rows
         let start = if let Some(addr) = address {
-            addr.end()
+            addr.last()
         } else {
             self.buffer
                 .current_line()
@@ -657,7 +657,7 @@ impl Editor {
         filename: Option<&Path>,
     ) -> Result<Option<ChangeSet>, Error> {
         let address = if let Some(address) = address {
-            if address.end() > self.buffer.len() {
+            if address.last() > self.buffer.len() {
                 return Err(Error::InvalidAddress);
             }
             address
@@ -694,8 +694,8 @@ impl Editor {
             self.buffer.current_line(),
             self.buffer.prevailing_eol(),
         );
-        changes.push(Change::Add(address.end(), lines.clone()));
-        if self.buffer.append(address.end(), lines) {
+        changes.push(Change::Add(address.last(), lines.clone()));
+        if self.buffer.append(address.last(), lines) {
             output.flush().unwrap();
             writeln!(output, "missing newline appended").unwrap();
         }
@@ -711,9 +711,9 @@ impl Editor {
     ) -> Result<Option<ChangeSet>, Error> {
         let address = address
             .unwrap_or_else(|| Address::line(self.buffer.current_line()));
-        if address.start() == 0
-            || address.start() > address.end()
-            || address.end() > self.buffer.len()
+        if address.first() == 0
+            || address.first() > address.last()
+            || address.last() > self.buffer.len()
         {
             return Err(Error::InvalidAddress);
         }
@@ -724,8 +724,8 @@ impl Editor {
             .expect("non-empty buffer has valid EOL")
             .eol
             .as_str();
-        let mut line_num = address.start();
-        let mut last_line = address.end();
+        let mut line_num = address.first();
+        let mut last_line = address.last();
         let (target_match, limit) = if let SubstitutionScope::Single(n) = scope
         {
             (n - 1, 1)
@@ -801,7 +801,7 @@ impl Editor {
                 break;
             }
             line_num += step;
-            last_line = address.end() + step - 1;
+            last_line = address.last() + step - 1;
         }
 
         if changes.is_empty() { Err(Error::NoMatch) } else { Ok(Some(changes)) }
@@ -812,13 +812,13 @@ impl Editor {
         mut address: Option<Address>,
         destination: Address,
     ) -> Result<Option<ChangeSet>, Error> {
-        if destination.end() > self.buffer.len() {
+        if destination.last() > self.buffer.len() {
             return Err(Error::InvalidAddress);
         }
         let source = address
             .get_or_insert_with(|| Address::line(self.buffer.current_line()));
-        if destination.end() >= source.start()
-            && destination.end() < source.end()
+        if destination.last() >= source.first()
+            && destination.last() < source.last()
         {
             return Err(Error::DestinationIntersectsSource);
         }
@@ -1012,7 +1012,8 @@ impl Editor {
         address: Option<Address>,
     ) -> Result<Option<ChangeSet>, Error> {
         let address = Some(Address::line(
-            address.map_or_else(|| self.buffer.current_line() + 1, |a| a.end()),
+            address
+                .map_or_else(|| self.buffer.current_line() + 1, |a| a.last()),
         ));
         self.print_cmd(output, address)
     }
@@ -1065,13 +1066,13 @@ impl Editor {
         mut address: Option<Address>,
         destination: Address,
     ) -> Result<Option<ChangeSet>, Error> {
-        if destination.end() > self.buffer.len() {
+        if destination.last() > self.buffer.len() {
             return Err(Error::InvalidAddress);
         }
         let source = address
             .get_or_insert_with(|| Address::line(self.buffer.current_line()));
-        if destination.end() >= source.start()
-            && destination.end() < source.end()
+        if destination.last() >= source.first()
+            && destination.last() < source.last()
         {
             return Err(Error::DestinationIntersectsSource);
         }
@@ -1084,13 +1085,13 @@ impl Editor {
         address: Option<Address>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, Error> {
-        if address.is_some_and(|a| a.end() > self.buffer.len()) {
+        if address.is_some_and(|a| a.last() > self.buffer.len()) {
             return Err(Error::InvalidAddress);
         }
         let indent = match indent_mode {
             IndentMode::Auto => self.buffer[address.map_or_else(
                 || cmp::max(self.buffer.current_line(), 1),
-                |a| a.end(),
+                |a| a.last(),
             )..]
                 .iter()
                 .find(|l| l.contains(|c: char| !c.is_whitespace()))
@@ -1114,7 +1115,7 @@ impl Editor {
             None if self.buffer.current_line() == self.buffer.len() => {
                 Err(Error::InvalidAddress)
             }
-            Some(a) if a.line_count() == 1 && a.end() == self.buffer.len() => {
+            Some(a) if a.line_count() == 1 && a.last() == self.buffer.len() => {
                 Err(Error::InvalidAddress)
             }
             _ => Ok(Some(self.buffer.do_join(address, separator))),
@@ -1131,7 +1132,7 @@ impl Editor {
                 writeln!(output, "{}", self.buffer.len()).unwrap();
             }
             Some(address) => {
-                writeln!(output, "{}", address.end()).unwrap();
+                writeln!(output, "{}", address.last()).unwrap();
             }
         }
         None
@@ -1236,7 +1237,7 @@ impl Editor {
 
         if self.current_file.is_none()
             && address.is_none_or(|addr| {
-                addr.start() == 1 && addr.end() == self.buffer.len()
+                addr.first() == 1 && addr.last() == self.buffer.len()
             })
         {
             // Saving buffer for first time
@@ -1382,9 +1383,9 @@ fn print_lines(
     attributes: PrintAttributes,
     window: Option<&ScrollWindow>,
 ) -> Result<usize, Error> {
-    if address.start() < 1
-        || address.start() > buffer.len()
-        || address.start() > address.end()
+    if address.first() < 1
+        || address.first() > buffer.len()
+        || address.first() > address.last()
     {
         return Err(Error::InvalidAddress);
     }
@@ -1430,7 +1431,7 @@ fn print_lines(
             rows += rows_printed;
         }
     }
-    Ok(address.end())
+    Ok(address.last())
 }
 
 fn expand_escapes(s: &str) -> &str {
