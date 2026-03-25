@@ -59,7 +59,7 @@ typed after an insert command, the first line after a deleted span of
 lines).
 
 The address 0 (zero) points before the first line and is only valid with
-certain commands. This isspecified in those commands' detailed
+certain commands. This is specified in those commands' detailed
 descriptions below.
 
 An address may be a literal number, one of the address symbols defined
@@ -101,7 +101,12 @@ line addresses.
 Any blank characters ('\t' or ' ') between addresses, address separators,
 or address offsets are ignored.
 
-Addresses omittd on either side of an address separator are evaluated as
+If more addresses are specified than a command accepts, they are still
+evaluated, but if 'n' addresses are required, only the final 'n' will be
+passed to the command. For example, if a command takes a single line, and
+the address '1,5' is passed, the line '5' will be passed to the command.
+
+Addresses omitted on either side of an address separator are evaluated as
 follows:
 
 ,	: 1,$
@@ -113,11 +118,11 @@ addr;	: addr;addr
 
 ## Print Suffixes
 
-Any command other than e, f, g, q, r, w, and ! may have an 'l', 'n', or
-'p' added to their end. If this is the case, the command will be executed
-and then the new current line will be written as described under the
-'l' (list), 'n' (enumerate), or p (print) commands. Only one print suffix
-is supported per command.
+Most commands may have an 'l', 'n', or 'p' added to their end. This is
+called a "print suffix". If this is the case, the command will be
+executed and then the new current line will be written as described
+under the 'l' (list), 'n' (enumerate), or p (print) commands. Only one
+print suffix is supported per command.
 
 Note that, although the 'g' (global) command cannot itself have a print
 suffix applied, commands supplied to the global command can.
@@ -214,7 +219,7 @@ the command will procede, discarding changes.
 
 ### 'L' Line Terminator (a.k.a. Newline)
 
-    L [CR|CRLF]
+    L (CR|CRLF)
 
 Set the buffer's prevailing newline to the one specified, if any. If a
 newline is specified, buffer lines are normalized to that newline.
@@ -277,7 +282,7 @@ beginning of the buffer.
 
 ### 'j' Join 
 
-    (.,.+1)j[/separator/]
+    (.,.+1)j(/separator/)
 
 Join addressed contiguous lines by removing the intervening line
 terminators, optionally inserting a separator string between each.
@@ -312,10 +317,10 @@ visually as follows:
 
 ### 'm' Move 
 
-    (.,.)m\<destination\>
+    (.,.)m(destination)
 
 Move the addressed lines to just after the last line specified by
-\<destination\>.
+destination.
 
 If '0' is specified as the destination, the addressed lines are moved to
 the beginning of the buffer. The destination may not fall within the
@@ -358,7 +363,7 @@ printed. Repeating the command will discard the changes and exit.
 
 ### 'r' Read 
 
-    ($)r [file]
+    ($)r (file)
 
 Inserts the contents of the specified file (or the current file, if none
 is specified) into the buffer after the specified address (or after the
@@ -375,7 +380,7 @@ is *not* reread; the lines previously read are simply reinserted.
 
 ### 'S' Show diff 
 
-    S [filename]
+    S (filename)
 
 Shows the differences between the current buffer contents and the
 specified filename's contents.
@@ -419,10 +424,10 @@ Flags may be either (but not both) of:
 
 ### 't' Transfer (a.k.a. Copy)
 
-    (., .)t\<destination\>
+    (., .)t(destination)
 
 Copy the addressed lines to just after the last line specified by
-\<destination\>.
+destination.
 
 If '0' is specified as the destination address, the addressed lines are
 copied to the beginning of the buffer. The destination may not fall
@@ -480,7 +485,7 @@ current file.
 
 ### 'W' Write As (a.k.a. Save As)
 
-    (1,$)w [filename]
+    (1,$)w (filename)
 
 Writes the addressed lines into the file with the specified filename.
 
@@ -497,23 +502,40 @@ The current line number will not be changed in any case.
 
 The number of lines and bytes written is printed to stdout if successful.
 
-### 'z' Scroll 
+### 'z' PageDown
 
-    (.)z[count]
+    (.+1)z(page_length)
 
-Prints 'count' display lines from buffer, setting the scroll window size
-to 'count'. Printing will begin with the addressed line, or current_line
-if no address is given.
+Print lines filling the specified number of display rows, up to one less
+than the display height, beginning with the addressed line. Any specified
+print_suffixes will be applied to each line printed. If no address is
+specified, the line following the current_line is used. If no page_length
+is specified, the previously remembered page_length is used, or, if none
+is remembered, the default of display height - 3 rows is used. If a
+page_length > 0 is
+specified, it is remembered. If a page_length of 0 is specified, the
+remembered page number, if any, is forgotten and the default is used.
 
-If 'count' is not given, the current scroll window size is used. The
-scroll window size defaults to display height - 2, or 22 if the display
-height can't be determined.
+After printing, the current_line is set equal to the last line printed.
 
-Note that the scroll window size is a number of display lines, not
-buffer lines.
+It is not an error if there are less lines to print than will fit the
+page_length.
 
-The current_line is set to one past the last line displayed, or buffer
-end, whichever is smaller.
+### 'Z' PageUp
 
-If any print suffixes are specified, all lines will be displayed
-accordingly.
+    (.-1)Z(page_length)
+
+Print lines filling the specified number of display rows, up to one less
+than the display height, such that the addressed line is the last printed.
+Any specified print_suffixes will be applied to each line printed. If no
+address is specified, the line preceding the current line is used. If no
+page_length is specified, the previously remembered page_length is used,
+or, if none is remembered, the default of display height - 3 rows is used.
+If a page_length > 0 is specified, it is remembered. If a page_length of 0
+is specified, the remembered page number, if any, is forgotten and the
+default is used.
+
+After printing, the current_line is set equal to the first line printed.
+
+It is not an error if there are less lines to print than will fit the
+page_length.

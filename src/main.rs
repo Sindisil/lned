@@ -7,7 +7,7 @@ mod iter_utils;
 mod main_loop;
 
 use std::error::Error;
-use std::io;
+use std::io::{self, IsTerminal};
 use std::iter;
 
 use line_edit::LineEditor;
@@ -22,7 +22,12 @@ fn main() {
         }
     };
 
-    if let Err(err) = main_loop::run(LineEditor::new(), io::stdout(), &args) {
+    if let Err(err) = main_loop::run(
+        LineEditor::new(),
+        io::stdout(),
+        io::stdout().is_terminal(),
+        &args,
+    ) {
         eprintln!("Error: {err}");
         if let Some(cause) = err.source() {
             println!("\nCaused by:");
