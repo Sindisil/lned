@@ -8,6 +8,7 @@ use std::io::{self, BufReader, prelude::*};
 use std::num::NonZero;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::SystemTime;
 
 use crossterm::{ExecutableCommand, terminal};
@@ -19,8 +20,10 @@ use crate::cli;
 use crate::command::{self, Address, Cmd, PrintAttributes, SubstitutionScope};
 use crate::edit_buffer::{Change, ChangeSet, EditBuffer, PrevailingEol};
 
-use line_edit::{self, LineEdit};
+use line_edit::{self, EditorOptions, LineEdit};
 
+static INDENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^([[:blank:]]*)").expect("indent regex"));
 #[derive(Debug)]
 pub enum Error {
     ParseCmd(command::Error),
@@ -460,13 +463,13 @@ impl Editor {
                 .map_or_else(|| self.buffer.current_line(), |a| a.last())]
                 .iter()
                 .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
-                .and_then(|l| command::INDENT.captures(l))
+                .and_then(|l| INDENT.captures(l))
                 .and_then(|c| c.get(1))
                 .map(|m| m.as_str().to_owned()),
             IndentMode::Raw => None,
         };
         let mut lines = Vec::new();
-        Cmd::read_input_lines(input, &mut lines, indent)
+        read_input_lines(input, &mut lines, indent)
             .map_err(|source| Error::ReadLines { source })?;
         Ok(self.buffer.do_append(address, lines))
     }
@@ -493,14 +496,14 @@ impl Editor {
                         .iter()
                         .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
                 })
-                .and_then(|l| command::INDENT.captures(l))
+                .and_then(|l| INDENT.captures(l))
                 .and_then(|c| c.get(1))
                 .map(|m| m.as_str().to_owned()),
             IndentMode::Raw => None,
         };
 
         let mut lines = Vec::new();
-        Cmd::read_input_lines(input, &mut lines, indent)
+        read_input_lines(input, &mut lines, indent)
             .map_err(|source| Error::ReadLines { source })?;
         Ok(Some(self.buffer.do_change(address, lines)))
     }
@@ -1202,13 +1205,13 @@ impl Editor {
             )..]
                 .iter()
                 .find(|l| l.contains(|c: char| !c.is_whitespace()))
-                .and_then(|l| command::INDENT.captures(l))
+                .and_then(|l| INDENT.captures(l))
                 .and_then(|c| c.get(1))
                 .map(|m| m.as_str().to_owned()),
             IndentMode::Raw => None,
         };
         let mut lines = Vec::new();
-        Cmd::read_input_lines(input, &mut lines, indent)
+        read_input_lines(input, &mut lines, indent)
             .map_err(|source| Error::ReadLines { source })?;
         Ok(self.buffer.do_insert(address, lines))
     }
@@ -1446,6 +1449,37 @@ fn write_backtrace(
         writeln!(output, "  {n}: {source}").unwrap();
         err = source;
         n += 1;
+    }
+}
+
+// Read lines of input into buf, stopping when a '.' alone on a line
+// is read. Clears previous content of buf, but doesn't shrink capacity.
+// Returns number of bytes read or Error::Readlines if an error is
+// encountered.
+pub fn read_input_lines(
+    input: &mut impl LineEdit,
+    buf: &mut Vec<String>,
+    indent: Option<String>,
+) -> Result<usize, io::Error> {
+    let mut text_read_options =
+        EditorOptions { prompt: None, history: false, prefill: indent };
+    buf.clear();
+    loop {
+        let mut line = String::new();
+        let n = input.read_line(&mut line, Some(&text_read_options))?;
+        if n == 0 || line == ".\n" || line == ".\r\n" {
+            return Ok(buf.len());
+        }
+        if let Some(indent) = text_read_options.prefill.as_mut() {
+            indent.replace_range(
+                ..,
+                INDENT
+                    .captures(&line)
+                    .and_then(|c| c.get(1))
+                    .map_or("", |m| m.as_str()),
+            );
+        }
+        buf.push(line);
     }
 }
 

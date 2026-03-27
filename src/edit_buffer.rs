@@ -17,8 +17,8 @@ use regex::Regex;
 
 use crate::command::Address;
 pub use crate::edit_buffer::undo_stack::{Change, ChangeSet, UndoStack};
+use crate::editor;
 use crate::eol::Eol;
-use crate::main_loop;
 
 #[derive(Debug, Default, Clone)]
 pub struct EditBuffer {
@@ -429,9 +429,9 @@ impl EditBuffer {
         changes
     }
 
-    pub fn do_undo(&mut self) -> Result<(), main_loop::Error> {
+    pub fn do_undo(&mut self) -> Result<(), editor::Error> {
         let Some(undo) = self.undo_stack.pop_undo() else {
-            return Err(main_loop::Error::NothingToUndo);
+            return Err(editor::Error::NothingToUndo);
         };
         for change in undo.changes().rev() {
             match change {
@@ -458,9 +458,9 @@ impl EditBuffer {
         Ok(())
     }
 
-    pub fn do_redo(&mut self) -> Result<(), main_loop::Error> {
+    pub fn do_redo(&mut self) -> Result<(), editor::Error> {
         let Some(redo) = self.undo_stack.pop_redo() else {
-            return Err(main_loop::Error::NothingToRedo);
+            return Err(editor::Error::NothingToRedo);
         };
         for change in redo.changes() {
             match change {
@@ -1443,7 +1443,7 @@ mod tests {
         assert_eq!(buffer[..], expected_final[..]);
 
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(main_loop::Error::NothingToUndo, _ret));
+        assert!(matches!(editor::Error::NothingToUndo, _ret));
         // Undo stack should be empty here, so buffer shouldn't change
         assert_eq!(buffer[..], expected_final[..]);
     }
@@ -1477,7 +1477,7 @@ mod tests {
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], buffer_orig[..]);
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(main_loop::Error::NothingToUndo, _ret));
+        assert!(matches!(editor::Error::NothingToUndo, _ret));
         assert_eq!(buffer[..], buffer_orig[..]); // buffer unchanged
 
         buffer.do_redo().unwrap();
@@ -1487,7 +1487,7 @@ mod tests {
         assert_eq!(buffer[..], expected_final[..]);
 
         let _ret = buffer.do_redo().expect_err("nothing to redo");
-        assert!(matches!(main_loop::Error::NothingToRedo, _ret));
+        assert!(matches!(editor::Error::NothingToRedo, _ret));
         assert_eq!(buffer[..], expected_final[..]); // buffer unchanged
     }
     #[test]
@@ -1549,7 +1549,7 @@ mod tests {
         assert!(buffer.content_hash.is_none());
 
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(main_loop::Error::NothingToUndo, _ret));
+        assert!(matches!(editor::Error::NothingToUndo, _ret));
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), 0);
     }

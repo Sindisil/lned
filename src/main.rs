@@ -2,9 +2,9 @@
 mod cli;
 mod command;
 mod edit_buffer;
+mod editor;
 mod eol;
 mod iter_utils;
-mod main_loop;
 
 use std::error::Error;
 use std::io::{self, IsTerminal};
@@ -22,7 +22,7 @@ fn main() {
         }
     };
 
-    if let Err(err) = main_loop::run(
+    if let Err(err) = editor::run(
         LineEditor::new(),
         io::stdout(),
         io::stdout().is_terminal(),

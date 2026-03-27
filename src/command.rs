@@ -3,7 +3,6 @@ use std::io::{self};
 use std::iter::Peekable;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
-use std::sync::LazyLock;
 
 use regex::Regex;
 use unicode_segmentation::Graphemes;
@@ -15,9 +14,6 @@ use line_edit::LineEdit;
 use crate::edit_buffer::EditBuffer;
 use crate::edit_buffer::PrevailingEol;
 use crate::iter_utils::Peeking;
-
-pub static INDENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^([[:blank:]]*)").expect("indent regex"));
 
 #[derive(Debug)]
 pub enum Cmd {
@@ -306,37 +302,6 @@ impl From<Address> for RangeInclusive<usize> {
 }
 
 impl Cmd {
-    // Read lines of input into buf, stopping when a '.' alone on a line
-    // is read. Clears previous content of buf, but doesn't shrink capacity.
-    // Returns number of bytes read or Error::Readlines if an error is
-    // encountered.
-    pub fn read_input_lines(
-        input: &mut impl LineEdit,
-        buf: &mut Vec<String>,
-        indent: Option<String>,
-    ) -> Result<usize, io::Error> {
-        let mut text_read_options =
-            EditorOptions { prompt: None, history: false, prefill: indent };
-        buf.clear();
-        loop {
-            let mut line = String::new();
-            let n = input.read_line(&mut line, Some(&text_read_options))?;
-            if n == 0 || line == ".\n" || line == ".\r\n" {
-                return Ok(buf.len());
-            }
-            if let Some(indent) = text_read_options.prefill.as_mut() {
-                indent.replace_range(
-                    ..,
-                    INDENT
-                        .captures(&line)
-                        .and_then(|c| c.get(1))
-                        .map_or("", |m| m.as_str()),
-                );
-            }
-            buf.push(line);
-        }
-    }
-
     /// Read input, parsing into a Cmd
     pub fn read(
         input: &mut impl LineEdit,
