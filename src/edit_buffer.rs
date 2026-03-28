@@ -17,8 +17,8 @@ use regex::Regex;
 
 use crate::command::Address;
 pub use crate::edit_buffer::undo_stack::{Change, ChangeSet, UndoStack};
-use crate::editor;
 use crate::eol::Eol;
+use crate::error::{Error, ParsePrevailingEolError};
 
 #[derive(Debug, Default, Clone)]
 pub struct EditBuffer {
@@ -429,9 +429,9 @@ impl EditBuffer {
         changes
     }
 
-    pub fn do_undo(&mut self) -> Result<(), editor::Error> {
+    pub fn do_undo(&mut self) -> Result<(), Error> {
         let Some(undo) = self.undo_stack.pop_undo() else {
-            return Err(editor::Error::NothingToUndo);
+            return Err(Error::NothingToUndo);
         };
         for change in undo.changes().rev() {
             match change {
@@ -458,9 +458,9 @@ impl EditBuffer {
         Ok(())
     }
 
-    pub fn do_redo(&mut self) -> Result<(), editor::Error> {
+    pub fn do_redo(&mut self) -> Result<(), Error> {
         let Some(redo) = self.undo_stack.pop_redo() else {
-            return Err(editor::Error::NothingToRedo);
+            return Err(Error::NothingToRedo);
         };
         for change in redo.changes() {
             match change {
@@ -616,17 +616,6 @@ pub struct PrevailingEol {
 impl Display for PrevailingEol {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.display_str())
-    }
-}
-
-#[derive(Debug)]
-pub struct ParsePrevailingEolError;
-
-impl std::error::Error for ParsePrevailingEolError {}
-
-impl Display for ParsePrevailingEolError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid prevailing EOL string")
     }
 }
 
@@ -1443,7 +1432,7 @@ mod tests {
         assert_eq!(buffer[..], expected_final[..]);
 
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(editor::Error::NothingToUndo, _ret));
+        assert!(matches!(Error::NothingToUndo, _ret));
         // Undo stack should be empty here, so buffer shouldn't change
         assert_eq!(buffer[..], expected_final[..]);
     }
@@ -1477,7 +1466,7 @@ mod tests {
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], buffer_orig[..]);
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(editor::Error::NothingToUndo, _ret));
+        assert!(matches!(Error::NothingToUndo, _ret));
         assert_eq!(buffer[..], buffer_orig[..]); // buffer unchanged
 
         buffer.do_redo().unwrap();
@@ -1487,7 +1476,7 @@ mod tests {
         assert_eq!(buffer[..], expected_final[..]);
 
         let _ret = buffer.do_redo().expect_err("nothing to redo");
-        assert!(matches!(editor::Error::NothingToRedo, _ret));
+        assert!(matches!(Error::NothingToRedo, _ret));
         assert_eq!(buffer[..], expected_final[..]); // buffer unchanged
     }
     #[test]
@@ -1549,7 +1538,7 @@ mod tests {
         assert!(buffer.content_hash.is_none());
 
         let _ret = buffer.do_undo().expect_err("nothing to undo");
-        assert!(matches!(editor::Error::NothingToUndo, _ret));
+        assert!(matches!(Error::NothingToUndo, _ret));
         assert_eq!(buffer[..], orig[..]);
         assert_eq!(buffer.current_line(), 0);
     }

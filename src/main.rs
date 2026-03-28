@@ -4,6 +4,7 @@ mod command;
 mod edit_buffer;
 mod editor;
 mod eol;
+mod error;
 mod iter_utils;
 
 use std::error::Error;
@@ -12,10 +13,11 @@ use std::iter;
 
 use line_edit::LineEditor;
 
+#[cfg(not(tarpaulin_include))]
 fn main() {
     let args = match cli::parse_args(&mut io::stdout(), wild::args_os()) {
-        Ok(args) => args,
-        Err(cli::Error::WroteMessage) => std::process::exit(0),
+        Ok(Some(args)) => args,
+        Ok(None) => std::process::exit(0),
         Err(err) => {
             eprintln!("Error: {err}");
             std::process::exit(1);

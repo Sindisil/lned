@@ -1,5 +1,3 @@
-use core::fmt::{self, Debug, Display, Formatter};
-use std::io::{self};
 use std::iter::Peekable;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
@@ -13,6 +11,7 @@ use line_edit::LineEdit;
 
 use crate::edit_buffer::EditBuffer;
 use crate::edit_buffer::PrevailingEol;
+use crate::error::Error;
 use crate::iter_utils::Peeking;
 
 #[derive(Debug)]
@@ -63,89 +62,10 @@ pub struct PrintAttributes {
     pub expand_escapes: bool,
 }
 
-#[derive(Debug)]
-pub enum Error {
-    Unknown(String),
-    UnexpectedAddress,
-    InvalidOffset,
-    InvalidAddress,
-    Regex(regex::Error),
-    NoMatchingLine,
-    NoPreviousPattern,
-    NumberParse,
-    TrailingBackslash,
-    InvalidDelimiter,
-    InvalidCmdSuffix,
-    MissingFilename,
-    ReadCommand { source: io::Error },
-    MissingEol,
-    MissingDestination,
-    MissingPatternDelimiter,
-    InvalidNewline,
-}
-
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub struct Address {
     first: usize,
     last: usize,
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match *self {
-            Error::Unknown(_)
-            | Error::UnexpectedAddress
-            | Error::InvalidOffset
-            | Error::InvalidAddress
-            | Error::Regex(_)
-            | Error::NoMatchingLine
-            | Error::NoPreviousPattern
-            | Error::NumberParse
-            | Error::TrailingBackslash
-            | Error::InvalidDelimiter
-            | Error::InvalidCmdSuffix
-            | Error::MissingDestination
-            | Error::MissingPatternDelimiter
-            | Error::InvalidNewline
-            | Error::MissingFilename
-            | Error::MissingEol => None,
-            Error::ReadCommand { ref source } => Some(source),
-        }
-    }
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::UnexpectedAddress => {
-                write!(f, "unexpected line address")
-            }
-            Error::Unknown(c) => write!(f, "unknown command '{c}'"),
-            Error::InvalidOffset => write!(f, "invalid offset"),
-            Error::InvalidAddress => write!(f, "invalid address"),
-            Error::Regex(e) => write!(f, "{e}"),
-            Error::NoMatchingLine => write!(f, "no matching line"),
-            Error::TrailingBackslash => write!(f, "invalid trailing backslash"),
-            Error::NoPreviousPattern => write!(f, "no previous pattern"),
-            Error::InvalidDelimiter => {
-                write!(f, "invalid delimiter")
-            }
-            Error::InvalidCmdSuffix => write!(f, "invalid command suffix"),
-            Error::MissingFilename => write!(f, "missing filename"),
-            Error::ReadCommand { .. } => {
-                write!(f, "error reading command input")
-            }
-            Error::MissingEol => write!(f, "missing line terminator"),
-            Error::MissingDestination => write!(f, "missing destination"),
-            Error::NumberParse => write!(f, "invalid numeric string"),
-            Error::MissingPatternDelimiter => {
-                write!(f, "missing pattern delimiter")
-            }
-            Error::InvalidNewline => {
-                write!(f, "invalid newline (valid: CR, CRLF)")
-            }
-        }
-    }
 }
 
 impl Address {
@@ -233,13 +153,14 @@ impl Address {
                         parse_pattern(graphemes, Some("/"), false)?;
                     if !pattern.is_empty() {
                         *previous_pattern =
-                            Some(Regex::new(&pattern).map_err(Error::Regex)?);
+                            Some(Regex::new(&pattern).map_err(|e| {
+                                Error::Regex { source: Some(Box::new(e)) }
+                            })?);
                     }
                     let re = previous_pattern
                         .as_ref()
                         .ok_or(Error::NoPreviousPattern)?;
-                    let line =
-                        buffer.find_line(re).ok_or(Error::NoMatchingLine)?;
+                    let line = buffer.find_line(re).ok_or(Error::NoMatch)?;
                     right = Some(eval_line_number(graphemes, line)?);
                 }
                 Some(&"?") => {
@@ -248,14 +169,15 @@ impl Address {
                         parse_pattern(graphemes, Some("?"), false)?;
                     if !pattern.is_empty() {
                         *previous_pattern =
-                            Some(Regex::new(&pattern).map_err(Error::Regex)?);
+                            Some(Regex::new(&pattern).map_err(|e| {
+                                Error::Regex { source: Some(Box::new(e)) }
+                            })?);
                     }
                     let re = previous_pattern
                         .as_ref()
                         .ok_or(Error::NoPreviousPattern)?;
-                    let line = buffer
-                        .find_line_rev(re)
-                        .ok_or(Error::NoMatchingLine)?;
+                    let line =
+                        buffer.find_line_rev(re).ok_or(Error::NoMatch)?;
                     right = Some(eval_line_number(graphemes, line)?);
                 }
                 Some(&" " | &"\t") => {
@@ -268,7 +190,7 @@ impl Address {
                         break;
                     }
                 }
-                None => return Err(Error::MissingEol),
+                None => break,
             }
             if left.is_none() && right.is_some() {
                 left = right;
@@ -316,7 +238,7 @@ impl Cmd {
         let mut line = String::with_capacity(120);
         input
             .read_line(&mut line, Some(&cmd_input_options))
-            .map_err(|source| Error::ReadCommand { source })?;
+            .map_err(|e| Error::ReadCommand { source: Some(Box::new(e)) })?;
         if line.is_empty() {
             return Ok(None);
         }
@@ -379,7 +301,7 @@ impl Cmd {
             Some("=") => {
                 parse_no_args(&mut graphemes, Cmd::LineNumber(address))
             }
-            Some(s) => Err(Error::Unknown(s.to_owned())),
+            Some(s) => Err(Error::UnknownCmd(s.to_owned())),
         }
     }
 }
@@ -408,7 +330,7 @@ fn parse_write_as_cmd<'a>(
     address: Option<Address>,
 ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     match graphemes.next() {
-        None | Some("\n" | "\r\n") => Err(Error::MissingFilename),
+        None | Some("\n" | "\r\n") => Err(Error::NoFilename),
         Some(" " | "\t") => {
             let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
@@ -416,7 +338,7 @@ fn parse_write_as_cmd<'a>(
                 .trim()
                 .to_owned();
             if filename.is_empty() {
-                Err(Error::MissingFilename)
+                Err(Error::NoFilename)
             } else {
                 Ok(Some((Cmd::WriteAs(address, PathBuf::from(filename)), None)))
             }
@@ -459,7 +381,7 @@ fn parse_show_cmd<'a>(
                 .trim()
                 .to_owned();
             if filename.is_empty() {
-                Err(Error::MissingFilename)
+                Err(Error::NoFilename)
             } else {
                 Ok(Some((Cmd::ShowDiff(Some(PathBuf::from(filename))), None)))
             }
@@ -476,7 +398,7 @@ fn parse_edit_cmd(
         return Err(Error::UnexpectedAddress);
     }
     match graphemes.next() {
-        None | Some("\n" | "\r\n") => Err(Error::MissingFilename),
+        None | Some("\n" | "\r\n") => Err(Error::NoFilename),
         Some(" " | "\t") => {
             let filename = graphemes
                 .take_while(|s| *s != "\n" && *s != "\r\n")
@@ -484,7 +406,7 @@ fn parse_edit_cmd(
                 .trim()
                 .to_owned();
             if filename.is_empty() {
-                Err(Error::MissingFilename)
+                Err(Error::NoFilename)
             } else {
                 Ok(Some((Cmd::Edit(PathBuf::from(filename)), None)))
             }
@@ -508,7 +430,7 @@ fn parse_read_cmd(
                 .trim()
                 .to_owned();
             if filename.is_empty() {
-                Err(Error::MissingFilename)
+                Err(Error::NoFilename)
             } else {
                 Ok(Some((
                     Cmd::Read(address, Some(PathBuf::from(filename))),
@@ -585,7 +507,10 @@ pub(crate) fn parse_substitute_cmd(
 ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     let (pattern, delimiter) = parse_pattern(graphemes, None, true)?;
     if !(pattern.is_empty()) {
-        *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
+        *previous_pattern = Some(
+            Regex::new(&pattern)
+                .map_err(|e| Error::Regex { source: Some(Box::new(e)) })?,
+        );
     }
     let pattern = previous_pattern.clone().ok_or(Error::NoPreviousPattern)?;
 
@@ -611,7 +536,7 @@ pub(crate) fn parse_substitute_cmd(
     let (cmd, sfx) = loop {
         input
             .read_line(&mut line, Some(&line_read_options))
-            .map_err(|source| Error::ReadCommand { source })?;
+            .map_err(|e| Error::ReadCommand { source: Some(Box::new(e)) })?;
         let mut graphemes = line.graphemes(true).peekable();
         let more_lines = parse_replacement_line(
             &mut graphemes,
@@ -854,9 +779,9 @@ fn parse_global_command_list(
         };
         let mut line = String::new();
         while more_lines {
-            input
-                .read_line(&mut line, Some(&line_read_options))
-                .map_err(|source| Error::ReadCommand { source })?;
+            input.read_line(&mut line, Some(&line_read_options)).map_err(
+                |e| Error::ReadCommand { source: Some(Box::new(e)) },
+            )?;
             let mut graphemes = line.graphemes(true).peekable();
             (more_lines, subst_delimiter) = parse_global_command_line(
                 &mut graphemes,
@@ -877,7 +802,10 @@ fn parse_global_cmd(
 ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
     let (pattern, _) = parse_pattern(graphemes, None, false)?;
     if !(pattern.is_empty()) {
-        *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
+        *previous_pattern = Some(
+            Regex::new(&pattern)
+                .map_err(|e| Error::Regex { source: Some(Box::new(e)) })?,
+        );
     }
     let pattern = previous_pattern.clone().ok_or(Error::NoPreviousPattern)?;
 
@@ -1206,10 +1134,10 @@ mod tests {
     #[test]
     fn eval_addr_no_eol() {
         let mut cmd_line = "".graphemes(true).peekable();
-        let res =
+        let address =
             Address::eval(&mut cmd_line, &mut EditBuffer::new(), &mut None)
-                .expect_err("mising line terminator");
-        assert!(matches!(res, Error::MissingEol));
+                .unwrap();
+        assert!(address.is_none());
     }
 
     #[test]
@@ -1265,7 +1193,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("bad pattern");
-        assert!(matches!(res, Error::Regex(_)));
+        assert!(matches!(res, Error::Regex { .. }));
     }
 
     #[test]
@@ -1278,7 +1206,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
             .expect_err("bad pattern");
-        assert!(matches!(res, Error::Regex(_)));
+        assert!(matches!(res, Error::Regex { .. }));
     }
 
     #[test]
@@ -1688,8 +1616,8 @@ mod tests {
         let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None)
             .expect_err("unknown cmd");
         assert!(
-            matches!(res, Error::Unknown(ref s) if s == "O"),
-            "{res:?} didn't match Error::Unknown(\"O\")"
+            matches!(res, Error::UnknownCmd(ref s) if s == "O"),
+            "{res:?} didn't match Error::UnknownCmd(\"O\")"
         );
     }
 
@@ -1713,7 +1641,7 @@ mod tests {
         let mut cmd_line = " \r\n".graphemes(true).peekable();
         let res =
             parse_edit_cmd(&mut cmd_line, None).expect_err("bad filename");
-        assert!(matches!(res, Error::MissingFilename));
+        assert!(matches!(res, Error::NoFilename));
     }
 
     #[test]
@@ -1762,7 +1690,7 @@ mod tests {
         let mut cmd_line = " \r\n".graphemes(true).peekable();
         let res =
             parse_read_cmd(&mut cmd_line, None).expect_err("bad filename");
-        assert!(matches!(res, Error::MissingFilename));
+        assert!(matches!(res, Error::NoFilename));
     }
 
     #[test]
@@ -2133,7 +2061,7 @@ mod tests {
         let mut cmd_line = " \r\n".graphemes(true);
         let res =
             parse_write_as_cmd(&mut cmd_line, None).expect_err("bad filename");
-        assert!(matches!(res, Error::MissingFilename));
+        assert!(matches!(res, Error::NoFilename));
     }
 
     #[test]
@@ -2184,7 +2112,7 @@ mod tests {
         let mut cmd_line = " \n".graphemes(true);
         let res =
             parse_show_cmd(&mut cmd_line, None).expect_err("invalid filename");
-        assert!(matches!(res, Error::MissingFilename));
+        assert!(matches!(res, Error::NoFilename));
     }
 
     #[test]

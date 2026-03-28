@@ -17,215 +17,14 @@ use similar::TextDiff;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli;
-use crate::command::{self, Address, Cmd, PrintAttributes, SubstitutionScope};
+use crate::command::{Address, Cmd, PrintAttributes, SubstitutionScope};
 use crate::edit_buffer::{Change, ChangeSet, EditBuffer, PrevailingEol};
+use crate::error::{Error, Warning};
 
 use line_edit::{self, EditorOptions, LineEdit};
 
 static INDENT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^([[:blank:]]*)").expect("indent regex"));
-#[derive(Debug)]
-pub enum Error {
-    ParseCmd(command::Error),
-    InvalidAddress,
-    NestedGlobalCmd,
-    UnsupportedGlobalCmd,
-    ReadGlobalCmd {
-        source: command::Error,
-    },
-    NoFilename,
-    EditFileOpen {
-        source: std::io::Error,
-        filename: PathBuf,
-    },
-    WriteFileOpen {
-        source: std::io::Error,
-        filename: PathBuf,
-    },
-    WriteFile {
-        source: std::io::Error,
-        filename: PathBuf,
-        backup_filename: Option<PathBuf>,
-    },
-    ReadLines {
-        source: std::io::Error,
-    },
-    FileNotFound(PathBuf),
-    DestinationIntersectsSource,
-    NoMatch,
-    NothingToUndo,
-    NothingToRedo,
-    GlobalCmdErrorStop {
-        source: Box<Error>,
-        changes: Option<ChangeSet>,
-    },
-    ReadFileOpen {
-        source: std::io::Error,
-        file: PathBuf,
-    },
-    WriteBackupFileCreate {
-        source: std::io::Error,
-        filename: PathBuf,
-        backup_filename: Option<PathBuf>,
-    },
-    WriteMakeBackup {
-        source: std::io::Error,
-        filename: PathBuf,
-        backup_filename: Option<PathBuf>,
-    },
-    WriteRemoveBackup {
-        source: std::io::Error,
-        backup_filename: Option<PathBuf>,
-    },
-    DiffReadFile {
-        source: std::io::Error,
-        filename: PathBuf,
-    },
-    Warning(Warning),
-    Quit,
-    WriteAsCurrentFile,
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match *self {
-            Error::ParseCmd(_)
-            | Error::FileNotFound(_)
-            | Error::InvalidAddress
-            | Error::NestedGlobalCmd
-            | Error::UnsupportedGlobalCmd
-            | Error::DestinationIntersectsSource
-            | Error::NoMatch
-            | Error::NothingToUndo
-            | Error::NothingToRedo
-            | Error::Warning(_)
-            | Error::Quit
-            | Error::WriteAsCurrentFile
-            | Error::NoFilename => None,
-            Error::EditFileOpen { ref source, .. }
-            | Error::DiffReadFile { ref source, .. }
-            | Error::WriteMakeBackup { ref source, .. }
-            | Error::WriteRemoveBackup { ref source, .. }
-            | Error::WriteBackupFileCreate { ref source, .. }
-            | Error::WriteFileOpen { ref source, .. }
-            | Error::WriteFile { ref source, .. }
-            | Error::ReadFileOpen { ref source, .. }
-            | Error::ReadLines { ref source } => Some(source),
-            Error::ReadGlobalCmd { ref source } => Some(source),
-            Error::GlobalCmdErrorStop { ref source, .. } => Some(source),
-        }
-    }
-}
-
-impl fmt::Display for Error {
-    #[allow(clippy::too_many_lines)]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::ParseCmd(e) => write!(f, "{e}"),
-            Error::InvalidAddress => write!(f, "invalid address"),
-            Error::NestedGlobalCmd => {
-                write!(f, "invalid nested global command")
-            }
-            Error::UnsupportedGlobalCmd => {
-                write!(f, "unsupported global command")
-            }
-            Error::ReadGlobalCmd { .. } => {
-                write!(f, "error reading global command")
-            }
-            Error::NoFilename => write!(f, "no filename"),
-            Error::EditFileOpen { filename, .. } => {
-                write!(f, "error opening \"{}\" to edit", filename.display())
-            }
-            Error::WriteFileOpen { filename, .. } => {
-                write!(
-                    f,
-                    "error opening \"{}\" for writing",
-                    filename.display()
-                )
-            }
-            Error::WriteFile { filename, backup_filename, .. } => {
-                write!(
-                    f,
-                    "error writing buffer to \"{}\"",
-                    filename.display(),
-                )?;
-                if let Some(backup_filename) = backup_filename {
-                    write!(
-                        f,
-                        ", backup left in \"{}\"",
-                        backup_filename.display()
-                    )?;
-                }
-                Ok(())
-            }
-            Error::ReadLines { .. } => {
-                write!(f, "error reading input lines")
-            }
-            Error::FileNotFound(filename) => {
-                write!(f, "{} not found", filename.display())
-            }
-            Error::DestinationIntersectsSource => {
-                write!(f, "destination intersects source")
-            }
-            Error::NoMatch => {
-                write!(f, "no matches found")
-            }
-            Error::NothingToUndo => write!(f, "nothing to undo"),
-            Error::NothingToRedo => write!(f, "nothing to redo"),
-            Error::GlobalCmdErrorStop { .. } => {
-                write!(f, "error executing global command")
-            }
-            Error::ReadFileOpen { file, .. } => {
-                write!(f, "error opening \"{}\" to read", file.display())
-            }
-            Error::WriteBackupFileCreate {
-                filename, backup_filename, ..
-            } => {
-                write!(
-                    f,
-                    "error creating \"{}\" as backup for \"{}\"",
-                    backup_filename
-                        .as_ref()
-                        .expect("backup path exists if this error produced")
-                        .display(),
-                    filename.display(),
-                )
-            }
-            Error::WriteMakeBackup { filename, backup_filename, .. } => {
-                write!(
-                    f,
-                    "error writing \"{}\" as backup of \"{}\"",
-                    backup_filename
-                        .as_ref()
-                        .expect("backup path exists if this error produced")
-                        .display(),
-                    filename.display()
-                )
-            }
-            Error::WriteRemoveBackup { backup_filename, .. } => {
-                write!(
-                    f,
-                    "error removing \"{}\"",
-                    backup_filename
-                        .as_ref()
-                        .expect("backup path exists if this error produced")
-                        .display()
-                )
-            }
-            Error::DiffReadFile { filename, .. } => {
-                write!(f, "error reading {} for diff", filename.display())
-            }
-            Error::Warning(warning) => {
-                write!(f, "{warning}")
-            }
-            Error::Quit => write!(f, "exiting ..."),
-            Error::WriteAsCurrentFile => {
-                write!(f, "specified filename may not be same as current file")
-            }
-        }
-    }
-}
-
 #[derive(Debug)]
 struct Editor {
     previous_warning: Option<Warning>,
@@ -244,39 +43,6 @@ struct Editor {
 struct FileMetadata {
     len: u64,
     modified: Option<SystemTime>,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Warning {
-    NewUnsaved,
-    EditUnsaved(PathBuf),
-    ReloadUnsaved,
-    WriteOverwrite,
-    QuitUnsaved,
-    WriteAsOverwrite(Option<Address>, PathBuf),
-}
-
-impl fmt::Display for Warning {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Warning::EditUnsaved(_)
-            | Warning::ReloadUnsaved
-            | Warning::NewUnsaved
-            | Warning::QuitUnsaved => {
-                write!(f, "unsaved changes - repeat command to discard changes")
-            }
-            Warning::WriteOverwrite => write!(
-                f,
-                "current file was altered externally - repeat command to overwrite with buffer contents",
-            ),
-            Warning::WriteAsOverwrite(addr, file) => write!(
-                f,
-                "'{}' exists - repeat command to overwrite with{}buffer contents",
-                file.display(),
-                addr.map_or(" ", |_| " partial ")
-            ),
-        }
-    }
 }
 
 impl Editor {
@@ -470,7 +236,7 @@ impl Editor {
         };
         let mut lines = Vec::new();
         read_input_lines(input, &mut lines, indent)
-            .map_err(|source| Error::ReadLines { source })?;
+            .map_err(|e| Error::ReadLines { source: Some(Box::new(e)) })?;
         Ok(self.buffer.do_append(address, lines))
     }
 
@@ -504,7 +270,7 @@ impl Editor {
 
         let mut lines = Vec::new();
         read_input_lines(input, &mut lines, indent)
-            .map_err(|source| Error::ReadLines { source })?;
+            .map_err(|e| Error::ReadLines { source: Some(Box::new(e)) })?;
         Ok(Some(self.buffer.do_change(address, lines)))
     }
 
@@ -643,8 +409,9 @@ impl Editor {
         let filename = filename
             .or(self.current_file.as_deref())
             .ok_or(Error::NoFilename)?;
-        let file = fs::read(filename).map_err(|source| {
-            Error::DiffReadFile { source, filename: filename.to_owned() }
+        let file = fs::read(filename).map_err(|e| Error::DiffReadFile {
+            source: Some(Box::new(e)),
+            filename: filename.to_owned(),
         })?;
         let file = String::from_utf8_lossy(&file);
         let mem = Cow::from(self.buffer[..].concat());
@@ -678,7 +445,10 @@ impl Editor {
                 self.buffer.clear_text();
                 Error::FileNotFound(filename.into())
             } else {
-                Error::EditFileOpen { source: e, filename: filename.into() }
+                Error::EditFileOpen {
+                    source: Some(Box::new(e)),
+                    filename: filename.into(),
+                }
             }
         })?;
         let mut source = BufReader::new(file);
@@ -732,7 +502,10 @@ impl Editor {
                 self.current_file = Some(filename.to_owned());
                 Error::FileNotFound(filename.into())
             } else {
-                Error::EditFileOpen { source: e, filename: filename.into() }
+                Error::EditFileOpen {
+                    source: Some(Box::new(e)),
+                    filename: filename.into(),
+                }
             }
         })?;
         let mut source = BufReader::new(file);
@@ -799,7 +572,7 @@ impl Editor {
                         Err(Error::FileNotFound(filename.into()))
                     }
                     _ => Err(Error::ReadFileOpen {
-                        source: e,
+                        source: Some(Box::new(e)),
                         file: filename.into(),
                     }),
                 };
@@ -1042,7 +815,7 @@ impl Editor {
                 &mut self.buffer,
                 &mut self.previous_pattern,
             )
-            .map_err(|source| Error::ReadGlobalCmd { source })?
+            .map_err(|e| Error::ReadGlobalCmd { source: Some(Box::new(e)) })?
             {
                 let cs = match cmd {
                     Cmd::Append(address) => {
@@ -1212,7 +985,7 @@ impl Editor {
         };
         let mut lines = Vec::new();
         read_input_lines(input, &mut lines, indent)
-            .map_err(|source| Error::ReadLines { source })?;
+            .map_err(|e| Error::ReadLines { source: Some(Box::new(e)) })?;
         Ok(self.buffer.do_insert(address, lines))
     }
 
@@ -1329,14 +1102,14 @@ impl Editor {
         if !writer.new_file
             && self.previous_warning.as_ref() != Some(&overwrite_warning)
         {
-            if let Err(e) = writer.remove_backup().map_err(|source| {
-                Error::WriteRemoveBackup {
-                    source,
+            if let Err(e) =
+                writer.remove_backup().map_err(|e| Error::WriteRemoveBackup {
+                    source: Some(Box::new(e)),
                     backup_filename: writer
                         .backup_name()
                         .map(ToOwned::to_owned),
-                }
-            }) {
+                })
+            {
                 // write backup file remove error out so not lost
                 writeln!(output, "{e}").expect("reliable stdout");
             }
@@ -1397,7 +1170,6 @@ pub fn run(
         }
 
         Cmd::read(&mut input, &mut editor.buffer, &mut editor.previous_pattern)
-            .map_err(Error::ParseCmd)
             .and_then(|res| match res {
                 Some((cmd, sfx)) => {
                     let res =
@@ -1603,7 +1375,7 @@ fn read_lines(
     loop {
         let len = source
             .read_line(&mut line)
-            .map_err(|source| Error::ReadLines { source })?;
+            .map_err(|e| Error::ReadLines { source: Some(Box::new(e)) })?;
         if len == 0 {
             break;
         }
@@ -1698,8 +1470,8 @@ impl EditedFile {
                 let mut backup_filename = filename.to_path_buf();
                 backup_filename.as_mut_os_string().push(".bak");
                 let backup = File::create_new(backup_filename.as_path())
-                    .map_err(|source| Error::WriteBackupFileCreate {
-                        source,
+                    .map_err(|e| Error::WriteBackupFileCreate {
+                        source: Some(Box::new(e)),
                         filename: filename.to_path_buf(),
                         backup_filename: Some(backup_filename.clone()),
                     })?;
@@ -1711,15 +1483,14 @@ impl EditedFile {
                     backup: Some(backup),
                 })
             }
-            Err(source) => {
-                if source.kind() == io::ErrorKind::NotFound {
-                    let file =
-                        File::create_new(filename).map_err(|source| {
-                            Error::WriteFileOpen {
-                                source,
-                                filename: filename.to_path_buf(),
-                            }
-                        })?;
+            Err(e) => {
+                if e.kind() == io::ErrorKind::NotFound {
+                    let file = File::create_new(filename).map_err(|e| {
+                        Error::WriteFileOpen {
+                            source: Some(Box::new(e)),
+                            filename: filename.to_path_buf(),
+                        }
+                    })?;
                     return Ok(EditedFile {
                         filename: filename.to_path_buf(),
                         file,
@@ -1729,7 +1500,7 @@ impl EditedFile {
                     });
                 }
                 Err(Error::WriteFileOpen {
-                    source,
+                    source: Some(Box::new(e)),
                     filename: filename.to_path_buf(),
                 })
             }
@@ -1792,8 +1563,8 @@ fn write_file(
 ) -> Result<(), Error> {
     writer
         .backup()
-        .map_err(|source| Error::WriteMakeBackup {
-            source,
+        .map_err(|e| Error::WriteMakeBackup {
+            source: Some(Box::new(e)),
             filename: writer.name().to_owned(),
             backup_filename: writer.backup_name().map(Path::to_owned),
         })
@@ -1801,8 +1572,8 @@ fn write_file(
             let _ = writer.remove_backup();
         })?;
     let (bytes, lines) =
-        writer.write(buffer, address).map_err(|source| Error::WriteFile {
-            source,
+        writer.write(buffer, address).map_err(|e| Error::WriteFile {
+            source: Some(Box::new(e)),
             filename: writer.name().to_owned(),
             backup_filename: writer.backup_name().map(Path::to_owned),
         })?;
@@ -1820,8 +1591,8 @@ fn write_file(
         writeln!(output, "[None]").unwrap();
     }
 
-    writer.remove_backup().map_err(|source| Error::WriteRemoveBackup {
-        source,
+    writer.remove_backup().map_err(|e| Error::WriteRemoveBackup {
+        source: Some(Box::new(e)),
         backup_filename: writer.backup_name().map(Path::to_path_buf),
     })
 }
@@ -1882,6 +1653,7 @@ mod tests {
     use similar_asserts::assert_eq;
     use tempfile::tempdir;
 
+    use crate::command;
     use crate::eol::Eol;
 
     struct BadWriter {}
@@ -2530,10 +2302,15 @@ mod tests {
         else {
             panic!("should have returned GlobalCmdErrorStop");
         };
-        assert!(matches!(
-            *source,
-            Error::ReadGlobalCmd { source: command::Error::InvalidAddress }
-        ));
+        eprintln!("{source:?}");
+        if let Error::ReadGlobalCmd { source, .. } = *source {
+            assert!(source.is_some_and(|e| matches!(
+                *e.downcast::<Error>().unwrap(),
+                Error::InvalidAddress
+            )));
+        } else {
+            panic!("expected Error::ReadGlobalCmd");
+        }
         let Some(changes) = changes else {
             panic!("changes was None!");
         };
@@ -3024,7 +2801,7 @@ mod tests {
         let mut output = Vec::new();
         run(&input[..], &mut output, false, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("missing filename"));
+        assert!(output.contains("no filename"));
     }
 
     #[test]
@@ -4050,7 +3827,10 @@ mod tests {
             backup_filename,
         } = ret
         {
-            assert_eq!(source.kind(), io::ErrorKind::AlreadyExists);
+            assert_eq!(
+                source.unwrap().downcast::<std::io::Error>().unwrap().kind(),
+                io::ErrorKind::AlreadyExists
+            );
             assert_eq!(filename, name);
             assert_eq!(backup_filename, Some(backup_name));
         } else {
@@ -4124,7 +3904,10 @@ mod tests {
         if let Err(Error::WriteFile { source, filename: _, backup_filename }) =
             write_file(&mut editor.buffer, &mut output, None, &mut writer)
         {
-            assert_eq!(source.kind(), io::ErrorKind::StorageFull);
+            assert_eq!(
+                source.unwrap().downcast::<std::io::Error>().unwrap().kind(),
+                io::ErrorKind::StorageFull
+            );
             assert!(fs::exists(backup_filename.unwrap()).unwrap());
             let backup_content =
                 fs::read(&backup_name).expect("successful read");
@@ -4179,7 +3962,10 @@ mod tests {
             backup_filename,
         }) = write_file(&mut editor.buffer, &mut output, None, &mut writer)
         {
-            assert_eq!(source.kind(), io::ErrorKind::StorageFull);
+            assert_eq!(
+                source.unwrap().downcast::<std::io::Error>().unwrap().kind(),
+                io::ErrorKind::StorageFull
+            );
             assert!(!fs::exists(backup_filename.unwrap()).unwrap());
         }
     }
@@ -4605,7 +4391,10 @@ mod tests {
         else {
             panic!("error expected");
         };
-        assert!(matches!(source.kind(), io::ErrorKind::NotFound));
+        assert_eq!(
+            source.unwrap().downcast::<std::io::Error>().unwrap().kind(),
+            io::ErrorKind::NotFound
+        );
         assert_eq!(filename, name);
     }
 
