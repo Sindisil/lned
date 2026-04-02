@@ -1,4 +1,3 @@
-use core::cmp;
 use core::fmt::{self, Debug, Display, Formatter};
 use std::io::{self};
 use std::iter::Peekable;
@@ -72,9 +71,7 @@ pub struct PrintAttributes {
 pub enum Error {
     Unknown(String),
     UnexpectedAddress,
-    OffsetTooLarge,
-    OffsetTooSmall,
-    OffsetOverflow,
+    InvalidOffset,
     InvalidAddress,
     Regex(regex::Error),
     NoMatchingLine,
@@ -87,7 +84,6 @@ pub enum Error {
     ReadCommand { source: io::Error },
     MissingEol,
     MissingDestination,
-    RepeatedSubstitutionScope,
     MissingPatternDelimiter,
     InvalidNewline,
 }
@@ -103,9 +99,7 @@ impl std::error::Error for Error {
         match *self {
             Error::Unknown(_)
             | Error::UnexpectedAddress
-            | Error::OffsetTooLarge
-            | Error::OffsetTooSmall
-            | Error::OffsetOverflow
+            | Error::InvalidOffset
             | Error::InvalidAddress
             | Error::Regex(_)
             | Error::NoMatchingLine
@@ -115,7 +109,6 @@ impl std::error::Error for Error {
             | Error::InvalidDelimiter
             | Error::InvalidCmdSuffix
             | Error::MissingDestination
-            | Error::RepeatedSubstitutionScope
             | Error::MissingPatternDelimiter
             | Error::InvalidNewline
             | Error::MissingFilename
@@ -132,11 +125,7 @@ impl Display for Error {
                 write!(f, "unexpected line address")
             }
             Error::Unknown(c) => write!(f, "unknown command '{c}'"),
-            Error::OffsetTooLarge => write!(f, "offset too large"),
-            Error::OffsetOverflow => {
-                write!(f, "offset results in invalid line number")
-            }
-            Error::OffsetTooSmall => write!(f, "offset too small"),
+            Error::InvalidOffset => write!(f, "invalid offset"),
             Error::InvalidAddress => write!(f, "invalid address"),
             Error::Regex(e) => write!(f, "{e}"),
             Error::NoMatchingLine => write!(f, "no matching line"),
@@ -153,9 +142,6 @@ impl Display for Error {
             Error::MissingEol => write!(f, "missing line terminator"),
             Error::MissingDestination => write!(f, "missing destination"),
             Error::NumberParse => write!(f, "invalid numeric string"),
-            Error::RepeatedSubstitutionScope => {
-                write!(f, "only one substitution scope specifier allowed")
-            }
             Error::MissingPatternDelimiter => {
                 write!(f, "missing pattern delimiter")
             }
@@ -279,13 +265,13 @@ impl Address {
                 Some(&" " | &"\t") => {
                     graphemes.next();
                 }
-                Some(s)
-                    if s.chars().next().is_some_and(|c| c.is_ascii_digit()) =>
-                {
-                    let num = parse_number(graphemes)?;
-                    right = Some(eval_line_number(graphemes, num)?);
+                Some(_) => {
+                    if let Some(num) = parse_usize(graphemes)? {
+                        right = Some(eval_line_number(graphemes, num)?);
+                    } else {
+                        break;
+                    }
                 }
-                Some(_) => break,
                 None => return Err(Error::MissingEol),
             }
             if left.is_none() && right.is_some() {
@@ -301,20 +287,6 @@ impl Address {
                 Err(Error::InvalidAddress)
             }
         })
-        /*
-                if let Some(right) = right {
-                    let left = left.map_or(right, |l| l);
-                    if right > buffer.len() {
-                        Err(Error::InvalidAddress)
-                    } else if left > right || left > buffer.len() {
-                        Err(Error::InvalidAddress)
-                    } else {
-                        Ok(Some(Address::span(left, right)))
-                    }
-                } else {
-                    Ok(None)
-                }
-        */
     }
 }
 
@@ -492,7 +464,7 @@ fn parse_page_down_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<Address>,
 ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
-    let window = parse_number(graphemes).ok();
+    let window = parse_usize(graphemes)?;
     let print_sfx = parse_print_suffix(graphemes)?;
     Ok(Some((Cmd::PageDown(address, window, print_sfx), None)))
 }
@@ -501,7 +473,7 @@ fn parse_page_up_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<Address>,
 ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
-    let window = parse_number(graphemes).ok();
+    let window = parse_usize(graphemes)?;
     let print_sfx = parse_print_suffix(graphemes)?;
     Ok(Some((Cmd::PageUp(address, window, print_sfx), None)))
 }
@@ -628,22 +600,16 @@ fn parse_replacement_line(
 fn parse_substitution_scope(
     graphemes: &mut Peekable<Graphemes<'_>>,
 ) -> Result<SubstitutionScope, Error> {
-    let mut s: Option<SubstitutionScope> = None;
-    while let Some(&gr) = graphemes.peek() {
-        let is_digit = gr.chars().next().is_some_and(|c| c.is_ascii_digit());
-        if s.is_some() && (is_digit || gr == "g") {
-            return Err(Error::RepeatedSubstitutionScope);
-        }
-        if is_digit {
-            s = Some(SubstitutionScope::Single(parse_number(graphemes)?));
-        } else if gr == "g" {
-            s = Some(SubstitutionScope::Global);
-            graphemes.next();
-        } else {
-            break;
-        }
+    if let Some(i) = parse_usize(graphemes)? {
+        Ok(SubstitutionScope::Single(i))
+    } else if let Some(gr) = graphemes.peek()
+        && *gr == "g"
+    {
+        graphemes.next();
+        Ok(SubstitutionScope::Global)
+    } else {
+        Ok(SubstitutionScope::Single(1))
     }
-    Ok(s.unwrap_or(SubstitutionScope::Single(1)))
 }
 
 pub(crate) fn parse_substitute_cmd(
@@ -716,7 +682,7 @@ fn eval_line_number(
     line: usize,
 ) -> Result<usize, Error> {
     let offset = compute_line_offset(graphemes)?;
-    line.checked_add_signed(offset).ok_or(Error::OffsetOverflow)
+    line.checked_add_signed(offset).ok_or(Error::InvalidOffset)
 }
 
 fn parse_pattern(
@@ -765,50 +731,9 @@ fn compute_line_offset(
     graphemes: &mut Peekable<Graphemes<'_>>,
 ) -> Result<isize, Error> {
     let mut total_offset = 0isize;
-    while let Some(s) = graphemes.peek() {
-        match *s {
-            " " | "\t" => {
-                graphemes.next();
-            }
-            s if s.chars().next().is_some_and(|c| c.is_ascii_digit()) => {
-                total_offset = parse_number(graphemes)
-                    .and_then(|o| {
-                        o.try_into().map_err(|_| Error::OffsetTooLarge)
-                    })
-                    .and_then(|o| {
-                        total_offset.checked_add(o).ok_or(Error::OffsetTooLarge)
-                    })
-                    .map_err(|_| Error::OffsetTooLarge)?;
-            }
-            "+" => {
-                graphemes.next();
-                total_offset = parse_number(graphemes)
-                    .map_err(|_| Error::OffsetTooLarge)
-                    .and_then(|o| {
-                        o.try_into().map_err(|_| Error::OffsetTooLarge)
-                    })
-                    .and_then(|o| {
-                        total_offset
-                            .checked_add(cmp::max(1, o))
-                            .ok_or(Error::OffsetOverflow)
-                    })?;
-            }
-            "-" => {
-                graphemes.next();
-                total_offset = parse_number(graphemes)
-                    .map_err(|_| Error::OffsetTooSmall)
-                    .and_then(|o| {
-                        o.try_into().map_err(|_| Error::OffsetTooSmall)
-                    })
-                    .and_then(|o| {
-                        total_offset
-                            .checked_sub(cmp::max(1, o))
-                            .ok_or(Error::OffsetOverflow)
-                    })?;
-            }
-
-            _ => break,
-        }
+    while let Some(n) = parse_offset_element(graphemes)? {
+        total_offset =
+            total_offset.checked_add(n).ok_or(Error::InvalidOffset)?;
     }
     Ok(total_offset)
 }
@@ -832,19 +757,61 @@ fn parse_no_args(
     Ok(Some((cmd, parse_print_suffix(graphemes)?)))
 }
 
-fn parse_number<'a>(
-    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
-) -> Result<usize, Error> {
-    graphemes
+fn parse_usize(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+) -> Result<Option<usize>, Error> {
+    let digits = graphemes
         .peeking_take_while(|s| {
-            s.chars().next().is_some_and(|c| c.is_ascii_digit())
+            s.len() == 1 && s.chars().next().unwrap().is_ascii_digit()
         })
-        .try_fold(0usize, |acc, s| {
-            s.chars().next().and_then(|c| c.to_digit(10)).and_then(|d| {
-                acc.checked_mul(10).and_then(|n| n.checked_add(d as usize))
-            })
+        .map(|s| {
+            s.chars().next().and_then(|c| c.to_digit(10)).unwrap() as usize
         })
-        .ok_or(Error::NumberParse)
+        .try_fold(None, |acc: Option<usize>, d| {
+            let v = acc.map_or(Some(d), |a| {
+                a.checked_mul(10).and_then(|n| n.checked_add(d))
+            });
+            v.and(Some(v))
+        });
+
+    digits.ok_or(Error::InvalidOffset)
+}
+
+fn parse_offset_element(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+) -> Result<Option<isize>, Error> {
+    // Skip leading whitespace
+    while graphemes.peek().is_some_and(|s| *s == " " || *s == "\t") {
+        graphemes.next();
+    }
+
+    let sign = graphemes
+        .next_if(|c| *c == "+" || *c == "-")
+        .map(|c| if c == "-" { -1 } else { 1 });
+
+    let sign_mul = sign.unwrap_or(1);
+
+    let digits = graphemes
+        .peeking_take_while(|s| {
+            s.len() == 1 && s.chars().next().unwrap().is_ascii_digit()
+        })
+        .map(|s| {
+            isize::try_from(
+                s.chars()
+                    .next()
+                    .and_then(|c| c.to_digit(10))
+                    .expect("ascii 0-9"),
+            )
+            .expect("0-9 always fit isize")
+        })
+        .try_fold(None, |acc: Option<isize>, d| {
+            let v = acc.map_or(Some(sign_mul * d), |a| {
+                a.checked_mul(10).and_then(|n| n.checked_add(sign_mul * d))
+            });
+            v.and(Some(v))
+        });
+
+    Ok(digits.ok_or(Error::InvalidOffset)?.or(sign))
 }
 
 fn parse_global_command_line(
@@ -1184,31 +1151,31 @@ mod tests {
                 .graphemes(true)
                 .peekable();
         let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::OffsetOverflow));
+        assert!(matches!(res, Error::InvalidOffset));
 
         let mut input =
             "-839999999999999999-83999999999999999-8399999999999999999p"
                 .graphemes(true)
                 .peekable();
         let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::OffsetOverflow));
+        assert!(matches!(res, Error::InvalidOffset));
     }
 
     #[test]
     fn eval_offset_too_large() {
         let mut input = "999999999999999999999p".graphemes(true).peekable();
         let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::OffsetTooLarge));
+        assert!(matches!(res, Error::InvalidOffset));
         let mut input = "+999999999999999999999p".graphemes(true).peekable();
         let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::OffsetTooLarge));
+        assert!(matches!(res, Error::InvalidOffset));
     }
 
     #[test]
     fn eval_offset_too_small() {
         let mut input = "-999999999999999999999p".graphemes(true).peekable();
         let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::OffsetTooSmall));
+        assert!(matches!(res, Error::InvalidOffset));
     }
 
     #[test]
@@ -1664,7 +1631,7 @@ mod tests {
         buffer.set_current_line(3);
         let res = Address::eval(&mut input, &mut buffer, &mut None)
             .expect_err("offset overflow");
-        assert!(matches!(res, Error::OffsetOverflow));
+        assert!(matches!(res, Error::InvalidOffset));
     }
 
     #[test]
@@ -2032,7 +1999,7 @@ mod tests {
             &mut "".as_bytes(),
         )
         .expect_err("should fail");
-        assert!(matches!(res, Error::RepeatedSubstitutionScope));
+        assert!(matches!(res, Error::InvalidCmdSuffix));
 
         let mut cmd_line = "/[^01]*/./4g\n".graphemes(true).peekable();
         let res = parse_substitute_cmd(
@@ -2042,7 +2009,7 @@ mod tests {
             &mut "".as_bytes(),
         )
         .expect_err("should fail");
-        assert!(matches!(res, Error::RepeatedSubstitutionScope));
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
