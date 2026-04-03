@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter, Result};
 use std::path::PathBuf;
 
-use crate::command::Address;
+use crate::edit_buffer::Address;
 use crate::edit_buffer::ChangeSet;
 
 #[derive(Debug)]
