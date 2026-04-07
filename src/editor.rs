@@ -19,8 +19,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::cli;
 use crate::command::{Cmd, PrintAttributes, SubstitutionScope};
 use crate::edit_buffer::{
-    Address, Change, ChangeSet, EditBuffer, PrevailingEol,
+    Address, EditBuffer, PrevailingEol,
 };
+use crate::undo_stack::{Change, ChangeSet};
 use crate::error::{Error, Warning};
 
 use line_edit::{self, EditorOptions, LineEdit};

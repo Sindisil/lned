@@ -6,6 +6,7 @@ mod editor;
 mod eol;
 mod error;
 mod iter_utils;
+mod undo_stack;
 
 use std::error::Error;
 use std::io::{self, IsTerminal};

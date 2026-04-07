@@ -2,7 +2,6 @@
 // editor. All public interface uses one based indexing, and any such function
 // is responsible for translating into the 0 based indexing of the Vec<String>
 // containing the lines of text.
-mod undo_stack;
 
 use std::cmp::{self, Ordering};
 use std::fmt::{self, Display, Formatter};
@@ -18,7 +17,7 @@ use regex::Regex;
 use unicode_segmentation::Graphemes;
 
 use crate::command;
-pub use crate::edit_buffer::undo_stack::{Change, ChangeSet, UndoStack};
+use crate::undo_stack::{Change, ChangeSet, UndoStack};
 use crate::eol::Eol;
 use crate::error::{Error, ParsePrevailingEolError};
 use crate::iter_utils::Peeking;

@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter, Result};
 use std::path::PathBuf;
 
 use crate::edit_buffer::Address;
-use crate::edit_buffer::ChangeSet;
+use crate::undo_stack::ChangeSet;
 
 #[derive(Debug)]
 pub enum Error {

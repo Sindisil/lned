@@ -14,7 +14,8 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::vec::Drain;
 
-use crate::edit_buffer::{Eol, PrevailingEol};
+use crate::edit_buffer::PrevailingEol;
+use crate::eol::Eol;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct UndoStack {
