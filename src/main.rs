@@ -14,6 +14,8 @@ use std::iter;
 
 use line_edit::LineEditor;
 
+use crate::editor::OutputTarget;
+
 #[cfg(not(tarpaulin_include))]
 fn main() {
     let args = match cli::parse_args(&mut io::stdout(), wild::args_os()) {
@@ -25,12 +27,14 @@ fn main() {
         }
     };
 
-    if let Err(err) = editor::run(
-        LineEditor::new(),
-        io::stdout(),
-        io::stdout().is_terminal(),
-        &args,
-    ) {
+    let output_target = if io::stdout().is_terminal() {
+        OutputTarget::Terminal
+    } else {
+        OutputTarget::Other
+    };
+    if let Err(err) =
+        editor::run(LineEditor::new(), io::stdout(), output_target, &args)
+    {
         eprintln!("Error: {err}");
         if let Some(cause) = err.source() {
             println!("\nCaused by:");

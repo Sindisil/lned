@@ -131,11 +131,11 @@ suffix applied, commands supplied to the global command can.
 
 ### '' Null command
 
-    (.,+1)
+    (+1)
 
-An address alone on a line will display the addressed line. A newline
+An address alone on a line will display the addressed lines. A newline
 alone on a line will display the next line (i.e., equivalent to +1p). The
-line displayed becomes the current line.
+last line displayed becomes the current line.
 
 ### '=' Line Number 
 
@@ -184,7 +184,7 @@ the first line in the buffer (i.e., 0 if empty, 1 otherwise).
 The addressed lines are deleted from the buffer.
 
 The current line is set to the first line after the deleted span. If the
-deleted lines were atthe end of the buffer, the new last line becomes the
+deleted lines were at the end of the buffer, the new last line becomes the
 current line. If the buffer is empty after addressed lines are deleted,
 the current line becomes 0.
 

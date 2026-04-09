@@ -296,12 +296,12 @@ impl Display for Warning {
         }
     }
 }
-#[derive(Debug)]
-pub struct ParsePrevailingEolError;
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct ParseEolError;
 
-impl std::error::Error for ParsePrevailingEolError {}
+impl std::error::Error for ParseEolError {}
 
-impl Display for ParsePrevailingEolError {
+impl Display for ParseEolError {
     #[cfg(not(tarpaulin_include))]
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "invalid prevailing EOL string")
