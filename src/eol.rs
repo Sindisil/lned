@@ -114,10 +114,6 @@ impl Eols {
         self.crlfs + self.lfs == 0
     }
 
-    pub fn eol_count(&self) -> usize {
-        self.crlfs + self.lfs
-    }
-
     /// Create an Eols object from text lines.
     ///
     /// [`Eols`].default will be the first EOL found, or `Eol::Lf` if
@@ -211,7 +207,6 @@ impl SubAssign<Eols> for Eols {
     }
 }
 
-#[cfg(test)]
 pub trait IsEol {
     fn is_eol(&self) -> bool;
 }
@@ -222,6 +217,7 @@ impl IsEol for &str {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 

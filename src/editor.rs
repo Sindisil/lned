@@ -18,7 +18,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli;
 use crate::command::{Cmd, PrintAttributes, SubstitutionScope};
-use crate::edit_buffer::{Address, EditBuffer};
+use crate::edit_buffer::EditBuffer;
 use crate::eol::{Eol, Eols};
 use crate::error::{Error, Warning};
 use crate::undo_stack::{Change, ChangeSet};
@@ -104,50 +104,50 @@ impl Editor {
         let mut output = FmtWriter(output);
         let res = match cmd {
             // dispatch editor commands
-            Cmd::Append(address) => {
-                self.append_cmd(input, *address, IndentMode::Auto)
+            Cmd::Append(index) => {
+                self.append_cmd(input, *index, IndentMode::Auto)
             }
-            Cmd::AppendRaw(address) => {
-                self.append_cmd(input, *address, IndentMode::Raw)
+            Cmd::AppendRaw(index) => {
+                self.append_cmd(input, *index, IndentMode::Raw)
             }
-            Cmd::Change(address) => {
-                self.change_cmd(input, *address, IndentMode::Auto)
+            Cmd::Change(span) => {
+                self.change_cmd(input, span.clone(), IndentMode::Auto)
             }
-            Cmd::ChangeRaw(address) => {
-                self.change_cmd(input, *address, IndentMode::Raw)
+            Cmd::ChangeRaw(span) => {
+                self.change_cmd(input, span.clone(), IndentMode::Raw)
             }
-            Cmd::Delete(address) => Ok(self.delete_cmd(*address)),
+            Cmd::Delete(span) => Ok(self.delete_cmd(span.clone())),
             Cmd::Edit(filename) => self.edit_cmd(&mut output, filename),
-            Cmd::Enumerate(address) => {
-                Ok(self.enumerate_cmd(&mut output, *address))
+            Cmd::Enumerate(span) => {
+                Ok(self.enumerate_cmd(&mut output, span.clone()))
             }
             Cmd::File => {
                 self.file_cmd(&mut output);
                 Ok(None)
             }
-            Cmd::Global(address, pattern, commands) => {
-                self.global_cmd(&mut output, *address, pattern, commands)
+            Cmd::Global(span, pattern, commands) => {
+                self.global_cmd(&mut output, span.clone(), pattern, commands)
             }
-            Cmd::Insert(address) => {
-                self.insert_cmd(input, *address, IndentMode::Auto)
+            Cmd::Insert(index) => {
+                self.insert_cmd(input, *index, IndentMode::Auto)
             }
-            Cmd::InsertRaw(address) => {
-                self.insert_cmd(input, *address, IndentMode::Raw)
+            Cmd::InsertRaw(index) => {
+                self.insert_cmd(input, *index, IndentMode::Raw)
             }
-            Cmd::Join(address, separator) => {
-                self.join_cmd(*address, separator.as_deref())
+            Cmd::Join(span, separator) => {
+                self.join_cmd(span.clone(), separator.as_deref())
             }
-            Cmd::LineNumber(address) => {
-                Ok(self.line_number_cmd(&mut output, *address))
+            Cmd::LineNumber(index) => {
+                Ok(self.line_number_cmd(&mut output, *index))
             }
-            Cmd::List(address) => Ok(self.list_cmd(&mut output, *address)),
-            Cmd::Move(address, destination) => {
-                self.move_cmd(*address, *destination)
+            Cmd::List(span) => Ok(self.list_cmd(&mut output, span.clone())),
+            Cmd::Move(span, destination) => {
+                self.move_cmd(span.clone(), *destination)
             }
             Cmd::New => self.new_cmd(),
             Cmd::Newline(eol) => Ok(self.newline_cmd(&mut output, *eol)),
-            Cmd::Null(address) => self.null_cmd(&mut output, *address),
-            Cmd::PageDown(address, page_length, attrs) => {
+            Cmd::Null(index) => self.null_cmd(&mut output, *index),
+            Cmd::PageDown(index, page_length, attrs) => {
                 let (cols, term_rows) = self.terminal_size();
                 if let Some(n) = page_length {
                     self.page_length =
@@ -158,12 +158,12 @@ impl Editor {
                     .map_or(term_rows.saturating_sub(3) / 2, usize::from);
                 Ok(self.page_down_cmd(
                     &mut output,
-                    *address,
+                    *index,
                     *attrs,
                     PageBounds { cols, rows },
                 ))
             }
-            Cmd::PageUp(address, page_length, attrs) => {
+            Cmd::PageUp(index, page_length, attrs) => {
                 let (cols, term_rows) = self.terminal_size();
                 if let Some(n) = page_length {
                     self.page_length =
@@ -174,26 +174,26 @@ impl Editor {
                     .map_or(term_rows.saturating_sub(3) / 2, usize::from);
                 Ok(self.page_up_cmd(
                     &mut output,
-                    *address,
+                    *index,
                     *attrs,
                     PageBounds { cols, rows },
                 ))
             }
-            Cmd::Print(address) => Ok(self.print_cmd(&mut output, *address)),
+            Cmd::Print(span) => Ok(self.print_cmd(&mut output, span.clone())),
             Cmd::Quit => self.quit_cmd(),
-            Cmd::Read(address, filename) => {
-                self.read_cmd(&mut output, *address, filename.as_deref())
+            Cmd::Read(index, filename) => {
+                self.read_cmd(&mut output, *index, filename.as_deref())
             }
             Cmd::Redo => self.buffer.redo().map(|()| None),
             Cmd::Reload => self.reload_cmd(&mut output),
             Cmd::ShowDiff(filename) => {
                 self.show_diff_cmd(&mut output.0, filename.as_deref())
             }
-            Cmd::Substitute(address, pattern, replacement, scope) => {
-                self.substitute_cmd(*address, pattern, replacement, *scope)
+            Cmd::Substitute(span, pattern, replacement, scope) => {
+                self.substitute_cmd(span.clone(), pattern, replacement, *scope)
             }
-            Cmd::Transfer(address, destination) => {
-                self.transfer_cmd(*address, *destination)
+            Cmd::Transfer(span, destination) => {
+                self.transfer_cmd(span.clone(), *destination)
             }
             Cmd::Undo => self.buffer.undo().map(|()| None),
             Cmd::Version => {
@@ -201,8 +201,8 @@ impl Editor {
                 Ok(None)
             }
             Cmd::Write => self.write_cmd(&mut output),
-            Cmd::WriteAs(address, filename) => {
-                self.write_as_cmd(&mut output, *address, filename)
+            Cmd::WriteAs(span, filename) => {
+                self.write_as_cmd(&mut output, span.clone(), filename)
             }
         };
 
@@ -238,11 +238,11 @@ impl Editor {
     fn append_cmd(
         &mut self,
         input: &mut impl LineEdit,
-        address: Option<Address>,
+        index: Option<usize>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, Error> {
-        let index = match address {
-            Some(address) => address.last(),
+        let index = match index {
+            Some(index) => index + 1,
             None if self.buffer.is_empty() => 0,
             None => self.buffer.current_index() + 1,
         };
@@ -271,11 +271,10 @@ impl Editor {
     fn change_cmd(
         &mut self,
         input: &mut impl LineEdit,
-        address: Option<Address>,
+        span: Option<Range<usize>>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, Error> {
-        let span =
-            address.map_or(self.buffer.current_index_as_range(), Into::into);
+        let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         let indent = match indent_mode {
             // Auto-indent is same as first non-blank line in changed
             // span, or first previous non-blank line if changed span is
@@ -308,13 +307,12 @@ impl Editor {
         Ok((!changes.is_empty()).then_some(changes))
     }
 
-    fn delete_cmd(&mut self, address: Option<Address>) -> Option<ChangeSet> {
-        if address.is_none() && self.buffer.is_empty() {
+    fn delete_cmd(&mut self, span: Option<Range<usize>>) -> Option<ChangeSet> {
+        if span.is_none() && self.buffer.is_empty() {
             return None;
         }
 
-        let span =
-            address.map_or(self.buffer.current_index_as_range(), Into::into);
+        let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         let changes = self.buffer.remove(span);
         (!changes.is_empty()).then_some(changes)
     }
@@ -322,13 +320,12 @@ impl Editor {
     fn page_down_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        index: Option<usize>,
         attrs: Option<PrintAttributes>,
         bounds: PageBounds,
     ) -> Option<ChangeSet> {
-        // create addressed span to print from specified address
-        let start = if let Some(addr) = address {
-            addr.last() - 1
+        let start = if let Some(index) = index {
+            index
         } else {
             self.buffer.current_index() + 1
         };
@@ -369,12 +366,12 @@ impl Editor {
     fn page_up_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        index: Option<usize>,
         attrs: Option<PrintAttributes>,
         bounds: PageBounds,
     ) -> Option<ChangeSet> {
-        let end = if let Some(addr) = address {
-            addr.last()
+        let end = if let Some(index) = index {
+            index + 1
         } else {
             self.buffer.current_index()
         };
@@ -548,17 +545,11 @@ impl Editor {
     fn read_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        index: Option<usize>,
         filename: Option<&Path>,
     ) -> Result<Option<ChangeSet>, Error> {
-        // Translate address into index
-        let index = match address {
-            Some(address) if address.last() > self.buffer.len() => {
-                return Err(Error::InvalidAddress);
-            }
-            Some(address) => address.last(),
-            None => self.buffer.current_index(),
-        };
+        // Handle default
+        let index = index.unwrap_or(self.buffer.current_index());
 
         // read shouldn't set the remembered filename
         let filename = filename
@@ -593,14 +584,14 @@ impl Editor {
 
     fn substitute_cmd(
         &mut self,
-        address: Option<Address>,
+        span: Option<Range<usize>>,
         pattern: &Regex,
         replacement: &str,
         scope: SubstitutionScope,
     ) -> Result<Option<ChangeSet>, Error> {
-        // Translate address into range
+        // Handle default
         let mut span =
-            address.map_or(self.buffer.current_index_as_range(), Into::into);
+            span.unwrap_or_else(|| self.buffer.current_index_as_range());
         let prevailing_eol = self.buffer.eols().prevailing();
 
         let mut index = span.start;
@@ -674,16 +665,12 @@ impl Editor {
 
     fn transfer_cmd(
         &mut self,
-        address: Option<Address>,
-        destination: Address,
+        span: Option<Range<usize>>,
+        destination: usize,
     ) -> Result<Option<ChangeSet>, Error> {
-        // Translate addresses
-        let destination = destination.last();
-        if destination > self.buffer.len() {
-            return Err(Error::InvalidAddress);
-        }
+        // Handle default
         let source =
-            address.map_or(self.buffer.current_index_as_range(), Into::into);
+            span.unwrap_or_else(|| self.buffer.current_index_as_range());
         if source.contains(&destination) {
             return Err(Error::DestinationIntersectsSource);
         }
@@ -694,15 +681,14 @@ impl Editor {
     fn enumerate_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        span: Option<Range<usize>>,
     ) -> Option<ChangeSet> {
-        if address.is_none() && self.buffer.is_empty() {
+        if span.is_none() && self.buffer.is_empty() {
             return None;
         }
 
-        // Translate address to range
-        let span =
-            address.map_or(self.buffer.current_index_as_range(), Into::into);
+        // Handle default
+        let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         self.buffer.set_current_index(span.end - 1);
         let attrs = PrintAttributes { enumerate: true, ..Default::default() };
         for i in span {
@@ -738,7 +724,7 @@ impl Editor {
     fn global_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        span: Option<Range<usize>>,
 
         pattern: &Regex,
         commands: &str,
@@ -748,8 +734,7 @@ impl Editor {
         self.previous_pattern = Some(pattern.clone());
         // Compile indices of lines that match pattern
         // (not including EOL)
-        let search_span =
-            address.map_or_else(|| 0..self.buffer.len(), Into::into);
+        let search_span = span.unwrap_or_else(|| 0..self.buffer.len());
         let matched_lines = (search_span)
             .filter(|&n| {
                 self.buffer[n]
@@ -795,40 +780,36 @@ impl Editor {
             .map_err(|e| Error::ReadGlobalCmd { source: Some(Box::new(e)) })?
             {
                 let cs = match cmd {
-                    Cmd::Append(address) => {
-                        self.append_cmd(&mut input, address, IndentMode::Auto)
+                    Cmd::Append(index) => {
+                        self.append_cmd(&mut input, index, IndentMode::Auto)
                     }
-                    Cmd::Change(address) => {
-                        self.change_cmd(&mut input, address, IndentMode::Auto)
+                    Cmd::Change(index) => {
+                        self.change_cmd(&mut input, index, IndentMode::Auto)
                     }
-                    Cmd::Delete(address) => Ok(self.delete_cmd(address)),
-                    Cmd::Enumerate(address) => {
-                        Ok(self.enumerate_cmd(output, address))
+                    Cmd::Delete(span) => Ok(self.delete_cmd(span)),
+                    Cmd::Enumerate(span) => {
+                        Ok(self.enumerate_cmd(output, span))
                     }
                     Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
-                    Cmd::Insert(address) => {
-                        self.insert_cmd(&mut input, address, IndentMode::Auto)
+                    Cmd::Insert(index) => {
+                        self.insert_cmd(&mut input, index, IndentMode::Auto)
                     }
-                    Cmd::Join(address, separator) => {
-                        self.join_cmd(address, separator.as_deref())
+                    Cmd::Join(span, separator) => {
+                        self.join_cmd(span, separator.as_deref())
                     }
-                    Cmd::Move(address, destination) => {
-                        self.move_cmd(address, destination)
+                    Cmd::Move(span, destination) => {
+                        self.move_cmd(span, destination)
                     }
-                    Cmd::List(address) => Ok(self.list_cmd(output, address)),
-                    Cmd::Null(address) | Cmd::Print(address) => {
-                        Ok(self.print_cmd(output, address))
+                    Cmd::List(span) => Ok(self.list_cmd(output, span)),
+                    Cmd::Null(index) => {
+                        Ok(self.print_cmd(output, index.map(|i| i..i + 1)))
                     }
-                    Cmd::Substitute(address, pattern, replacement, scope) => {
-                        self.substitute_cmd(
-                            address,
-                            &pattern,
-                            &replacement,
-                            scope,
-                        )
+                    Cmd::Print(span) => Ok(self.print_cmd(output, span)),
+                    Cmd::Substitute(span, pattern, replacement, scope) => {
+                        self.substitute_cmd(span, &pattern, &replacement, scope)
                     }
-                    Cmd::Transfer(address, destination) => {
-                        self.transfer_cmd(address, destination)
+                    Cmd::Transfer(span, destination) => {
+                        self.transfer_cmd(span, destination)
                     }
                     _ => Err(Error::UnsupportedGlobalCmd),
                 }?;
@@ -873,9 +854,9 @@ impl Editor {
     fn null_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        index: Option<usize>,
     ) -> Result<Option<ChangeSet>, Error> {
-        if address.is_none() {
+        if index.is_none() {
             if self.buffer.is_empty() {
                 return Ok(None);
             }
@@ -885,9 +866,8 @@ impl Editor {
             }
         }
 
-        // Translate address into index
-        let index =
-            address.map_or(self.buffer.current_index() + 1, |a| a.last() - 1);
+        // Handle default
+        let index = index.unwrap_or(self.buffer.current_index() + 1);
 
         self.buffer.set_current_index(index);
         let pr_attrs = PrintAttributes::default();
@@ -898,14 +878,13 @@ impl Editor {
     fn print_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        span: Option<Range<usize>>,
     ) -> Option<ChangeSet> {
-        if address.is_none() && self.buffer.is_empty() {
+        if span.is_none() && self.buffer.is_empty() {
             return None;
         }
-        // Translate address into range
-        let span =
-            address.map_or(self.buffer.current_index_as_range(), Into::into);
+        // Handle default
+        let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         self.buffer.set_current_index(span.end - 1);
         let attributes = PrintAttributes::default();
         for i in span {
@@ -917,15 +896,14 @@ impl Editor {
     fn list_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        span: Option<Range<usize>>,
     ) -> Option<ChangeSet> {
-        if address.is_none() && self.buffer.is_empty() {
+        if span.is_none() && self.buffer.is_empty() {
             return None;
         }
 
-        // Translate address into range
-        let span = address
-            .map_or_else(|| self.buffer.current_index_as_range(), Into::into);
+        // Handle default
+        let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         self.buffer.set_current_index(span.end - 1);
         let attributes =
             PrintAttributes { expand_escapes: true, ..Default::default() };
@@ -937,13 +915,11 @@ impl Editor {
 
     fn move_cmd(
         &mut self,
-        address: Option<Address>,
-        destination: Address,
+        span: Option<Range<usize>>,
+        destination: usize,
     ) -> Result<Option<ChangeSet>, Error> {
-        // Translate address and destination into range & index
-        let span = address
-            .map_or_else(|| self.buffer.current_index_as_range(), Into::into);
-        let destination = destination.last();
+        // Handle default
+        let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         if span.contains(&destination) {
             return Err(Error::DestinationIntersectsSource);
         }
@@ -953,12 +929,11 @@ impl Editor {
     fn insert_cmd(
         &mut self,
         input: &mut impl LineEdit,
-        address: Option<Address>,
+        index: Option<usize>,
         indent_mode: IndentMode,
     ) -> Result<Option<ChangeSet>, Error> {
-        // Translate address into range
-        let index = address
-            .map_or_else(|| self.buffer.current_index(), |a| a.last() - 1);
+        // Handle default
+        let index = index.unwrap_or_else(|| self.buffer.current_index());
         let indent = match indent_mode {
             // Auto-indent is same as first non-blank line after index.
             IndentMode::Auto => self.buffer[index..]
@@ -984,7 +959,7 @@ impl Editor {
 
     fn join_cmd(
         &mut self,
-        address: Option<Address>,
+        span: Option<Range<usize>>,
         separator: Option<&str>,
     ) -> Result<Option<ChangeSet>, Error> {
         fn simple_join(buffer: &EditBuffer, mut span: Range<usize>) -> String {
@@ -1024,9 +999,9 @@ impl Editor {
             joined_line
         }
 
-        // Translate address into range
-        let mut span = address
-            .map_or_else(|| self.buffer.current_index_as_range(), Into::into);
+        // Handle default
+        let mut span =
+            span.unwrap_or_else(|| self.buffer.current_index_as_range());
         // If only one line addressed, join with next line
         if span.end - span.start == 1 {
             span.end += 1;
@@ -1052,14 +1027,14 @@ impl Editor {
     fn line_number_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        index: Option<usize>,
     ) -> Option<ChangeSet> {
-        match address {
+        match index {
             None => {
                 writeln!(output, "{}", self.buffer.len()).unwrap();
             }
-            Some(address) => {
-                writeln!(output, "{}", address.last()).unwrap();
+            Some(index) => {
+                writeln!(output, "{}", index + 1).unwrap();
             }
         }
         None
@@ -1134,7 +1109,7 @@ impl Editor {
     fn write_as_cmd(
         &mut self,
         output: &mut impl fmt::Write,
-        address: Option<Address>,
+        span: Option<Range<usize>>,
         filename: &Path,
     ) -> Result<Option<ChangeSet>, Error> {
         if self.current_file.as_deref() == Some(filename) {
@@ -1142,7 +1117,7 @@ impl Editor {
         }
 
         let overwrite_warning =
-            Warning::WriteAsOverwrite(address, filename.to_owned());
+            Warning::WriteAsOverwrite(span.clone(), filename.to_owned());
         let mut writer = EditedFile::open_or_create(filename)?;
         if !writer.new_file
             && self.previous_warning.as_ref() != Some(&overwrite_warning)
@@ -1161,15 +1136,12 @@ impl Editor {
             return Err(Error::Warning(overwrite_warning));
         }
 
-        // Translate address into range
-        let span = address.map_or(0..self.buffer.len(), Into::into);
+        // Handle default
+        let span = span.unwrap_or(0..self.buffer.len());
+        let whole_buffer_write = span.end - span.start == self.buffer.len();
         write_file(&mut self.buffer, output, span, &mut writer)?;
 
-        if self.current_file.is_none()
-            && address.is_none_or(|addr| {
-                addr.first() == 1 && addr.last() == self.buffer.len()
-            })
-        {
+        if self.current_file.is_none() && whole_buffer_write {
             // Saving whole buffer for first time
             self.current_file = Some(filename.to_owned());
             self.update_file_metadata();
@@ -1300,7 +1272,8 @@ fn adjust_global_list(list: &mut VecDeque<usize>, change: &Change) {
                 let span_len = span.end - span.start;
                 let rem_adj = if *i >= span.end { span_len } else { 0 };
                 let ins_adj = if *i >= *destination { span_len } else { 0 };
-                *i += ins_adj - rem_adj;
+                *i += ins_adj;
+                *i -= rem_adj;
                 true
             });
         }
@@ -1757,8 +1730,7 @@ mod tests {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
         editor.buffer.set_current_index(2);
-        let address = Address::from_str("1", &mut editor.buffer, &mut None);
-        editor.null_cmd(&mut output, address).unwrap();
+        editor.null_cmd(&mut output, Some(0)).unwrap();
         assert_eq!(editor.buffer.current_index(), 0);
         assert_eq!(&output, "1\n");
     }
@@ -1793,8 +1765,7 @@ mod tests {
         editor.buffer =
             EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
         editor.buffer.set_current_index(4);
-        let address = Address::from_str("2,4", &mut editor.buffer, &mut None);
-        editor.null_cmd(&mut output, address).unwrap();
+        editor.null_cmd(&mut output, Some(3)).unwrap();
         assert_eq!(output, "4\r\n");
         assert_eq!(editor.buffer.current_index(), 3);
     }
@@ -1836,8 +1807,7 @@ mod tests {
         ]);
         editor.buffer.set_current_index(2);
 
-        let address = Address::from_str("6,9", &mut editor.buffer, &mut None);
-        editor.enumerate_cmd(&mut output, address);
+        editor.enumerate_cmd(&mut output, Some(5..9));
     }
 
     #[test]
@@ -1853,20 +1823,23 @@ mod tests {
         }
         input.extend_from_slice(".\n".as_bytes());
         let mut input = &input[..];
-        let address = Address::from_str("$", &mut editor.buffer, &mut None);
-        editor.append_cmd(&mut input, address, IndentMode::Raw).unwrap();
+        editor
+            .append_cmd(
+                &mut input,
+                Some(editor.buffer.len() - 1),
+                IndentMode::Raw,
+            )
+            .unwrap();
         editor.buffer.set_current_index(2);
         assert_eq!(1024, editor.buffer.len());
         output.clear();
 
-        let address = Address::from_str("4,900", &mut editor.buffer, &mut None);
-        editor.enumerate_cmd(&mut output, address);
+        editor.enumerate_cmd(&mut output, Some(3..900));
         let expected = "   4  4\r\n";
         assert_eq!(expected, &output[0..expected.len()]);
         output.clear();
 
-        let address = Address::from_str("999", &mut editor.buffer, &mut None);
-        editor.enumerate_cmd(&mut output, address);
+        editor.enumerate_cmd(&mut output, Some(998..999));
         let expected = " 999  999\r\n";
         assert_eq!(expected, &output[0..expected.len()]);
     }
@@ -1930,9 +1903,9 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("t..").unwrap();
         let commands = "\n".to_owned();
-        let address = Address::from_str("1,3", &mut editor.buffer, &mut None);
-        let res =
-            editor.global_cmd(&mut output, address, &pat, &commands).unwrap();
+        let res = editor
+            .global_cmd(&mut output, Some(0..3), &pat, &commands)
+            .unwrap();
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "two\r\nthree\r\n");
     }
@@ -1960,9 +1933,8 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("t..").unwrap();
         let commands = "n\r\n".to_owned();
-        let address = Address::from_str("1, 3", &mut editor.buffer, &mut None);
         let res = editor
-            .global_cmd(&mut output, address, &pat, &commands)
+            .global_cmd(&mut output, Some(0..3), &pat, &commands)
             .expect("no error");
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "2  two\n3  three\n");
@@ -1978,9 +1950,8 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("e$").unwrap();
         let commands = "-1,.n\r\n".to_owned();
-        let address = Address::from_str("2, 5", &mut editor.buffer, &mut None);
         let res = editor
-            .global_cmd(&mut output, address, &pat, &commands)
+            .global_cmd(&mut output, Some(1..5), &pat, &commands)
             .expect("no error");
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "2  two\n3  three\n4  four\n5  five\n");
@@ -1994,9 +1965,8 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("t..").unwrap();
         let commands = "l\r\n".to_owned();
-        let address = Address::from_str("1, 3", &mut editor.buffer, &mut None);
         let res = editor
-            .global_cmd(&mut output, address, &pat, &commands)
+            .global_cmd(&mut output, Some(0..3), &pat, &commands)
             .expect("no error");
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "two\\n$\nthree\\n$\n");
@@ -2012,9 +1982,8 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("e$").unwrap();
         let commands = "-1,.l\r\n".to_owned();
-        let address = Address::from_str("2, 5", &mut editor.buffer, &mut None);
         let res = editor
-            .global_cmd(&mut output, address, &pat, &commands)
+            .global_cmd(&mut output, Some(1..5), &pat, &commands)
             .expect("no error");
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "two\\n$\nthree\\n$\nfour\\n$\nfive\\n$\n");
@@ -2034,9 +2003,8 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("e$").unwrap();
         let commands = "a\nappend\n.\n".to_owned();
-        let address = Address::from_str("1, 6", &mut editor.buffer, &mut None);
         let changes = editor
-            .global_cmd(&mut output, address, &pat, &commands)
+            .global_cmd(&mut output, Some(0..6), &pat, &commands)
             .expect("no error")
             .expect("some changes");
         assert!(!changes.is_empty());
@@ -2082,9 +2050,8 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("([a-z]*e)$").unwrap();
         let commands = ".,+c\nchange 1\nchange 2\nchange 3\n.\n".to_owned();
-        let address = Address::from_str("1, 6", &mut editor.buffer, &mut None);
         let Ok(Some(changes)) =
-            editor.global_cmd(&mut output, address, &pat, &commands)
+            editor.global_cmd(&mut output, Some(0..6), &pat, &commands)
         else {
             panic!("global_cmd's err return wasn't None!")
         };
@@ -2115,9 +2082,8 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("e$").unwrap();
         let commands = "dn\n".to_owned();
-        let address = Address::from_str("1, 6", &mut editor.buffer, &mut None);
         let Ok(Some(changes)) =
-            editor.global_cmd(&mut output, address, &pat, &commands)
+            editor.global_cmd(&mut output, Some(0..6), &pat, &commands)
         else {
             panic!("global_cmd err return wasn't None!");
         };
@@ -2159,9 +2125,8 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("e$").unwrap();
         let commands = "i\r\ninsert\r\n.\r\n".to_owned();
-        let address = Address::from_str("1, 6", &mut editor.buffer, &mut None);
         let Ok(Some(changes)) =
-            editor.global_cmd(&mut output, address, &pat, &commands)
+            editor.global_cmd(&mut output, Some(0..6), &pat, &commands)
         else {
             panic!("global_cmd returned an unexpected error!");
         };
@@ -2194,8 +2159,7 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("e$").unwrap();
         let commands = "jn\n".to_owned();
-        let address = Address::from_str("1, 6", &mut editor.buffer, &mut None);
-        let res = editor.global_cmd(&mut output, address, &pat, &commands);
+        let res = editor.global_cmd(&mut output, Some(0..6), &pat, &commands);
         let changes = match res {
             Err(e) => panic!("unexpected error {e:?}"),
             Ok(None) => panic!("should have returned Some(ChangeSet)"),
@@ -2226,20 +2190,14 @@ mod tests {
         ]);
         let orig = editor.buffer.clone();
         let mut expected = EditBuffer::with_lines(&[
-            "three\r\n",
-            "two",
-            "one",
-            "four",
-            "five",
-            "six",
+            "one\r\n", "four", "five", "six", "two", "three",
         ]);
-        expected.set_current_index(1);
+        expected.set_current_index(5);
         let mut output = String::new();
         let pat = Regex::new("^t").unwrap();
-        let commands = "m0\r\n".to_owned();
-        let address = Address::from_str("1, 6", &mut editor.buffer, &mut None);
+        let commands = "m$\r\n".to_owned();
         let Some(changes) = editor
-            .global_cmd(&mut output, address, &pat, &commands)
+            .global_cmd(&mut output, Some(0..6), &pat, &commands)
             .expect("should have been Ok!")
         else {
             panic!("should have been Some(changes)!");
@@ -2268,15 +2226,14 @@ mod tests {
         ]);
         let orig = editor.buffer.clone();
         let mut expected = EditBuffer::with_lines(&[
-            "two\r\n", "three", "one", "four", "five", "six",
+            "one\r\n", "four", "five", "six", "two", "three",
         ]);
-        expected.set_current_index(2);
+        expected.set_current_index(5);
         let mut output = String::new();
         let pat = Regex::new("^t").unwrap();
-        let commands = ".,+m0\r\n".to_owned();
-        let address = Address::from_str("1, 6", &mut editor.buffer, &mut None);
+        let commands = ".,+m$\r\n".to_owned();
         let Some(changes) = editor
-            .global_cmd(&mut output, address, &pat, &commands)
+            .global_cmd(&mut output, Some(0..6), &pat, &commands)
             .expect("should have been Ok!")
         else {
             panic!("should have been Some(changes)!");
@@ -2433,9 +2390,8 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new("e$").unwrap();
         let commands = "t$\r\n".to_owned();
-        let address = Address::from_str("1, 6", &mut editor.buffer, &mut None);
         let Some(changes) = editor
-            .global_cmd(&mut output, address, &pat, &commands)
+            .global_cmd(&mut output, Some(0..6), &pat, &commands)
             .expect("should have been Ok!")
         else {
             panic!("should have been Some(changes)!");
@@ -2464,8 +2420,7 @@ mod tests {
         let mut output = String::new();
         let pat = Regex::new(r"t..").unwrap();
         let commands = "e filename.txt\n".to_owned();
-        let address = Address::from_str("1, 3", &mut editor.buffer, &mut None);
-        let res = editor.global_cmd(&mut output, address, &pat, &commands);
+        let res = editor.global_cmd(&mut output, Some(0..3), &pat, &commands);
         assert!(matches!(res, Err(Error::UnsupportedGlobalCmd)));
     }
 
@@ -2485,8 +2440,7 @@ mod tests {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["1\r\n", "2", "3"]);
         editor.buffer.set_current_index(2);
-        let address = Address::from_str("3", &mut editor.buffer, &mut None);
-        editor.print_cmd(&mut output, address);
+        editor.print_cmd(&mut output, Some(2..3));
         assert_eq!(&output[..], "3\r\n");
     }
 
@@ -2497,8 +2451,7 @@ mod tests {
         editor.buffer =
             EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
         editor.buffer.set_current_index(5);
-        let address = Address::from_str("2, 4", &mut editor.buffer, &mut None);
-        editor.print_cmd(&mut output, address);
+        editor.print_cmd(&mut output, Some(1..4));
         assert_eq!(&output, "2\r\n3\r\n4\r\n");
     }
 
@@ -2509,8 +2462,7 @@ mod tests {
         editor.buffer =
             EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
         editor.buffer.set_current_index(0);
-        let address = Address::from_str("2, 4", &mut editor.buffer, &mut None);
-        editor.print_cmd(&mut output, address);
+        editor.print_cmd(&mut output, Some(1..4));
         assert_eq!(3, editor.buffer.current_index());
     }
 
@@ -2775,12 +2727,16 @@ mod tests {
 
     #[test]
     fn move_cmd_dispatch() {
-        let input = b"a\n3\n4\n5\n1\n2\n.\n3,4m0\n1,$p\nq\nq\n";
+        let input = b"a\n3\n4\n5\n1\n2\n.\n1,3m5\n1,$p\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
             .unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("5\n1\n3\n4\n2\n"));
+        let expected = "1\n2\n3\n4\n5\nunsaved";
+        assert!(
+            output.starts_with(expected),
+            "expected {output:?} \n\tto start with {expected:?}"
+        );
     }
 
     #[test]
@@ -2895,12 +2851,16 @@ mod tests {
 
     #[test]
     fn transfer_cmd_dispatch() {
-        let input = b"a\n3\n4\n5\n1\n2\n.\n4,5t0\n1,$p\nq\nq\n";
+        let input = b"a\n1\n2\n3\n4\n5\n.\n1,2t5\n1,$p\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
             .unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("1\n2\n3\n4\n5\n1\n2\n"));
+        let expected = "1\n2\n3\n4\n5\n1\n2\nunsaved";
+        assert!(
+            output.starts_with(expected),
+            "expected {expected:?} at start of {output:?}"
+        );
     }
 
     #[test]
@@ -2914,10 +2874,9 @@ mod tests {
             "seventeen eighteen nineteen twenty",
         ]);
         editor.buffer.set_current_index(4);
-        let address = Address::from_str("1, 5", &mut editor.buffer, &mut None);
         let res = editor
             .substitute_cmd(
-                address,
+                Some(0..5),
                 &Regex::new("won't match").unwrap(),
                 "",
                 SubstitutionScope::Global,
@@ -3041,10 +3000,10 @@ mod tests {
             None,
         ))) = command::parse_substitute_cmd(
             &mut cmd_line,
-            &editor.buffer,
-            None,
-            &mut None,
             &mut input,
+            &editor.buffer,
+            &mut None,
+            None,
         )
         else {
             panic!("should have parsed to Cmd::Substitute!");
@@ -3085,10 +3044,9 @@ mod tests {
             "9:one two three four\n",
         ]);
         expected.set_current_index(7);
-        let address = Address::from_str("2, 9", &mut editor.buffer, &mut None);
         editor
             .substitute_cmd(
-                address,
+                Some(1..9),
                 &Regex::new("s[aeiou]").unwrap(),
                 "'",
                 SubstitutionScope::Single(1),
@@ -3126,10 +3084,9 @@ mod tests {
             "9:one two three four\n",
         ]);
         expected.set_current_index(7);
-        let address = Address::from_str("2, 9", &mut editor.buffer, &mut None);
         let Some(changes) = editor
             .substitute_cmd(
-                address,
+                Some(1..9),
                 &Regex::new("s[aeiou]").unwrap(),
                 "'",
                 SubstitutionScope::Single(1),
@@ -3161,10 +3118,9 @@ mod tests {
             "seventeen eighteen nineteen twenty",
         ]);
         editor.buffer.set_current_index(4);
-        let address = Address::from_str("2, 3", &mut editor.buffer, &mut None);
         editor
             .substitute_cmd(
-                address,
+                Some(1..3),
                 &Regex::new("e+n").unwrap(),
                 "'",
                 SubstitutionScope::Single(1),
@@ -3187,10 +3143,9 @@ mod tests {
             "seventeen eighteen nineteen twenty",
         ]);
         editor.buffer.set_current_index(4);
-        let address = Address::from_str("2, 4", &mut editor.buffer, &mut None);
         editor
             .substitute_cmd(
-                address,
+                Some(1..4),
                 &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
                 "$1 ($0)",
                 SubstitutionScope::Single(2),
@@ -3218,9 +3173,8 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         let before = editor.buffer.clone();
-        let address = Address::from_str("2, 4", &mut editor.buffer, &mut None);
         let Ok(Some(changes)) = editor.substitute_cmd(
-            address,
+            Some(1..4),
             &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
             "$1 ($0)",
             SubstitutionScope::Single(2),
@@ -3251,11 +3205,7 @@ mod tests {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer =
             EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let source = Address::from_str("3, 5", &mut editor.buffer, &mut None);
-        let destination =
-            Address::from_str("4", &mut editor.buffer, &mut None).unwrap();
-        let res =
-            editor.transfer_cmd(source, destination).expect_err("should fail");
+        let res = editor.transfer_cmd(Some(2..5), 3).expect_err("should fail");
         assert!(matches!(res, Error::DestinationIntersectsSource));
     }
 
@@ -3308,9 +3258,8 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
         let expected = ["1\n", "2\n", "a\n", "b\n", "c\n", "3\n"];
         let mut input = IndentReader::from(&["a\r\n", "b\r\n", "c\r\n"]);
-        let address = Address::from_str("2", &mut editor.buffer, &mut None);
         let _ = editor
-            .append_cmd(&mut input, address, IndentMode::Auto)
+            .append_cmd(&mut input, Some(1), IndentMode::Auto)
             .expect("lines appended");
         assert_eq!(editor.buffer[..], expected);
     }
@@ -3321,9 +3270,8 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
         let expected = ["1\n", "2\n", "a\n", "b\n", "c\n", "3\n"];
         let mut input = IndentReader::from(&["a\r\n", "b\r\n", "c\r\n"]);
-        let address = Address::from_str("3", &mut editor.buffer, &mut None);
         let _ = editor
-            .insert_cmd(&mut input, address, IndentMode::Auto)
+            .insert_cmd(&mut input, Some(2), IndentMode::Auto)
             .expect("lines appended");
         assert_eq!(editor.buffer[..], expected);
     }
@@ -3334,9 +3282,8 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
         let expected = ["1\n", "a\n", "b\n", "c\n", "3\n"];
         let mut input = IndentReader::from(&["a\r\n", "b\r\n", "c\r\n"]);
-        let address = Address::from_str("2", &mut editor.buffer, &mut None);
         let _ = editor
-            .change_cmd(&mut input, address, IndentMode::Auto)
+            .change_cmd(&mut input, Some(1..2), IndentMode::Auto)
             .expect("lines appended");
         assert_eq!(editor.buffer[..], expected);
     }
@@ -3353,9 +3300,8 @@ mod tests {
             "        further\n",
             "three\n",
         ];
-        let address = Address::from_str("2", &mut editor.buffer, &mut None);
         let _ = editor
-            .append_cmd(&mut input, address, IndentMode::Auto)
+            .append_cmd(&mut input, Some(1), IndentMode::Auto)
             .expect("lines appended");
         assert_eq!(&editor.buffer[..], expected);
     }
@@ -3380,9 +3326,8 @@ mod tests {
             "    two\n",
             "three\n",
         ];
-        let address = Address::from_str("2", &mut editor.buffer, &mut None);
         let _ = editor
-            .insert_cmd(&mut input, address, IndentMode::Auto)
+            .insert_cmd(&mut input, Some(1), IndentMode::Auto)
             .expect("lines inserted");
         assert_eq!(&editor.buffer[..], expected);
     }
@@ -3470,8 +3415,7 @@ mod tests {
         );
 
         output.clear();
-        let address = Address::from_str("1", &mut editor.buffer, &mut None);
-        editor.delete_cmd(address).unwrap();
+        editor.delete_cmd(Some(0..1)).unwrap();
         assert_eq!(editor.buffer.len(), 9);
         let ret = editor.reload_cmd(&mut output).expect_err("unsaved");
         assert!(matches!(ret, Error::Warning(Warning::ReloadUnsaved)));
@@ -3512,9 +3456,8 @@ mod tests {
             "        replacing blanks\n",
             "    six\n",
         ];
-        let address = Address::from_str("8, 10", &mut editor.buffer, &mut None);
         let _ = editor
-            .change_cmd(&mut input, address, IndentMode::Auto)
+            .change_cmd(&mut input, Some(7..10), IndentMode::Auto)
             .expect("blanks replaced");
         assert_eq!(&editor.buffer[..], expected);
 
@@ -3528,9 +3471,8 @@ mod tests {
             "        replacing blanks\n",
             "    six\n",
         ];
-        let address = Address::from_str("2, 5", &mut editor.buffer, &mut None);
         let _ = editor
-            .change_cmd(&mut input, address, IndentMode::Auto)
+            .change_cmd(&mut input, Some(1..5), IndentMode::Auto)
             .expect("lines changed");
         assert_eq!(&editor.buffer[..], expected);
 
@@ -3544,9 +3486,8 @@ mod tests {
             "        replacing blanks\n",
             "    six\n",
         ];
-        let address = Address::from_str("1", &mut editor.buffer, &mut None);
         let _ = editor
-            .change_cmd(&mut input, address, IndentMode::Auto)
+            .change_cmd(&mut input, Some(0..1), IndentMode::Auto)
             .expect("line changed");
         assert_eq!(&editor.buffer[..], expected);
     }
@@ -3564,13 +3505,12 @@ mod tests {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
         let expected = editor.buffer.clone();
-        let address = Address::from_str("3", &mut editor.buffer, &mut None);
-        let res = editor.join_cmd(address, None).expect_err("invalid address");
+        let res =
+            editor.join_cmd(Some(2..3), None).expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
         assert_eq!(editor.buffer, expected);
         let expected = EditBuffer::with_lines(&["1\n", "23"]);
-        let address = Address::from_str("2", &mut editor.buffer, &mut None);
-        editor.join_cmd(address, None).unwrap();
+        editor.join_cmd(Some(1..2), None).unwrap();
         assert_eq!(editor.buffer, expected);
     }
 
@@ -3587,15 +3527,9 @@ mod tests {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer =
             EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let source = Address::from_str("3, 5", &mut editor.buffer, &mut None);
-        let destination =
-            Address::from_str("4", &mut editor.buffer, &mut None).unwrap();
-        let res =
-            editor.move_cmd(source, destination).expect_err("should fail");
+        let res = editor.move_cmd(Some(2..5), 3).expect_err("should fail");
         assert!(matches!(res, Error::DestinationIntersectsSource));
-        let destination =
-            Address::from_str("5", &mut editor.buffer, &mut None).unwrap();
-        editor.move_cmd(source, destination).expect("shouldn't fail");
+        editor.move_cmd(Some(2..5), 5).expect("shouldn't fail");
     }
 
     #[test]
@@ -3610,8 +3544,7 @@ mod tests {
         assert_eq!(out_text, "6\n");
         assert!(res.is_none());
         output.clear();
-        let address = Address::from_str("2", &mut editor.buffer, &mut None);
-        let res = editor.line_number_cmd(&mut output, address);
+        let res = editor.line_number_cmd(&mut output, Some(1));
         let out_text = &output;
         assert!(res.is_none());
         assert_eq!(out_text, "2\n");
@@ -3984,8 +3917,7 @@ mod tests {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["1\r\n", "2", "3"]);
         editor.buffer.set_current_index(2);
-        let address = Address::from_str("3", &mut editor.buffer, &mut None);
-        editor.list_cmd(&mut output, address);
+        editor.list_cmd(&mut output, Some(2..3));
         assert_eq!(&output, "3\\r\\n$\r\n");
     }
 
@@ -3996,8 +3928,7 @@ mod tests {
         editor.buffer =
             EditBuffer::with_lines(&["1\r\n", "2\t2", "3", "4", "5", "6"]);
         editor.buffer.set_current_index(5);
-        let address = Address::from_str("2, 4", &mut editor.buffer, &mut None);
-        editor.list_cmd(&mut output, address);
+        editor.list_cmd(&mut output, Some(1..4));
         assert_eq!(&output, "2\\t2\\r\\n$\r\n3\\r\\n$\r\n4\\r\\n$\r\n");
     }
 
@@ -4008,8 +3939,8 @@ mod tests {
         editor.buffer =
             EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
         editor.buffer.set_current_index(5);
-        let address = Address::from_str("2, 4", &mut editor.buffer, &mut None);
-        editor.list_cmd(&mut output, address);
+        editor.list_cmd(&mut output, Some(1..4));
+        assert_eq!(editor.buffer.current_index(), 3);
     }
 
     #[test]
@@ -4051,10 +3982,9 @@ mod tests {
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
         editor.buffer = EditBuffer::from(lines);
         let mut output = String::new();
-        let address = Address::from_str("60", &mut editor.buffer, &mut None);
         let res = editor.page_down_cmd(
             &mut output,
-            address,
+            Some(59),
             None,
             PageBounds { cols: 80, rows: 24 },
         );
@@ -4069,10 +3999,9 @@ mod tests {
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
         editor.buffer = EditBuffer::from(lines);
         let mut output = String::new();
-        let address = Address::from_str("5", &mut editor.buffer, &mut None);
         let res = editor.page_up_cmd(
             &mut output,
-            address,
+            Some(4),
             None,
             PageBounds { cols: 80, rows: 24 },
         );
@@ -4124,10 +4053,9 @@ mod tests {
         editor.buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
         let mut input = b"" as &[u8];
-        let address = Address::from_str("10", &mut editor.buffer, &mut None);
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(address, Some(3), None),
+                &Cmd::PageDown(Some(9), Some(3), None),
                 &mut output,
                 &mut input,
             )
@@ -4152,10 +4080,9 @@ mod tests {
         editor.buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
         let mut input = b"" as &[u8];
-        let address = Address::from_str("10", &mut editor.buffer, &mut None);
         editor
             .dispatch_cmd(
-                &Cmd::PageUp(address, Some(3), None),
+                &Cmd::PageUp(Some(9), Some(3), None),
                 &mut output,
                 &mut input,
             )
@@ -4180,29 +4107,26 @@ mod tests {
         editor.buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
         let mut input = b"" as &[u8];
-        let address = Address::from_str("1", &mut editor.buffer, &mut None);
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(address, None, None),
+                &Cmd::PageDown(Some(0), None, None),
                 &mut output,
                 &mut input,
             )
             .unwrap();
         let orig_end_line = editor.buffer.current_index();
-        let address = Address::from_str("10", &mut editor.buffer, &mut None);
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(address, Some(3), None),
+                &Cmd::PageDown(Some(9), Some(3), None),
                 &mut output,
                 &mut input,
             )
             .expect("scroll 10..12");
         assert_eq!(editor.buffer.current_index(), 11);
         assert_eq!(editor.page_length, NonZero::new(3));
-        let address = Address::from_str("1", &mut editor.buffer, &mut None);
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(address, Some(0), None),
+                &Cmd::PageDown(Some(0), Some(0), None),
                 &mut output,
                 &mut input,
             )
@@ -4218,19 +4142,17 @@ mod tests {
         editor.buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
         let mut input = b"" as &[u8];
-        let address = Address::from_str("1", &mut editor.buffer, &mut None);
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(address, None, None),
+                &Cmd::PageDown(Some(0), None, None),
                 &mut output,
                 &mut input,
             )
             .unwrap();
         assert!(editor.page_length.is_none());
-        let address = Address::from_str("10", &mut editor.buffer, &mut None);
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(address, Some(3), None),
+                &Cmd::PageDown(Some(9), Some(3), None),
                 &mut output,
                 &mut input,
             )
@@ -4254,11 +4176,10 @@ mod tests {
         editor.buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
         let mut input = b"" as &[u8];
-        let address = Address::from_str("10", &mut editor.buffer, &mut None);
         editor
             .dispatch_cmd(
                 &Cmd::PageDown(
-                    address,
+                    Some(9),
                     Some(3),
                     Some(PrintAttributes {
                         enumerate: true,
@@ -4300,11 +4221,10 @@ mod tests {
         editor.buffer = EditBuffer::from(lines);
         let mut output = Vec::new();
         let mut input = b"" as &[u8];
-        let address = Address::from_str("10", &mut editor.buffer, &mut None);
         editor
             .dispatch_cmd(
                 &Cmd::PageUp(
-                    address,
+                    Some(9),
                     Some(3),
                     Some(PrintAttributes {
                         enumerate: true,
@@ -4347,8 +4267,7 @@ mod tests {
         let _ = editor.edit_cmd(&mut output, name).expect("no error");
         assert_eq!(editor.current_file.as_deref(), Some(name));
 
-        let address = Address::from_str("6", &mut editor.buffer, &mut None);
-        let _ = editor.delete_cmd(address).expect("no error");
+        let _ = editor.delete_cmd(Some(5..6)).expect("no error");
         let _ = editor.show_diff_cmd(&mut output.0, None).expect("no error");
         let expected = "10 lines (312 bytes) read [LF]\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
         let output = str::from_utf8(&output.0[..]).unwrap();
@@ -4362,8 +4281,7 @@ mod tests {
         let name = Path::new(r"test/assets/text_with_final_eol.txt");
         let _ =
             editor.read_cmd(&mut output, None, Some(name)).expect("no error");
-        let address = Address::from_str("6", &mut editor.buffer, &mut None);
-        let _ = editor.delete_cmd(address).expect("no error");
+        let _ = editor.delete_cmd(Some(5..6)).expect("no error");
         let _ =
             editor.show_diff_cmd(&mut output.0, Some(name)).expect("no error");
         let expected = "10 lines (312 bytes) read\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";

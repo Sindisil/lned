@@ -2,19 +2,13 @@
 // 0 based Indexing, Undo/Redo functionality, and conversion functions.
 // It maintains current_index, eol, and content_hash during mutation.
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::iter::Peekable;
 use std::ops::{
     Index, Range, RangeFrom, RangeFull, RangeInclusive, RangeTo,
     RangeToInclusive,
 };
 
-use regex::Regex;
-use unicode_segmentation::{Graphemes, UnicodeSegmentation};
-
-use crate::command;
 use crate::eol::{Eol, Eols};
 use crate::error::Error;
-use crate::iter_utils::Peeking;
 use crate::undo_stack::{Change, ChangeSet, UndoStack};
 
 #[derive(Debug, Default, Clone)]
@@ -179,13 +173,6 @@ impl EditBuffer {
         })
     }
 
-    #[cfg(test)]
-    pub fn current_address(&mut self) -> Option<Address> {
-        let index = self.current_index.to_string();
-        Address::eval(&mut index.graphemes(true).peekable(), self, &mut None)
-            .unwrap()
-    }
-
     pub fn current_index(&self) -> usize {
         self.current_index
     }
@@ -207,38 +194,6 @@ impl EditBuffer {
 
     pub fn push_undo(&mut self, changes: ChangeSet) {
         self.undo_stack.push_undo(changes, self.current_index, self.eols);
-    }
-
-    fn find_line(&self, pattern: &Regex) -> Option<usize> {
-        let index = if self.current_index == self.len() - 1 {
-            (0..self.len()).find(|&i| pattern.is_match(Eol::strip(&self[i])))
-        } else {
-            (self.current_index + 1..self.len())
-                .find(|&i| pattern.is_match(Eol::strip(&self[i])))
-                .or_else(|| {
-                    (0..=self.current_index)
-                        .find(|&i| pattern.is_match(Eol::strip(&self[i])))
-                })
-        };
-        index.map(|i| i + 1)
-    }
-
-    fn find_line_rev(&self, pattern: &Regex) -> Option<usize> {
-        let index = if self.current_index == 0 {
-            (0..self.len())
-                .rev()
-                .find(|&i| pattern.is_match(Eol::strip(&self[i])))
-        } else {
-            (0..self.current_index)
-                .rev()
-                .find(|&i| pattern.is_match(Eol::strip(&self[i])))
-                .or_else(|| {
-                    (self.current_index..self.len())
-                        .rev()
-                        .find(|&i| pattern.is_match(Eol::strip(&self[i])))
-                })
-        };
-        index.map(|i| i + 1)
     }
 
     /// Insert lines of text into buffer at index, shifting existing
@@ -367,7 +322,7 @@ impl EditBuffer {
             destination -= span.end - span.start;
         }
         let lines: Vec<_> = self.lines.drain(span).collect();
-        self.current_index = destination + lines.len();
+        self.current_index = destination + lines.len() - 1;
         self.lines.splice(destination..destination, lines);
         self.content_hash = None;
         changes
@@ -384,7 +339,11 @@ impl EditBuffer {
                 }
                 Change::Relocate { span, destination } => {
                     let n = span.end - span.start;
-                    let r = *destination..*destination + n;
+                    let r = if *destination >= span.end {
+                        *destination - n..*destination
+                    } else {
+                        *destination..*destination + n
+                    };
                     let lines: Vec<_> = self.lines.drain(r).collect();
                     self.lines.splice(span.start..span.start, lines);
                 }
@@ -421,8 +380,8 @@ impl EditBuffer {
                     self.lines.splice(index..index, lines.iter().cloned());
                 }
                 Change::Relocate { span, destination } => {
-                    let destination = if *destination > span.end {
-                        *destination - span.end - span.start
+                    let destination = if *destination >= span.end {
+                        *destination - (span.end - span.start)
                     } else {
                         *destination
                     };
@@ -516,227 +475,11 @@ impl EditBuffer {
     }
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
-pub struct Address {
-    first: usize,
-    last: usize,
-}
-
-impl Address {
-    pub fn first(&self) -> usize {
-        self.first
-    }
-
-    pub fn last(&self) -> usize {
-        self.last
-    }
-
-    pub fn contains(&self, line: usize) -> bool {
-        self.first <= line && line <= self.last
-    }
-
-    pub fn line_count(&self) -> usize {
-        self.last - self.first + 1
-    }
-
-    #[cfg(test)]
-    pub fn from_str(
-        s: &str,
-        buffer: &mut EditBuffer,
-        previous_pattern: &mut Option<Regex>,
-    ) -> Option<Address> {
-        Self::eval(&mut s.graphemes(true).peekable(), buffer, previous_pattern)
-            .expect("from_str must be passed a valid address string")
-    }
-
-    pub fn eval(
-        graphemes: &mut Peekable<Graphemes<'_>>,
-        buffer: &mut EditBuffer,
-        previous_pattern: &mut Option<Regex>,
-    ) -> Result<Option<Address>, Error> {
-        let mut left = None;
-        let mut right = None;
-
-        loop {
-            match graphemes.peek() {
-                Some(&",") => {
-                    graphemes.next();
-                    left = right.or(Some(1));
-                    right = right.or_else(|| Some(buffer.len()));
-                }
-                Some(&";") => {
-                    graphemes.next();
-                    left = Some(match right {
-                        Some(r) if r > buffer.len() => {
-                            return Err(Error::InvalidAddress);
-                        }
-                        Some(r) => {
-                            buffer.set_current_index(r - 1);
-                            r
-                        }
-                        None => buffer.current_index() + 1,
-                    });
-                    right = right.or_else(|| Some(buffer.len()));
-                }
-                Some(&"+" | &"-") => {
-                    right = Some(eval_line_number(
-                        graphemes,
-                        buffer.current_index() + 1,
-                    )?);
-                }
-                Some(&".") => {
-                    graphemes.next();
-                    right = Some(eval_line_number(
-                        graphemes,
-                        buffer.current_index() + 1,
-                    )?);
-                }
-                Some(&"$") => {
-                    graphemes.next();
-                    right = Some(eval_line_number(graphemes, buffer.len())?);
-                }
-                Some(&"/") => {
-                    graphemes.next();
-                    let (pattern, _) =
-                        command::parse_pattern(graphemes, Some("/"), false)?;
-                    if !pattern.is_empty() {
-                        *previous_pattern =
-                            Some(Regex::new(&pattern).map_err(|e| {
-                                Error::Regex { source: Some(Box::new(e)) }
-                            })?);
-                    }
-                    let re = previous_pattern
-                        .as_ref()
-                        .ok_or(Error::NoPreviousPattern)?;
-                    let line = buffer.find_line(re).ok_or(Error::NoMatch)?;
-                    right = Some(eval_line_number(graphemes, line)?);
-                }
-                Some(&"?") => {
-                    graphemes.next();
-                    let (pattern, _) =
-                        command::parse_pattern(graphemes, Some("?"), false)?;
-                    if !pattern.is_empty() {
-                        *previous_pattern =
-                            Some(Regex::new(&pattern).map_err(|e| {
-                                Error::Regex { source: Some(Box::new(e)) }
-                            })?);
-                    }
-                    let re = previous_pattern
-                        .as_ref()
-                        .ok_or(Error::NoPreviousPattern)?;
-                    let line =
-                        buffer.find_line_rev(re).ok_or(Error::NoMatch)?;
-                    right = Some(eval_line_number(graphemes, line)?);
-                }
-                Some(&" " | &"\t") => {
-                    graphemes.next();
-                }
-                Some(_) => {
-                    if let Some(num) = command::parse_usize(graphemes)? {
-                        right = Some(eval_line_number(graphemes, num)?);
-                    } else {
-                        break;
-                    }
-                }
-                None => break,
-            }
-            if left.is_none() && right.is_some() {
-                left = right;
-            }
-        }
-
-        if let Some(last) = right {
-            if buffer.is_empty() {
-                return Err(Error::InvalidAddress);
-            }
-            let first = left.unwrap_or(last);
-            if first > last || last > buffer.len() {
-                return Err(Error::InvalidAddress);
-            }
-            Ok(Some(Address { first, last }))
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-impl IntoIterator for Address {
-    type Item = usize;
-    type IntoIter = Range<usize>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.into()
-    }
-}
-
-impl From<Address> for Range<usize> {
-    fn from(address: Address) -> Self {
-        (address.first() - 1)..address.last()
-    }
-}
-
-fn eval_line_number(
-    graphemes: &mut Peekable<Graphemes<'_>>,
-    line: usize,
-) -> Result<usize, Error> {
-    let offset = compute_line_offset(graphemes)?;
-    line.checked_add_signed(offset).ok_or(Error::InvalidOffset)
-}
-
-fn compute_line_offset(
-    graphemes: &mut Peekable<Graphemes<'_>>,
-) -> Result<isize, Error> {
-    let mut total_offset = 0isize;
-    while let Some(n) = parse_offset_element(graphemes)? {
-        total_offset =
-            total_offset.checked_add(n).ok_or(Error::InvalidOffset)?;
-    }
-    Ok(total_offset)
-}
-
-fn parse_offset_element(
-    graphemes: &mut Peekable<Graphemes<'_>>,
-) -> Result<Option<isize>, Error> {
-    // Skip leading whitespace
-    while graphemes.peek().is_some_and(|s| *s == " " || *s == "\t") {
-        graphemes.next();
-    }
-
-    let sign = graphemes
-        .next_if(|c| *c == "+" || *c == "-")
-        .map(|c| if c == "-" { -1 } else { 1 });
-
-    let sign_mul = sign.unwrap_or(1);
-
-    let digits = graphemes
-        .peeking_take_while(|s| {
-            s.len() == 1 && s.chars().next().unwrap().is_ascii_digit()
-        })
-        .map(|s| {
-            isize::try_from(
-                s.chars()
-                    .next()
-                    .and_then(|c| c.to_digit(10))
-                    .expect("ascii 0-9"),
-            )
-            .expect("0-9 always fit isize")
-        })
-        .try_fold(None, |acc: Option<isize>, d| {
-            let v = acc.map_or(Some(sign_mul * d), |a| {
-                a.checked_mul(10).and_then(|n| n.checked_add(sign_mul * d))
-            });
-            v.and(Some(v))
-        });
-
-    Ok(digits.ok_or(Error::InvalidOffset)?.or(sign))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use similar_asserts::assert_eq;
-    use unicode_segmentation::UnicodeSegmentation;
 
     /////
     // EditBuffer creation tests
@@ -857,7 +600,7 @@ mod tests {
         let orig = buffer.clone();
         let mut expected =
             EditBuffer::with_lines(&["1\n", "2", "3", "5", "6", "4"]);
-        expected.current_index = 5;
+        expected.current_index = 4;
         let changes = buffer.relocate(4..6, 3);
         buffer.push_undo(changes);
         assert_eq!(buffer[..], expected[..]);
@@ -879,7 +622,7 @@ mod tests {
         let orig = buffer.clone();
         let mut expected =
             EditBuffer::with_lines(&["4\n", "5", "1", "2", "3", "6"]);
-        expected.set_current_index(2);
+        expected.set_current_index(1);
         let changes = buffer.relocate(3..5, 0);
         buffer.push_undo(changes);
         assert_eq!(buffer[..], expected[..]);
@@ -1049,471 +792,5 @@ mod tests {
         let _ret = buffer.redo().expect_err("nothing to redo");
         assert!(matches!(Error::NothingToRedo, _ret));
         assert_eq!(buffer[..], expected_final[..]); // buffer unchanged
-    }
-
-    #[test]
-    fn eval_positive_offset() {
-        let mut input = "3p".graphemes(true).peekable();
-        let res = compute_line_offset(&mut input).unwrap();
-        assert_eq!(res, 3);
-        assert!(matches!(input.next(), Some("p")));
-        let mut input = "+42p".graphemes(true).peekable();
-        let res = compute_line_offset(&mut input).unwrap();
-        assert_eq!(res, 42);
-        assert!(matches!(input.next(), Some("p")));
-    }
-
-    #[test]
-    fn eval_negative_offsets() {
-        let mut input = "-2p".graphemes(true).peekable();
-        let res = compute_line_offset(&mut input).unwrap();
-        assert_eq!(res, -2);
-        assert!(matches!(input.next(), Some("p")));
-    }
-
-    #[test]
-    fn eval_mixed_offsets() {
-        let mut input = "2-7+6p".graphemes(true).peekable();
-        let res = compute_line_offset(&mut input).unwrap();
-        assert_eq!(res, 1);
-        assert!(matches!(input.next(), Some("p")));
-    }
-
-    #[test]
-    fn eval_offset_overflow() {
-        let mut input =
-            "8399999999999999999+839999999999999999+8399999999999999999p"
-                .graphemes(true)
-                .peekable();
-        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::InvalidOffset));
-
-        let mut input =
-            "-839999999999999999-83999999999999999-8399999999999999999p"
-                .graphemes(true)
-                .peekable();
-        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::InvalidOffset));
-    }
-
-    #[test]
-    fn eval_offset_too_large() {
-        let mut input = "999999999999999999999p".graphemes(true).peekable();
-        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::InvalidOffset));
-        let mut input = "+999999999999999999999p".graphemes(true).peekable();
-        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::InvalidOffset));
-    }
-
-    #[test]
-    fn eval_offset_too_small() {
-        let mut input = "-999999999999999999999p".graphemes(true).peekable();
-        let res = compute_line_offset(&mut input).expect_err("shouldn't parse");
-        assert!(matches!(res, Error::InvalidOffset));
-    }
-
-    #[test]
-    fn eval_mixed_offsets_with_spaces() {
-        let mut input = "   2 -7  6 +1p".graphemes(true).peekable();
-        let res = compute_line_offset(&mut input).unwrap();
-        assert_eq!(res, 2);
-        assert!(matches!(input.next(), Some("p")));
-    }
-
-    #[test]
-    fn eval_addr_no_eol() {
-        let mut cmd_line = "".graphemes(true).peekable();
-        let address =
-            Address::eval(&mut cmd_line, &mut EditBuffer::new(), &mut None)
-                .unwrap();
-        assert!(address.is_none());
-    }
-
-    #[test]
-    fn eval_no_addr() {
-        let mut cmd_line = "q\n".graphemes(true).peekable();
-        let address =
-            Address::eval(&mut cmd_line, &mut EditBuffer::new(), &mut None)
-                .unwrap();
-        assert!(address.is_none());
-        assert_eq!(cmd_line.next(), Some("q"));
-    }
-
-    #[test]
-    fn eval_dot_addr() {
-        let mut cmd_line = ".d\r\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::with_lines(&["1\r\n", "2", "3"]);
-        buffer.set_current_index(1);
-        let address =
-            Address::eval(&mut cmd_line, &mut buffer, &mut None).unwrap();
-        assert_eq!(address, Some(Address { first: 2, last: 2 }));
-        assert_eq!(cmd_line.next(), Some("d"));
-    }
-
-    #[test]
-    fn eval_dollar_addr() {
-        let mut cmd_line = "$d\r\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::with_lines(&["1\r\n", "2", "3"]);
-        buffer.set_current_index(2);
-        let address =
-            Address::eval(&mut cmd_line, &mut buffer, &mut None).unwrap();
-        assert_eq!(address, Some(Address { first: 3, last: 3 }));
-        assert_eq!(cmd_line.next(), Some("d"));
-    }
-
-    #[test]
-    fn eval_simple_number_addr() {
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let mut cmd_line = "5d\n".graphemes(true).peekable();
-        let address =
-            Address::eval(&mut cmd_line, &mut buffer, &mut None).unwrap();
-        assert_eq!(cmd_line.next(), Some("d"));
-        assert_eq!(address, Some(Address { first: 5, last: 5 }));
-    }
-
-    #[test]
-    fn regex_line_addr_regex_syntax() {
-        let mut input = "/\\lo.+/n\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(2);
-        let mut previous_pattern: Option<Regex> = None;
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .expect_err("bad pattern");
-        assert!(matches!(res, Error::Regex { .. }));
-    }
-
-    #[test]
-    fn rev_regex_line_addr_regex_syntax() {
-        let mut input = "?\\lo.+?n\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(2);
-        let mut previous_pattern: Option<Regex> = None;
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .expect_err("bad pattern");
-        assert!(matches!(res, Error::Regex { .. }));
-    }
-
-    #[test]
-    fn regex_line_addr_embedded_delim() {
-        let mut input = "/o.+\\//n\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::with_lines(&[
-            "one/\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(2);
-        let mut previous_pattern: Option<Regex> = None;
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 1, last: 1 }));
-    }
-
-    #[test]
-    fn regex_line_addr_no_final_delimiter() {
-        let mut input = "/o.+\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(2);
-        let mut previous_pattern: Option<Regex> = None;
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 4, last: 4 }));
-    }
-
-    #[test]
-    fn regex_line_addr_needle_in_first_half_of_split_range() {
-        let mut input = "/o.+/n\n".graphemes(true).peekable();
-        let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(2);
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 4, last: 4 }));
-    }
-
-    #[test]
-    fn regex_line_addr_needle_in_second_half_of_split_range() {
-        let mut input = "/on.+/n\n".graphemes(true).peekable();
-        let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(4);
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 1, last: 1 }));
-    }
-
-    #[test]
-    fn regex_line_addr_contiguous_search_range() {
-        let mut input = "/o.+/n\n".graphemes(true).peekable();
-        let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(5);
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 1, last: 1 }));
-    }
-
-    #[test]
-    fn rev_regex_line_addr_needle_in_first_half_of_split_range() {
-        let mut input = "?o.+?n\n".graphemes(true).peekable();
-        let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(2);
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 1, last: 1 }));
-    }
-
-    #[test]
-    fn rev_regex_line_addr_needle_in_second_half_of_split_range() {
-        let mut input = "?ou.+?n\n".graphemes(true).peekable();
-        let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(4);
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 4, last: 4 }));
-    }
-
-    #[test]
-    fn rev_regex_line_addr_contiguous_search_range() {
-        let mut input = "?o.+?n\n".graphemes(true).peekable();
-        let mut previous_pattern: Option<Regex> = None;
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(0);
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 4, last: 4 }));
-    }
-
-    #[test]
-    fn regex_line_addr_with_offset() {
-        let mut input = "/o.+/+2\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(2);
-        let mut previous_pattern: Option<Regex> = None;
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 6, last: 6 }));
-    }
-
-    #[test]
-    fn rev_regex_line_addr_with_offset() {
-        let mut input = "?o.+?+2\n".graphemes(true).peekable();
-        let mut buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        buffer.set_current_index(2);
-        let mut previous_pattern: Option<Regex> = None;
-        let res = Address::eval(&mut input, &mut buffer, &mut previous_pattern)
-            .unwrap();
-        assert_eq!(res, Some(Address { first: 3, last: 3 }));
-    }
-
-    #[test]
-    fn eval_simple_comma_addr() {
-        let mut buffer =
-            EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
-        let mut input = "1,2p\n".graphemes(true).peekable();
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(res, Some(Address { first: 1, last: 2 }));
-        assert_eq!(input.next(), Some("p"));
-    }
-
-    #[test]
-    fn eval_leading_comma_addr() {
-        let mut buffer =
-            EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
-        let mut input = ",4p\r\n".graphemes(true).peekable();
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 1, last: 4 }));
-    }
-
-    #[test]
-    fn eval_trailing_comma_addr() {
-        let mut input = "5,p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 5, last: 5 }));
-    }
-
-    #[test]
-    fn eval_comma_only_addr() {
-        let mut input = ",p\r\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 1, last: 6 }));
-    }
-
-    #[test]
-    fn eval_comma_only_chain_addr() {
-        let mut input = ",,p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 6, last: 6 }));
-    }
-
-    #[test]
-    fn eval_comma_chain_addr() {
-        let mut input = ",12, 3+1,p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 4, last: 4 }));
-    }
-
-    #[test]
-    fn eval_semicolon_addr_past_end() {
-        let mut input = "+;np\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
-        assert_eq!(buffer.current_index(), 5);
-        let res = Address::eval(&mut input, &mut buffer, &mut None)
-            .expect_err("invalid address");
-        assert!(matches!(res, Error::InvalidAddress));
-    }
-
-    #[test]
-    fn eval_simple_semicolon_addr() {
-        let mut input = "1;2p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        assert_eq!(buffer.current_index(), 5);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(res, Some(Address { first: 1, last: 2 }));
-        assert_eq!(buffer.current_index(), 0);
-        assert_eq!(input.next(), Some("p"));
-    }
-
-    #[test]
-    fn eval_leading_semicolon_addr() {
-        let mut input = ";5p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(2);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 3, last: 5 }));
-        assert_eq!(buffer.current_index(), 2);
-    }
-
-    #[test]
-    fn eval_trailing_semicolon_addr() {
-        let mut input = "5;p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(3);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 5, last: 5 }));
-        assert_eq!(buffer.current_index(), 4);
-    }
-
-    #[test]
-    fn eval_semicolon_only_addr() {
-        let mut input = ";p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(2);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 3, last: 6 }));
-        assert_eq!(buffer.current_index(), 2);
-    }
-
-    #[test]
-    fn eval_semicolon_only_chain_addr() {
-        let mut input = ";;p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(2);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 6, last: 6 }));
-    }
-
-    #[test]
-    fn eval_big_before_small_semicolon_chain_addr() {
-        let mut input = "4;$;2p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(3);
-        let res = Address::eval(&mut input, &mut buffer, &mut None)
-            .expect_err("invalid address");
-        assert!(matches!(res, Error::InvalidAddress));
-    }
-
-    #[test]
-    fn eval_simple_offset_only_addrs() {
-        let mut input = "+p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(2);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 4, last: 4 }));
-
-        let mut input = "+10p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(3);
-        let res = Address::eval(&mut input, &mut buffer, &mut None)
-            .expect_err("InvalidAddress");
-        assert_eq!(input.next(), Some("p"));
-        assert!(matches!(res, Error::InvalidAddress));
-
-        let mut input = "-p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(2);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 2, last: 2 }));
-
-        let mut input = "-2p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(2);
-        let res = Address::eval(&mut input, &mut buffer, &mut None).unwrap();
-        assert_eq!(input.next(), Some("p"));
-        assert_eq!(res, Some(Address { first: 1, last: 1 }));
-    }
-
-    #[test]
-    fn eval_too_big_offset_only_addr_overflows() {
-        let mut input = "-10p\n".graphemes(true).peekable();
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        buffer.set_current_index(3);
-        let res = Address::eval(&mut input, &mut buffer, &mut None)
-            .expect_err("offset overflow");
-        assert!(matches!(res, Error::InvalidOffset));
     }
 }

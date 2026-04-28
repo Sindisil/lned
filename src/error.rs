@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter, Result};
+use std::ops::Range;
 use std::path::PathBuf;
 
-use crate::edit_buffer::Address;
 use crate::undo_stack::ChangeSet;
 
 #[derive(Debug)]
@@ -270,7 +270,7 @@ pub enum Warning {
     ReloadUnsaved,
     WriteOverwrite,
     QuitUnsaved,
-    WriteAsOverwrite(Option<Address>, PathBuf),
+    WriteAsOverwrite(Option<Range<usize>>, PathBuf),
 }
 
 impl Display for Warning {
@@ -287,11 +287,11 @@ impl Display for Warning {
                 f,
                 "current file was altered externally - repeat command to overwrite with buffer contents",
             ),
-            Warning::WriteAsOverwrite(addr, file) => write!(
+            Warning::WriteAsOverwrite(span, file) => write!(
                 f,
                 "'{}' exists - repeat command to overwrite with{}buffer contents",
                 file.display(),
-                addr.map_or(" ", |_| " partial ")
+                span.as_ref().map_or(" ", |_| " partial ")
             ),
         }
     }
