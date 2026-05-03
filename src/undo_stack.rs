@@ -35,8 +35,6 @@ pub struct ChangeSet {
 pub enum Change {
     /// Lines inserted
     Insert { index: usize, lines: Vec<String> },
-    /// Lines moved
-    Relocate { span: Range<usize>, destination: usize },
     /// Lines Removed
     Remove { index: usize, lines: Vec<String> },
     /// EOLs changed for span of lines
@@ -89,15 +87,6 @@ impl ChangeSet {
             let new_change = match change {
                 Change::Insert { index, lines } => {
                     Change::Remove { index: *index, lines: mem::take(lines) }
-                }
-                Change::Relocate { span, destination } => {
-                    let count = span.end - span.start;
-                    let (span, destination) = if *destination > span.end {
-                        ((*destination - count)..(*destination), span.start)
-                    } else {
-                        ((*destination)..(*destination + count), span.end)
-                    };
-                    Change::Relocate { span, destination }
                 }
                 Change::Remove { index, lines } => {
                     Change::Insert { index: *index, lines: mem::take(lines) }
@@ -203,7 +192,6 @@ mod tests {
             index: 1,
             lines: vec!["removed\n".to_owned()],
         });
-        orig.push(Change::Relocate { span: 4..7, destination: 9 });
         orig.push(Change::SetEols { span: 1..5, old: Eol::Lf, new: Eol::Crlf });
         orig.current_index_after = ci_after;
         orig.eols_after = eols_after;
@@ -218,10 +206,6 @@ mod tests {
                 Change::Insert { index, lines } => {
                     assert_eq!(*index, 1);
                     assert_eq!(*lines, vec!["removed\n".to_owned()]);
-                }
-                Change::Relocate { span, destination } => {
-                    assert_eq!(*span, 6..9);
-                    assert_eq!(*destination, 4);
                 }
                 Change::Remove { index, lines } => {
                     assert_eq!(*index, 2);

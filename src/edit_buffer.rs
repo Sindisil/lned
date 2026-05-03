@@ -279,54 +279,6 @@ impl EditBuffer {
         changes.push(Change::Remove { index: first_removed, lines: removed });
         changes
     }
-    /// Moves lines indexed by `range` to `destination`.
-    ///
-    /// It is invalid for `destination` to be within `range`.
-    ///
-    /// The last line moved becomes the new `current_index`.
-    ///
-    /// Returns a [`ChangeSet`] rerpresenting the buffer changes.
-    ///
-    /// If `range` is empty no action is taken and an empty
-    /// [`ChangeSet`] is returned.
-    ///
-    /// # Panics
-    ///
-    /// Will panic if `range` extends beyond last line of buffer, if
-    /// `destination` is within `range`, or if `destination` is
-    /// beyond last line of buffer.
-    ///
-    pub fn relocate(
-        &mut self,
-        span: Range<usize>,
-        mut destination: usize,
-    ) -> ChangeSet {
-        assert!(
-            !span.contains(&destination),
-            "span (is {span:?}) must not overlap destination (is {destination})"
-        );
-        assert!(
-            destination <= self.len(),
-            "destination (is {destination}) must not be > buffer length (is {})",
-            self.len()
-        );
-        assert!(
-            !span.contains(&self.len()),
-            "span (is {span:?}) must be within buffer (is 0..{})",
-            self.len()
-        );
-
-        let mut changes = ChangeSet::new(self.current_index, self.eols);
-        changes.push(Change::Relocate { span: span.clone(), destination });
-        if destination >= span.end {
-            destination -= span.end - span.start;
-        }
-        let lines: Vec<_> = self.lines.drain(span).collect();
-        self.current_index = destination + lines.len() - 1;
-        self.lines.splice(destination..destination, lines);
-        self.content_hash = None;
-        changes
-    }
 
     pub fn undo(&mut self) -> Result<(), Error> {
         let Some(undo) = self.undo_stack.pop_undo() else {
@@ -336,16 +288,6 @@ impl EditBuffer {
             match change {
                 Change::Insert { index, lines } => {
                     drop(self.lines.splice(*index..*index + lines.len(), None));
-                }
-                Change::Relocate { span, destination } => {
-                    let n = span.end - span.start;
-                    let r = if *destination >= span.end {
-                        *destination - n..*destination
-                    } else {
-                        *destination..*destination + n
-                    };
-                    let lines: Vec<_> = self.lines.drain(r).collect();
-                    self.lines.splice(span.start..span.start, lines);
                 }
                 Change::Remove { index, lines } => {
                     drop(
@@ -378,16 +320,6 @@ impl EditBuffer {
             match change {
                 Change::Insert { index, lines } => {
                     self.lines.splice(index..index, lines.iter().cloned());
-                }
-                Change::Relocate { span, destination } => {
-                    let destination = if *destination >= span.end {
-                        *destination - (span.end - span.start)
-                    } else {
-                        *destination
-                    };
-                    let lines: Vec<_> =
-                        self.lines.drain(span.clone()).collect();
-                    self.lines.splice(destination..destination, lines);
                 }
                 Change::Remove { index, lines } => {
                     self.lines.splice(*index..*index + lines.len(), None);
@@ -591,50 +523,6 @@ mod tests {
         buffer.remove(4..6);
         assert_eq!(buffer[..], expected[..]);
         assert_eq!(buffer.current_index(), 3);
-    }
-
-    #[test]
-    fn relocate_span() {
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let orig = buffer.clone();
-        let mut expected =
-            EditBuffer::with_lines(&["1\n", "2", "3", "5", "6", "4"]);
-        expected.current_index = 4;
-        let changes = buffer.relocate(4..6, 3);
-        buffer.push_undo(changes);
-        assert_eq!(buffer[..], expected[..]);
-        assert_eq!(buffer.current_index(), expected.current_index);
-
-        buffer.undo().expect("something on undo stack");
-        assert_eq!(buffer[..], orig[..]);
-        assert_eq!(buffer.current_index, orig.current_index);
-
-        buffer.redo().expect("something on redo stack");
-        assert_eq!(buffer[..], expected[..]);
-        assert_eq!(buffer.current_index, expected.current_index);
-    }
-
-    #[test]
-    fn relocate_to_line_0() {
-        let mut buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let orig = buffer.clone();
-        let mut expected =
-            EditBuffer::with_lines(&["4\n", "5", "1", "2", "3", "6"]);
-        expected.set_current_index(1);
-        let changes = buffer.relocate(3..5, 0);
-        buffer.push_undo(changes);
-        assert_eq!(buffer[..], expected[..]);
-        assert_eq!(buffer.current_index(), expected.current_index());
-
-        buffer.undo().expect("something on undo stack");
-        assert_eq!(buffer[..], orig[..]);
-        assert_eq!(buffer.current_index(), orig.current_index());
-
-        buffer.redo().expect("something on redo stack");
-        assert_eq!(buffer[..], expected[..]);
-        assert_eq!(buffer.current_index(), expected.current_index());
     }
 
     #[test]

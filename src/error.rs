@@ -6,7 +6,6 @@ use crate::undo_stack::ChangeSet;
 
 #[derive(Debug)]
 pub enum Error {
-    DestinationIntersectsSource,
     DiffReadFile {
         source: Option<Box<dyn std::error::Error>>,
         filename: PathBuf,
@@ -28,7 +27,6 @@ pub enum Error {
     InvalidDelimiter,
     InvalidNewline,
     InvalidOffset,
-    MissingDestination,
     MissingPatternDelimiter,
     NestedGlobalCmd,
     NoFilename,
@@ -89,14 +87,12 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
             // No source
-            Error::DestinationIntersectsSource
-            | Error::FileNotFound(_)
+            Error::FileNotFound(_)
             | Error::InvalidAddress
             | Error::InvalidCmdSuffix
             | Error::InvalidDelimiter
             | Error::InvalidNewline
             | Error::InvalidOffset
-            | Error::MissingDestination
             | Error::MissingPatternDelimiter
             | Error::NestedGlobalCmd
             | Error::NoFilename
@@ -136,9 +132,6 @@ impl Display for Error {
     #[cfg(not(tarpaulin_include))]
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            Error::DestinationIntersectsSource => {
-                write!(f, "destination intersects source")
-            }
             Error::DiffReadFile { filename, .. } => {
                 write!(f, "error reading {} for diff", filename.display())
             }
@@ -161,7 +154,6 @@ impl Display for Error {
                 write!(f, "invalid newline (valid: CR, CRLF)")
             }
             Error::InvalidOffset => write!(f, "invalid offset"),
-            Error::MissingDestination => write!(f, "missing destination"),
             Error::MissingPatternDelimiter => {
                 write!(f, "missing pattern delimiter")
             }

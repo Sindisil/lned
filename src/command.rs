@@ -16,60 +16,80 @@ use crate::iter_utils::Peeking;
 
 #[derive(Debug)]
 pub enum Cmd {
-    Append(Option<usize>),
-    AppendRaw(Option<usize>),
-    Change(Option<Range<usize>>),
-    ChangeRaw(Option<Range<usize>>),
+    Append {
+        index: Option<usize>,
+        source: InputSource,
+        mode: InputMode,
+    },
+    Copy(Option<Range<usize>>),
+    Cut(Option<Range<usize>>),
     Delete(Option<Range<usize>>),
     Edit(PathBuf),
     Enumerate(Option<Range<usize>>),
     File,
     Global(Option<Range<usize>>, Regex, String),
-    Insert(Option<usize>),
-    InsertRaw(Option<usize>),
+    Insert {
+        index: Option<usize>,
+        source: InputSource,
+        mode: InputMode,
+    },
     Join(Option<Range<usize>>, Option<String>),
     LineNumber(Option<usize>),
     List(Option<Range<usize>>),
-    Move(Option<Range<usize>>, usize),
     Newline(Option<Eol>),
     New,
     Null(Option<usize>),
-    PageDown(Option<usize>, Option<usize>, Option<PrintAttributes>),
-    PageUp(Option<usize>, Option<usize>, Option<PrintAttributes>),
+    Overwrite {
+        span: Option<Range<usize>>,
+        source: InputSource,
+        mode: InputMode,
+    },
+    PageDown(Option<usize>, Option<usize>, Option<PrintSuffix>),
+    PageUp(Option<usize>, Option<usize>, Option<PrintSuffix>),
     Print(Option<Range<usize>>),
     Reload,
     Quit,
-    Read(Option<usize>, Option<PathBuf>),
     Redo,
     ShowDiff(Option<PathBuf>),
     Substitute(Option<Range<usize>>, Regex, String, SubstitutionScope),
-    Transfer(Option<Range<usize>>, usize),
     Undo,
     Version,
     Write,
     WriteAs(Option<Range<usize>>, PathBuf),
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum SubstitutionScope {
     Single(usize),
     Global,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub struct PrintAttributes {
+pub struct PrintSuffix {
     pub enumerate: bool,
     pub expand_escapes: bool,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum InputMode {
+    Cooked,
+    Raw,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum InputSource {
+    Clipboard,
+    File(PathBuf),
+    StdIn,
+}
+
 impl Cmd {
     /// Read input, parsing into a Cmd
-    #[allow(clippy::too_many_lines)]
     pub fn read(
         input: &mut impl LineEdit,
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
-    ) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+    ) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
         let cmd_input_options = EditorOptions {
             prompt: Some(':'),
             history: true,
@@ -85,16 +105,13 @@ impl Cmd {
         let mut graphemes = line.as_str().graphemes(true).peekable();
         let address = eval_address(&mut graphemes, buffer, previous_pattern)?;
         match graphemes.next() {
-            Some("a") => parse_no_args(
-                &mut graphemes,
-                Cmd::Append(address.map(|a| a.end - 1)),
-            ),
-            Some("A") => parse_no_args(
-                &mut graphemes,
-                Cmd::AppendRaw(address.map(|a| a.end - 1)),
-            ),
-            Some("c") => parse_no_args(&mut graphemes, Cmd::Change(address)),
-            Some("C") => parse_no_args(&mut graphemes, Cmd::ChangeRaw(address)),
+            Some("a") => {
+                parse_append_cmd(&mut graphemes, address, InputMode::Cooked)
+            }
+            Some("A") => {
+                parse_append_cmd(&mut graphemes, address, InputMode::Raw)
+            }
+            Some("c") => parse_no_args(&mut graphemes, Cmd::Copy(address)),
             Some("d") => parse_no_args(&mut graphemes, Cmd::Delete(address)),
             Some("e") => parse_edit_cmd(&mut graphemes, address.as_ref()),
             Some("E") => {
@@ -109,31 +126,15 @@ impl Cmd {
                 previous_pattern,
                 address,
             ),
-            Some("i") => parse_no_args(
-                &mut graphemes,
-                Cmd::Insert(address.map(|a| a.end - 1)),
-            ),
-            Some("I") => parse_no_args(
-                &mut graphemes,
-                Cmd::InsertRaw(address.map(|a| a.end - 1)),
-            ),
+            Some("i") => {
+                parse_insert_cmd(&mut graphemes, address, InputMode::Cooked)
+            }
+            Some("I") => {
+                parse_insert_cmd(&mut graphemes, address, InputMode::Raw)
+            }
             Some("j") => parse_join_cmd(&mut graphemes, address),
             Some("l") => parse_no_args(&mut graphemes, Cmd::List(address)),
             Some("L") => parse_newline_cmd(&mut graphemes, address.as_ref()),
-            Some("m") => parse_targeted_cmd(
-                &mut graphemes,
-                buffer,
-                previous_pattern,
-                address,
-                "m",
-            ),
-            Some("M") => parse_targeted_cmd(
-                &mut graphemes,
-                buffer,
-                previous_pattern,
-                address,
-                "M",
-            ),
             Some("n") => parse_no_args(&mut graphemes, Cmd::Enumerate(address)),
             Some("N") => {
                 parse_simple_cmd(&mut graphemes, address.as_ref(), Cmd::New)
@@ -141,15 +142,15 @@ impl Cmd {
             None | Some("\n" | "\r\n") => {
                 Ok(Some((Cmd::Null(address.map(|a| a.end - 1)), None)))
             }
+            Some("o") => {
+                parse_overwrite_cmd(&mut graphemes, address, InputMode::Cooked)
+            }
+            Some("O") => {
+                parse_overwrite_cmd(&mut graphemes, address, InputMode::Raw)
+            }
             Some("p") => parse_no_args(&mut graphemes, Cmd::Print(address)),
             Some("q") => {
                 parse_simple_cmd(&mut graphemes, address.as_ref(), Cmd::Quit)
-            }
-            Some("r") => {
-                parse_read_cmd(&mut graphemes, address.map(|a| a.end - 1), "r")
-            }
-            Some("R") => {
-                parse_read_cmd(&mut graphemes, address.map(|a| a.end - 1), "R")
             }
             Some("S") => parse_show_cmd(&mut graphemes, address.as_ref()),
             Some("s") => parse_substitute_cmd(
@@ -158,20 +159,6 @@ impl Cmd {
                 buffer,
                 previous_pattern,
                 address,
-            ),
-            Some("t") => parse_targeted_cmd(
-                &mut graphemes,
-                buffer,
-                previous_pattern,
-                address,
-                "t",
-            ),
-            Some("T") => parse_targeted_cmd(
-                &mut graphemes,
-                buffer,
-                previous_pattern,
-                address,
-                "T",
             ),
             Some("u") => {
                 parse_simple_cmd(&mut graphemes, address.as_ref(), Cmd::Undo)
@@ -186,6 +173,7 @@ impl Cmd {
                 parse_simple_cmd(&mut graphemes, address.as_ref(), Cmd::Write)
             }
             Some("W") => parse_write_as_cmd(&mut graphemes, address),
+            Some("x") => parse_no_args(&mut graphemes, Cmd::Cut(address)),
             Some("z") => {
                 parse_page_down_cmd(&mut graphemes, address.map(|a| a.end - 1))
             }
@@ -203,27 +191,116 @@ impl Cmd {
 
 fn parse_print_suffix(
     graphemes: &mut Peekable<Graphemes<'_>>,
-) -> Result<Option<PrintAttributes>, Error> {
-    let mut attrs: Option<PrintAttributes> = None;
+) -> Result<Option<PrintSuffix>, Error> {
+    let mut pr_sfx: Option<PrintSuffix> = None;
     loop {
         let gr = graphemes.next();
         match gr {
             None | Some("\n" | "\r\n") => break,
-            Some("n") => attrs.get_or_insert_default().enumerate = true,
+            Some("n") => pr_sfx.get_or_insert_default().enumerate = true,
             Some("p") => {
-                attrs.get_or_insert_default();
+                pr_sfx.get_or_insert_default();
             }
-            Some("l") => attrs.get_or_insert_default().expand_escapes = true,
+            Some("l") => pr_sfx.get_or_insert_default().expand_escapes = true,
             _ => return Err(Error::InvalidCmdSuffix),
         }
     }
-    Ok(attrs)
+    Ok(pr_sfx)
+}
+
+fn parse_append_cmd(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+    address: Option<Range<usize>>,
+    mode: InputMode,
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+    let index = address.map(|a| a.end - 1);
+    let source = match graphemes.peek() {
+        Some(&"v") => {
+            graphemes.next();
+            InputSource::Clipboard
+        }
+        Some(&" " | &"\t") => {
+            graphemes.next();
+            let mut filename = graphemes
+                .take_while(|s| Eol::from_line(s).is_none())
+                .collect::<String>();
+            filename.retain(|c| !c.is_whitespace());
+            if filename.is_empty() {
+                InputSource::StdIn
+            } else {
+                InputSource::File(PathBuf::from(filename))
+            }
+        }
+        _ => InputSource::StdIn,
+    };
+
+    let pr_sfx = parse_print_suffix(graphemes)?;
+    Ok(Some((Cmd::Append { index, source, mode }, pr_sfx)))
+}
+
+fn parse_insert_cmd(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+    address: Option<Range<usize>>,
+    mode: InputMode,
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+    let index = address.map(|a| a.end - 1);
+    let source = match graphemes.peek() {
+        Some(&"v") => {
+            graphemes.next();
+            InputSource::Clipboard
+        }
+        Some(&" " | &"\t") => {
+            graphemes.next();
+            let mut filename = graphemes
+                .take_while(|s| Eol::from_line(s).is_none())
+                .collect::<String>();
+            filename.retain(|c| !c.is_whitespace());
+            if filename.is_empty() {
+                InputSource::StdIn
+            } else {
+                InputSource::File(PathBuf::from(filename))
+            }
+        }
+        _ => InputSource::StdIn,
+    };
+
+    let pr_sfx = parse_print_suffix(graphemes)?;
+    Ok(Some((Cmd::Insert { index, source, mode }, pr_sfx)))
+}
+
+fn parse_overwrite_cmd(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+    span: Option<Range<usize>>,
+    mode: InputMode,
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+    let source = match graphemes.peek() {
+        Some(&"v") => {
+            graphemes.next();
+            InputSource::Clipboard
+        }
+        Some(&" " | &"\t") => {
+            graphemes.next();
+            let mut filename = graphemes
+                .take_while(|s| Eol::from_line(s).is_none())
+                .collect::<String>();
+            filename.retain(|c| !c.is_whitespace());
+            if filename.is_empty() {
+                InputSource::StdIn
+            } else {
+                InputSource::File(PathBuf::from(filename))
+            }
+        }
+        _ => InputSource::StdIn,
+    };
+
+    let pr_sfx = parse_print_suffix(graphemes)?;
+    Ok(Some((Cmd::Overwrite { span, source, mode }, pr_sfx)))
 }
 
 fn parse_write_as_cmd<'a>(
     graphemes: &mut impl Iterator<Item = &'a str>,
     address: Option<Range<usize>>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     match graphemes.next() {
         None | Some("\n" | "\r\n") => Err(Error::NoFilename),
         Some(" " | "\t") => {
@@ -245,7 +322,7 @@ fn parse_write_as_cmd<'a>(
 fn parse_page_down_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     index: Option<usize>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     let window = parse_usize(graphemes)?;
     let print_sfx = parse_print_suffix(graphemes)?;
     Ok(Some((Cmd::PageDown(index, window, print_sfx), None)))
@@ -254,7 +331,7 @@ fn parse_page_down_cmd(
 fn parse_page_up_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     index: Option<usize>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     let window = parse_usize(graphemes)?;
     let print_sfx = parse_print_suffix(graphemes)?;
     Ok(Some((Cmd::PageUp(index, window, print_sfx), None)))
@@ -263,7 +340,7 @@ fn parse_page_up_cmd(
 fn parse_show_cmd<'a>(
     graphemes: &mut impl Iterator<Item = &'a str>,
     address: Option<&Range<usize>>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     if address.is_some() {
         return Err(Error::UnexpectedAddress);
     }
@@ -288,7 +365,7 @@ fn parse_show_cmd<'a>(
 fn parse_edit_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<&Range<usize>>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     if address.is_some() {
         return Err(Error::UnexpectedAddress);
     }
@@ -304,33 +381,6 @@ fn parse_edit_cmd(
                 Err(Error::NoFilename)
             } else {
                 Ok(Some((Cmd::Edit(PathBuf::from(filename)), None)))
-            }
-        }
-        _ => Err(Error::InvalidCmdSuffix),
-    }
-}
-
-fn parse_read_cmd(
-    graphemes: &mut Peekable<Graphemes<'_>>,
-    index: Option<usize>,
-    cmd: &str,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
-    match graphemes.next() {
-        None | Some("\n" | "\r\n") => Ok(Some((Cmd::Read(index, None), None))),
-        Some(" " | "\t") => {
-            let filename = graphemes
-                .take_while(|s| *s != "\n" && *s != "\r\n")
-                .collect::<String>()
-                .trim()
-                .to_owned();
-            if filename.is_empty() {
-                Err(Error::NoFilename)
-            } else {
-                let cmd = match cmd {
-                    "r" => Cmd::Read(index, Some(PathBuf::from(filename))),
-                    _ => return Err(Error::UnknownCmd(cmd.to_owned())),
-                };
-                Ok(Some((cmd, None)))
             }
         }
         _ => Err(Error::InvalidCmdSuffix),
@@ -387,7 +437,7 @@ pub(crate) fn parse_substitute_cmd(
     buffer: &EditBuffer,
     previous_pattern: &mut Option<Regex>,
     address: Option<Range<usize>>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     let (pattern, delimiter) = parse_pattern(graphemes, None, true)?;
     if !(pattern.is_empty()) {
         *previous_pattern = Some(
@@ -484,7 +534,7 @@ fn parse_simple_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<&Range<usize>>,
     cmd: Cmd,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     if address.is_some() {
         Err(Error::UnexpectedAddress)
     } else {
@@ -495,29 +545,8 @@ fn parse_simple_cmd(
 fn parse_no_args(
     graphemes: &mut Peekable<Graphemes<'_>>,
     cmd: Cmd,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     Ok(Some((cmd, parse_print_suffix(graphemes)?)))
-}
-
-fn parse_targeted_cmd(
-    graphemes: &mut Peekable<Graphemes<'_>>,
-    buffer: &mut EditBuffer,
-    previous_pattern: &mut Option<Regex>,
-    address: Option<Range<usize>>,
-    cmd: &str,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
-    let Some(destination) =
-        eval_address(graphemes, buffer, previous_pattern)?.map(|addr| addr.end)
-    else {
-        return Err(Error::MissingDestination);
-    };
-    let sfx = parse_print_suffix(graphemes)?;
-    let cmd = match cmd {
-        "m" => Cmd::Move(address, destination),
-        "t" => Cmd::Transfer(address, destination),
-        _ => return Err(Error::UnknownCmd(cmd.to_owned())),
-    };
-    Ok(Some((cmd, sfx)))
 }
 
 pub fn parse_usize(
@@ -635,7 +664,7 @@ fn parse_global_cmd(
     input: &mut impl LineEdit,
     previous_pattern: &mut Option<Regex>,
     address: Option<Range<usize>>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     let (pattern, _) = parse_pattern(graphemes, None, false)?;
     if !(pattern.is_empty()) {
         *previous_pattern = Some(
@@ -653,7 +682,7 @@ fn parse_global_cmd(
 fn parse_join_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<Range<usize>>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     let Some(next_gr) = graphemes.peek() else {
         return Ok(Some((Cmd::Join(address, None), None)));
     };
@@ -676,7 +705,7 @@ fn parse_join_cmd(
 fn parse_newline_cmd<'a>(
     graphemes: &mut impl Iterator<Item = &'a str>,
     address: Option<&Range<usize>>,
-) -> Result<Option<(Cmd, Option<PrintAttributes>)>, Error> {
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
     if address.is_some() {
         return Err(Error::UnexpectedAddress);
     }
@@ -977,9 +1006,9 @@ mod tests {
     fn parse_no_args_p_print_suffix() {
         let mut cmd_line = "p\r\n".graphemes(true).peekable();
         let res = parse_no_args(&mut cmd_line, Cmd::Delete(None)).unwrap();
-        let expected_attrs = Some(PrintAttributes { ..Default::default() });
+        let expected_sfx = Some(PrintSuffix { ..Default::default() });
         assert!(
-            matches!(res, Some((Cmd::Delete(None), attrs)) if attrs == expected_attrs)
+            matches!(res, Some((Cmd::Delete(None), pr_sfx)) if pr_sfx == expected_sfx)
         );
     }
 
@@ -987,10 +1016,10 @@ mod tests {
     fn parse_no_args_n_print_suffix() {
         let mut cmd_line = "n\r\n".graphemes(true).peekable();
         let res = parse_no_args(&mut cmd_line, Cmd::Delete(None)).unwrap();
-        let expected_attrs =
-            Some(PrintAttributes { enumerate: true, ..Default::default() });
+        let expected_sfx =
+            Some(PrintSuffix { enumerate: true, ..Default::default() });
         assert!(
-            matches!(res, Some((Cmd::Delete(None), attrs)) if attrs == expected_attrs)
+            matches!(res, Some((Cmd::Delete(None), pr_sfx)) if pr_sfx == expected_sfx)
         );
     }
 
@@ -1008,7 +1037,7 @@ mod tests {
         let res = parse_print_suffix(&mut graphs).unwrap();
         assert!(matches!(
             res,
-            Some(a) if a == PrintAttributes { ..Default::default() }));
+            Some(a) if a == PrintSuffix { ..Default::default() }));
     }
 
     #[test]
@@ -1017,7 +1046,7 @@ mod tests {
         let res = parse_print_suffix(&mut graphs).unwrap();
         assert!(matches!(
             res,
-            Some(a) if a ==PrintAttributes {
+            Some(a) if a == PrintSuffix {
                 enumerate: true,
                 ..Default::default()
             }
@@ -1030,7 +1059,7 @@ mod tests {
         let res = parse_print_suffix(&mut graphs).unwrap();
         assert!(matches!(
         res,
-        Some(a) if a ==PrintAttributes {
+        Some(a) if a ==PrintSuffix {
             expand_escapes: true,
             ..Default::default()
         }));
@@ -1130,9 +1159,66 @@ mod tests {
     #[test]
     fn parse_append_cmd_no_addr() {
         let mut input = "a\r\n".as_bytes();
-        let res =
-            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
-        assert!(matches!(res, Some((Cmd::Append(None), None))));
+        let (cmd, pr_sfx) =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None)
+                .expect("should be Ok")
+                .expect("should be (cmd, pr_sfx)");
+        assert!(matches!(
+            cmd,
+            Cmd::Append {
+                index: None,
+                source: InputSource::StdIn,
+                mode: InputMode::Cooked
+            }
+        ));
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_append_cmd_with_addr() {
+        let mut buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
+        let mut input = "2a\r\n".as_bytes();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("should be Ok")
+            .expect("should be (cmd, pr_sfx)");
+        let Cmd::Append { index, source, mode } = cmd else {
+            panic!("expected Cmd::Append");
+        };
+        assert_eq!(index, Some(1));
+        assert_eq!(source, InputSource::StdIn);
+        assert_eq!(mode, InputMode::Cooked);
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_append_cmd_from_clipboard() {
+        let mut buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
+        let mut input = "2Av\r\n".as_bytes();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("should be Ok")
+            .expect("should be (cmd, pr_sfx)");
+        let Cmd::Append { index, source, mode } = cmd else {
+            panic!("expected Cmd::Append");
+        };
+        assert_eq!(index, Some(1));
+        assert_eq!(source, InputSource::Clipboard);
+        assert_eq!(mode, InputMode::Raw);
+        assert!(pr_sfx.is_none());
+    }
+    #[test]
+    fn parse_append_cmd_from_file() {
+        let mut buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
+        let mut input = "2A filename\r\n".as_bytes();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("should be Ok")
+            .expect("should be (cmd, pr_sfx)");
+        let Cmd::Append { index, source, mode } = cmd else {
+            panic!("expected Cmd::Append");
+        };
+        assert_eq!(index, Some(1));
+        assert_eq!(source, InputSource::File(PathBuf::from("filename")));
+        assert_eq!(mode, InputMode::Raw);
+        assert!(pr_sfx.is_none());
     }
 
     #[test]
@@ -1154,17 +1240,145 @@ mod tests {
     #[test]
     fn parse_insert_cmd_no_addr() {
         let mut input = "i\r\n".as_bytes();
-        let res =
-            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
-        assert!(matches!(res, Some((Cmd::Insert(None), None))));
+        let (cmd, pr_sfx) =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None)
+                .expect("no error")
+                .expect("parsed (cmd, pr_sfx)");
+        assert!(matches!(
+            cmd,
+            Cmd::Insert {
+                index: None,
+                source: InputSource::StdIn,
+                mode: InputMode::Cooked
+            }
+        ));
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_insert_cmd_with_addr() {
+        let mut buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
+        let mut input = "2i\r\n".as_bytes();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("no error")
+            .expect("parsed (cmd, pr_sfx)");
+        let Cmd::Insert { index, source, mode } = cmd else {
+            panic!("should parse to Cmd::Insert");
+        };
+        assert_eq!(index, Some(1));
+        assert_eq!(source, InputSource::StdIn);
+        assert_eq!(mode, InputMode::Cooked);
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_insert_cmd_from_clipboard() {
+        let mut buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
+        let mut input = "2Iv\r\n".as_bytes();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("no error")
+            .expect("parsed (cmd, pr_sfx)");
+        let Cmd::Insert { index, source, mode } = cmd else {
+            panic!("should parse to Cmd::Insert");
+        };
+        assert_eq!(index, Some(1));
+        assert_eq!(source, InputSource::Clipboard);
+        assert_eq!(mode, InputMode::Raw);
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_insert_cmd_from_file() {
+        let mut buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
+        let mut input = "2I filename\r\n".as_bytes();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("should be Ok")
+            .expect("should be (cmd, pr_sfx)");
+        let Cmd::Insert { index, source, mode } = cmd else {
+            panic!("expected Cmd::Insert");
+        };
+        assert_eq!(index, Some(1));
+        assert_eq!(source, InputSource::File(PathBuf::from("filename")));
+        assert_eq!(mode, InputMode::Raw);
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_overwrite_cmd_no_addr() {
+        let mut input = "o\r\n".as_bytes();
+        let (cmd, pr_sfx) =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None)
+                .expect("no error")
+                .expect("parsed (cmd, pr_sfx)");
+        let Cmd::Overwrite { span, source, mode } = cmd else {
+            panic!("expected Cmd::Overwrite");
+        };
+        assert!(span.is_none());
+        assert_eq!(source, InputSource::StdIn);
+        assert_eq!(mode, InputMode::Cooked);
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_overwrite_cmd_with_addr() {
+        let mut buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
+        let mut input = "2o\r\n".as_bytes();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("no error")
+            .expect("parsed (cmd, pr_sfx)");
+        let Cmd::Overwrite { span, source, mode } = cmd else {
+            panic!("should parse to Cmd::Overwrite");
+        };
+        assert_eq!(span, Some(1..2));
+        assert_eq!(source, InputSource::StdIn);
+        assert_eq!(mode, InputMode::Cooked);
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_overwrite_cmd_from_clipboard() {
+        let mut buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
+        let mut input = "2Ov\r\n".as_bytes();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("no error")
+            .expect("parsed (cmd, pr_sfx)");
+        let Cmd::Overwrite { span, source, mode } = cmd else {
+            panic!("should parse to Cmd::Overwrite");
+        };
+        assert_eq!(span, Some(1..2));
+        assert_eq!(source, InputSource::Clipboard);
+        assert_eq!(mode, InputMode::Raw);
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_overwrite_cmd_from_file() {
+        let mut buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
+        let mut input = "2O filename\r\n".as_bytes();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("should be Ok")
+            .expect("should be (cmd, pr_sfx)");
+        let Cmd::Overwrite { span, source, mode } = cmd else {
+            panic!("expected Cmd::Overwrite");
+        };
+        assert_eq!(span, Some(1..2));
+        assert_eq!(source, InputSource::File(PathBuf::from("filename")));
+        assert_eq!(mode, InputMode::Raw);
+        assert!(pr_sfx.is_none());
     }
 
     #[test]
     fn parse_null_cmd_no_addr() {
         let mut input = "\r\n".as_bytes();
-        let res =
-            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
-        assert!(matches!(res, Some((Cmd::Null(None), None))));
+        let (cmd, pr_sfx) =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None)
+                .expect("no error")
+                .expect("parsed (cmd, pr_sfx)");
+        let Cmd::Null(index) = cmd else {
+            panic!("cmd wasn't Null(index)!");
+        };
+        assert!(index.is_none());
+        assert!(pr_sfx.is_none());
     }
 
     #[test]
@@ -1212,11 +1426,11 @@ mod tests {
 
     #[test]
     fn parse_unknown_command() {
-        let mut input = "O\n".as_bytes();
+        let mut input = "*\n".as_bytes();
         let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None)
             .expect_err("unknown cmd");
         assert!(
-            matches!(res, Error::UnknownCmd(ref s) if s == "O"),
+            matches!(res, Error::UnknownCmd(ref s) if s == "*"),
             "{res:?} didn't match Error::UnknownCmd(\"O\")"
         );
     }
@@ -1259,55 +1473,6 @@ mod tests {
         let mut cmd_line = "filename.rs\n".graphemes(true).peekable();
         let res =
             parse_edit_cmd(&mut cmd_line, None).expect_err("invalid suffix");
-        assert!(matches!(res, Error::InvalidCmdSuffix));
-    }
-
-    #[test]
-    fn parse_read_no_print_suffix() {
-        let mut cmd_line = " filename.rs".graphemes(true).peekable();
-        let res = parse_read_cmd(&mut cmd_line, None, "r").unwrap();
-        assert!(matches!(res, Some((_, None))));
-    }
-
-    #[test]
-    fn parse_read_with_address() {
-        let mut cmd_line = " filename.rs".graphemes(true).peekable();
-        let index = Some(0usize);
-        let res = parse_read_cmd(&mut cmd_line, index, "r").unwrap();
-        assert!(
-            matches!(res, Some((Cmd::Read(i, Some(f)), None)) if i == index && f.to_str().unwrap() == "filename.rs")
-        );
-    }
-
-    #[test]
-    fn parse_read_no_filename() {
-        let mut cmd_line = "\n".graphemes(true).peekable();
-        let res = parse_read_cmd(&mut cmd_line, None, "r").unwrap();
-        assert!(matches!(res, Some((Cmd::Read(None, None), None))));
-    }
-
-    #[test]
-    fn parse_read_bad_filename() {
-        let mut cmd_line = " \r\n".graphemes(true).peekable();
-        let res =
-            parse_read_cmd(&mut cmd_line, None, "r").expect_err("bad filename");
-        assert!(matches!(res, Error::NoFilename));
-    }
-
-    #[test]
-    fn parse_read_with_filename() {
-        let mut cmd_line = " a/filename.rs\r\n".graphemes(true).peekable();
-        let res = parse_read_cmd(&mut cmd_line, None, "r").unwrap();
-        assert!(
-            matches!(&res, Some((Cmd::Read(None, Some(f)), None)) if f.to_str().unwrap() == "a/filename.rs")
-        );
-    }
-
-    #[test]
-    fn parse_read_invalid_suffix() {
-        let mut cmd_line = "filename.rs\n".graphemes(true).peekable();
-        let res = parse_read_cmd(&mut cmd_line, None, "r")
-            .expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
@@ -1404,13 +1569,13 @@ mod tests {
             address.clone(),
         )
         .unwrap();
-        let (cmd, attrs) = res.unwrap();
-        let expected_attrs =
-            PrintAttributes { enumerate: true, ..Default::default() };
+        let (cmd, pr_sfx) = res.unwrap();
+        let expected_sfx =
+            PrintSuffix { enumerate: true, ..Default::default() };
         assert!(
             matches!(cmd, Cmd::Substitute(a, p, r, SubstitutionScope::Single(s)) if a == address && p.as_str() == "[^01]*" && r == "." && s == 1)
         );
-        assert!(matches!(attrs, Some(a) if a == expected_attrs));
+        assert!(matches!(pr_sfx, Some(a) if a == expected_sfx));
     }
 
     #[test]
@@ -1543,49 +1708,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_transfer_cmd_with_destination() {
-        let mut buffer =
-            EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
-        let mut cmd_line = " 4\n".graphemes(true).peekable();
-        let res = parse_targeted_cmd(
-            &mut cmd_line,
-            &mut buffer,
-            &mut None,
-            Some(0..2),
-            "t",
-        )
-        .unwrap();
-        assert!(
-            matches!(res, Some((Cmd::Transfer(a, t), None)) if a == Some(0..2) && t == 4)
-        );
-    }
-
-    #[test]
-    fn parse_transfer_cmd_no_addr() {
-        let mut buffer =
-            EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
-        let mut input = "t2\n".as_bytes();
-        let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
-        let (cmd, _) = res.unwrap();
-        assert!(matches!(cmd, Cmd::Transfer(None, t) if t == 2));
-    }
-
-    #[test]
-    fn parse_transfer_cmd_no_destination() {
-        let mut cmd_line = "\n".graphemes(true).peekable();
-        let addr = Some(0..5);
-        let res = parse_targeted_cmd(
-            &mut cmd_line,
-            &mut EditBuffer::new(),
-            &mut None,
-            addr,
-            "t",
-        )
-        .expect_err("should fail");
-        assert!(matches!(res, Error::MissingDestination));
-    }
-
-    #[test]
     fn parse_join_cmd_no_addr() {
         let mut input = "j\r\n".as_bytes();
         let res =
@@ -1613,49 +1735,6 @@ mod tests {
         assert!(
             matches!(res, Some((Cmd::LineNumber(Some(n)), None)) if n == 1)
         );
-    }
-
-    #[test]
-    fn parse_move_cmd_with_destination() {
-        let mut buffer =
-            EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
-        let mut cmd_line = " 5\n".graphemes(true).peekable();
-        let res = parse_targeted_cmd(
-            &mut cmd_line,
-            &mut buffer,
-            &mut None,
-            Some(0..2),
-            "m",
-        )
-        .unwrap();
-        assert!(
-            matches!(res, Some((Cmd::Move(a, t), None)) if a == Some(0..2) && t == 5)
-        );
-    }
-
-    #[test]
-    fn parse_move_cmd_no_addr() {
-        let mut buffer =
-            EditBuffer::with_lines(&["1\r\n", "2", "3", "4", "5", "6"]);
-        let mut input = "m4\n".as_bytes();
-        let res = Cmd::read(&mut input, &mut buffer, &mut None).unwrap();
-        let (cmd, _) = res.unwrap();
-        assert!(matches!(cmd, Cmd::Move(None, t) if t == 4));
-    }
-
-    #[test]
-    fn parse_move_cmd_no_destination() {
-        let mut cmd_line = "\n".graphemes(true).peekable();
-        let addr = Some(1..5);
-        let res = parse_targeted_cmd(
-            &mut cmd_line,
-            &mut EditBuffer::new(),
-            &mut None,
-            addr,
-            "m",
-        )
-        .expect_err("shoudl fail");
-        assert!(matches!(res, Error::MissingDestination));
     }
 
     #[test]

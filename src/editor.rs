@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Write as _};
 use std::fs::{self, File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{self, BufReader, prelude::*};
+use std::io::{self, BufRead, BufReader, Cursor, prelude::*};
 use std::num::NonZero;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -17,7 +17,9 @@ use similar::TextDiff;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::cli;
-use crate::command::{Cmd, PrintAttributes, SubstitutionScope};
+use crate::command::{
+    Cmd, InputMode, InputSource, PrintSuffix, SubstitutionScope,
+};
 use crate::edit_buffer::EditBuffer;
 use crate::eol::{Eol, Eols};
 use crate::error::{Error, Warning};
@@ -38,6 +40,7 @@ struct Editor {
     buffer_sync_hash: u64,
     buffer: EditBuffer,
     page_buffer: Vec<String>,
+    clipboard: String,
     output_target: OutputTarget,
 }
 
@@ -63,6 +66,7 @@ impl Editor {
         };
         let mut page_buffer = Vec::new();
         page_buffer.resize_with(term_rows, String::new);
+        let clipboard = String::new();
         Editor {
             previous_warning: None,
             previous_pattern: None,
@@ -72,6 +76,7 @@ impl Editor {
             file_hash: None,
             buffer,
             buffer_sync_hash,
+            clipboard,
             page_buffer,
             output_target,
         }
@@ -97,103 +102,88 @@ impl Editor {
     #[allow(clippy::too_many_lines)]
     fn dispatch_cmd(
         &mut self,
-        cmd: &Cmd,
+        cmd: Cmd,
         output: &mut impl Write,
         input: &mut impl LineEdit,
     ) -> Result<Option<ChangeSet>, Error> {
         let mut output = FmtWriter(output);
         let res = match cmd {
             // dispatch editor commands
-            Cmd::Append(index) => {
-                self.append_cmd(input, *index, IndentMode::Auto)
+            Cmd::Append { index, source, mode } => {
+                self.append_cmd(input, &mut output, index, source, mode)
             }
-            Cmd::AppendRaw(index) => {
-                self.append_cmd(input, *index, IndentMode::Raw)
+            Cmd::Copy(span) => {
+                self.copy_cmd(span);
+                Ok(None)
             }
-            Cmd::Change(span) => {
-                self.change_cmd(input, span.clone(), IndentMode::Auto)
+            Cmd::Cut(span) => Ok(Some(self.cut_cmd(span))),
+            Cmd::Delete(span) => Ok(self.delete_cmd(span)),
+            Cmd::Edit(filename) => {
+                self.edit_cmd(&mut output, filename.as_path())
             }
-            Cmd::ChangeRaw(span) => {
-                self.change_cmd(input, span.clone(), IndentMode::Raw)
-            }
-            Cmd::Delete(span) => Ok(self.delete_cmd(span.clone())),
-            Cmd::Edit(filename) => self.edit_cmd(&mut output, filename),
-            Cmd::Enumerate(span) => {
-                Ok(self.enumerate_cmd(&mut output, span.clone()))
-            }
+            Cmd::Enumerate(span) => Ok(self.enumerate_cmd(&mut output, span)),
             Cmd::File => {
                 self.file_cmd(&mut output);
                 Ok(None)
             }
             Cmd::Global(span, pattern, commands) => {
-                self.global_cmd(&mut output, span.clone(), pattern, commands)
+                self.global_cmd(&mut output, span, &pattern, &commands)
             }
-            Cmd::Insert(index) => {
-                self.insert_cmd(input, *index, IndentMode::Auto)
-            }
-            Cmd::InsertRaw(index) => {
-                self.insert_cmd(input, *index, IndentMode::Raw)
+            Cmd::Insert { index, source, mode } => {
+                self.insert_cmd(input, &mut output, index, source, mode)
             }
             Cmd::Join(span, separator) => {
-                self.join_cmd(span.clone(), separator.as_deref())
+                self.join_cmd(span, separator.as_deref())
             }
             Cmd::LineNumber(index) => {
-                Ok(self.line_number_cmd(&mut output, *index))
+                Ok(self.line_number_cmd(&mut output, index))
             }
-            Cmd::List(span) => Ok(self.list_cmd(&mut output, span.clone())),
-            Cmd::Move(span, destination) => {
-                self.move_cmd(span.clone(), *destination)
-            }
+            Cmd::List(span) => Ok(self.list_cmd(&mut output, span)),
             Cmd::New => self.new_cmd(),
-            Cmd::Newline(eol) => Ok(self.newline_cmd(&mut output, *eol)),
-            Cmd::Null(index) => self.null_cmd(&mut output, *index),
-            Cmd::PageDown(index, page_length, attrs) => {
+            Cmd::Newline(eol) => Ok(self.newline_cmd(&mut output, eol)),
+            Cmd::Null(index) => self.null_cmd(&mut output, index),
+            Cmd::Overwrite { span, source, mode } => {
+                self.overwrite_cmd(input, &mut output, span, source, mode)
+            }
+            Cmd::PageDown(index, page_length, pr_sfx) => {
                 let (cols, term_rows) = self.terminal_size();
                 if let Some(n) = page_length {
-                    self.page_length =
-                        NonZero::new((*n).clamp(0, term_rows - 1));
+                    self.page_length = NonZero::new(n.clamp(0, term_rows - 1));
                 }
                 let rows = self
                     .page_length
                     .map_or(term_rows.saturating_sub(3) / 2, usize::from);
                 Ok(self.page_down_cmd(
                     &mut output,
-                    *index,
-                    *attrs,
+                    index,
+                    pr_sfx,
                     PageBounds { cols, rows },
                 ))
             }
-            Cmd::PageUp(index, page_length, attrs) => {
+            Cmd::PageUp(index, page_length, pr_sfx) => {
                 let (cols, term_rows) = self.terminal_size();
                 if let Some(n) = page_length {
-                    self.page_length =
-                        NonZero::new((*n).clamp(0, term_rows - 1));
+                    self.page_length = NonZero::new(n.clamp(0, term_rows - 1));
                 }
                 let rows = self
                     .page_length
                     .map_or(term_rows.saturating_sub(3) / 2, usize::from);
                 Ok(self.page_up_cmd(
                     &mut output,
-                    *index,
-                    *attrs,
+                    index,
+                    pr_sfx,
                     PageBounds { cols, rows },
                 ))
             }
-            Cmd::Print(span) => Ok(self.print_cmd(&mut output, span.clone())),
+            Cmd::Print(span) => Ok(self.print_cmd(&mut output, span)),
             Cmd::Quit => self.quit_cmd(),
-            Cmd::Read(index, filename) => {
-                self.read_cmd(&mut output, *index, filename.as_deref())
-            }
             Cmd::Redo => self.buffer.redo().map(|()| None),
             Cmd::Reload => self.reload_cmd(&mut output),
             Cmd::ShowDiff(filename) => {
                 self.show_diff_cmd(&mut output.0, filename.as_deref())
             }
             Cmd::Substitute(span, pattern, replacement, scope) => {
-                self.substitute_cmd(span.clone(), pattern, replacement, *scope)
-            }
-            Cmd::Transfer(span, destination) => {
-                self.transfer_cmd(span.clone(), *destination)
+                self.substitute_cmd(span, &pattern, &replacement, scope)
             }
             Cmd::Undo => self.buffer.undo().map(|()| None),
             Cmd::Version => {
@@ -202,7 +192,7 @@ impl Editor {
             }
             Cmd::Write => self.write_cmd(&mut output),
             Cmd::WriteAs(span, filename) => {
-                self.write_as_cmd(&mut output, span.clone(), filename)
+                self.write_as_cmd(&mut output, span, filename.as_path())
             }
         };
 
@@ -238,70 +228,86 @@ impl Editor {
     fn append_cmd(
         &mut self,
         input: &mut impl LineEdit,
+        output: &mut impl fmt::Write,
         index: Option<usize>,
-        indent_mode: IndentMode,
+        source: InputSource,
+        mode: InputMode,
     ) -> Result<Option<ChangeSet>, Error> {
         let index = match index {
             Some(index) => index + 1,
             None if self.buffer.is_empty() => 0,
             None => self.buffer.current_index() + 1,
         };
-        let indent = match indent_mode {
-            IndentMode::Auto => self.buffer[..index]
-                .iter()
-                .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
-                .and_then(|l| INDENT.captures(l))
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().to_owned()),
-            IndentMode::Raw => None,
+        let (indent, eol) = match mode {
+            InputMode::Cooked => (
+                self.buffer[..index]
+                    .iter()
+                    .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
+                    .and_then(|l| INDENT.captures(l))
+                    .and_then(|c| c.get(1))
+                    .map(|m| m.as_str().to_owned()),
+                Some(self.buffer.eols().prevailing()),
+            ),
+            InputMode::Raw => (None, None),
         };
         let mut lines = Vec::new();
-        read_input_lines(
-            input,
-            &mut lines,
-            indent,
-            (indent_mode == IndentMode::Auto)
-                .then_some(self.buffer.eols().prevailing()),
-        )
-        .map_err(|e| Error::ReadLines { source: Some(Box::new(e)) })?;
+        match source {
+            InputSource::Clipboard => {
+                read_lines(&mut lines, &mut Cursor::new(&self.clipboard), eol)?;
+            }
+            InputSource::File(filename) => {
+                read_file_lines(&mut lines, &filename, eol, output)?;
+            }
+            InputSource::StdIn => {
+                read_input_lines(&mut lines, input, indent, eol)?;
+            }
+        }
         let changes = self.buffer.insert(index, lines);
         Ok((!changes.is_empty()).then_some(changes))
     }
 
-    fn change_cmd(
+    fn overwrite_cmd(
         &mut self,
         input: &mut impl LineEdit,
+        output: &mut impl fmt::Write,
         span: Option<Range<usize>>,
-        indent_mode: IndentMode,
+        source: InputSource,
+        mode: InputMode,
     ) -> Result<Option<ChangeSet>, Error> {
         let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
-        let indent = match indent_mode {
+        let (indent, eol) = match mode {
             // Auto-indent is same as first non-blank line in changed
             // span, or first previous non-blank line if changed span is
             // all blank.
-            IndentMode::Auto => self.buffer[span.clone()]
-                .iter()
-                .find(|l| l.contains(|c: char| !c.is_whitespace()))
-                .or_else(|| {
-                    self.buffer[..span.start]
-                        .iter()
-                        .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
-                })
-                .and_then(|l| INDENT.captures(l))
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().to_owned()),
-            IndentMode::Raw => None,
+            InputMode::Cooked => (
+                self.buffer[span.clone()]
+                    .iter()
+                    .find(|l| l.contains(|c: char| !c.is_whitespace()))
+                    .or_else(|| {
+                        self.buffer[..span.start]
+                            .iter()
+                            .rfind(|l| l.contains(|c: char| !c.is_whitespace()))
+                    })
+                    .and_then(|l| INDENT.captures(l))
+                    .and_then(|c| c.get(1))
+                    .map(|m| m.as_str().to_owned()),
+                Some(self.buffer.eols().prevailing()),
+            ),
+            InputMode::Raw => (None, None),
         };
 
         let mut lines = Vec::new();
-        read_input_lines(
-            input,
-            &mut lines,
-            indent,
-            (indent_mode == IndentMode::Auto)
-                .then_some(self.buffer.eols().prevailing()),
-        )
-        .map_err(|e| Error::ReadLines { source: Some(Box::new(e)) })?;
+        match source {
+            InputSource::Clipboard => {
+                read_lines(&mut lines, &mut Cursor::new(&self.clipboard), eol)?;
+            }
+            InputSource::File(filename) => {
+                read_file_lines(&mut lines, &filename, eol, output)?;
+            }
+            InputSource::StdIn => {
+                read_input_lines(&mut lines, input, indent, eol)?;
+            }
+        }
         let mut changes = self.buffer.remove(span.clone());
         changes.extend(self.buffer.insert(span.start, lines));
         Ok((!changes.is_empty()).then_some(changes))
@@ -317,11 +323,24 @@ impl Editor {
         (!changes.is_empty()).then_some(changes)
     }
 
+    fn copy_cmd(&mut self, span: Option<Range<usize>>) {
+        let span = span.unwrap_or(self.buffer.current_index_as_range());
+        self.clipboard.clear();
+        self.clipboard.extend(self.buffer[span].iter().cloned());
+    }
+
+    fn cut_cmd(&mut self, span: Option<Range<usize>>) -> ChangeSet {
+        let span = span.unwrap_or(self.buffer.current_index_as_range());
+        self.clipboard.clear();
+        self.clipboard.extend(self.buffer[span.clone()].iter().cloned());
+        self.buffer.remove(span)
+    }
+
     fn page_down_cmd(
         &mut self,
         output: &mut impl fmt::Write,
         index: Option<usize>,
-        attrs: Option<PrintAttributes>,
+        pr_sfx: Option<PrintSuffix>,
         bounds: PageBounds,
     ) -> Option<ChangeSet> {
         let start = if let Some(index) = index {
@@ -332,7 +351,7 @@ impl Editor {
         let end = cmp::min(self.buffer.len(), start + bounds.rows + 1);
 
         self.size_page_buffer(bounds.rows);
-        let attrs = attrs.unwrap_or_default();
+        let pr_sfx = pr_sfx.unwrap_or_default();
 
         let mut rows: usize = 0;
         let mut pb_end = 0;
@@ -342,7 +361,7 @@ impl Editor {
                 &mut self.page_buffer[pb_end],
                 &self.buffer,
                 i,
-                attrs,
+                pr_sfx,
             )
             .unwrap();
             pb_end += 1;
@@ -367,7 +386,7 @@ impl Editor {
         &mut self,
         output: &mut impl fmt::Write,
         index: Option<usize>,
-        attrs: Option<PrintAttributes>,
+        pr_sfx: Option<PrintSuffix>,
         bounds: PageBounds,
     ) -> Option<ChangeSet> {
         let end = if let Some(index) = index {
@@ -378,7 +397,7 @@ impl Editor {
         let start = end.saturating_sub(bounds.rows);
 
         self.size_page_buffer(bounds.rows);
-        let attrs = attrs.unwrap_or_default();
+        let pr_sfx = pr_sfx.unwrap_or_default();
 
         let mut rows: usize = 0;
         let mut pb_start = bounds.rows - 1;
@@ -388,7 +407,7 @@ impl Editor {
                 &mut self.page_buffer[pb_start],
                 &self.buffer,
                 i,
-                attrs,
+                pr_sfx,
             )
             .unwrap();
             rows = rows.saturating_add(cols.div_ceil(bounds.cols));
@@ -458,7 +477,8 @@ impl Editor {
         })?;
         let mut source = BufReader::new(file);
         let mut lines = Vec::new();
-        let (bytes_read, eol_added) = read_lines(&mut source, &mut lines)?;
+        let eol = Some(self.buffer.eols().prevailing());
+        let (bytes_read, eol_added) = read_lines(&mut lines, &mut source, eol)?;
         let lines_read = lines.len();
         self.buffer.clear();
         self.buffer.insert(0, lines);
@@ -512,7 +532,8 @@ impl Editor {
         })?;
         let mut source = BufReader::new(file);
         let mut lines = Vec::new();
-        let (bytes_read, eol_added) = read_lines(&mut source, &mut lines)?;
+        let eol = Some(self.buffer.eols().prevailing());
+        let (bytes_read, eol_added) = read_lines(&mut lines, &mut source, eol)?;
         let lines_read = lines.len();
         self.buffer.clear();
         self.buffer.insert(0, lines);
@@ -540,46 +561,6 @@ impl Editor {
         }
 
         Ok(None)
-    }
-
-    fn read_cmd(
-        &mut self,
-        output: &mut impl fmt::Write,
-        index: Option<usize>,
-        filename: Option<&Path>,
-    ) -> Result<Option<ChangeSet>, Error> {
-        // Handle default
-        let index = index.unwrap_or(self.buffer.current_index());
-
-        // read shouldn't set the remembered filename
-        let filename = filename
-            .or(self.current_file.as_deref())
-            .ok_or(Error::NoFilename)?;
-
-        let file = File::open(filename);
-        let mut source = match file {
-            Ok(f) => BufReader::new(f),
-            Err(e) => {
-                return match e.kind() {
-                    io::ErrorKind::NotFound => {
-                        Err(Error::FileNotFound(filename.into()))
-                    }
-                    _ => Err(Error::ReadFileOpen {
-                        source: Some(Box::new(e)),
-                        file: filename.into(),
-                    }),
-                };
-            }
-        };
-
-        let mut lines = Vec::new();
-        let (bytes_read, eol_added) = read_lines(&mut source, &mut lines)?;
-        writeln!(output, "{} lines ({bytes_read} bytes) read", lines.len())
-            .unwrap();
-        if eol_added {
-            writeln!(output, "missing newline appended").unwrap();
-        }
-        Ok(Some(self.buffer.insert(index, lines)))
     }
 
     fn substitute_cmd(
@@ -663,21 +644,6 @@ impl Editor {
         if changes.is_empty() { Err(Error::NoMatch) } else { Ok(Some(changes)) }
     }
 
-    fn transfer_cmd(
-        &mut self,
-        span: Option<Range<usize>>,
-        destination: usize,
-    ) -> Result<Option<ChangeSet>, Error> {
-        // Handle default
-        let source =
-            span.unwrap_or_else(|| self.buffer.current_index_as_range());
-        if source.contains(&destination) {
-            return Err(Error::DestinationIntersectsSource);
-        }
-        let lines = Vec::from(&self.buffer[source]);
-        Ok(Some(self.buffer.insert(destination, lines)))
-    }
-
     fn enumerate_cmd(
         &mut self,
         output: &mut impl fmt::Write,
@@ -690,9 +656,9 @@ impl Editor {
         // Handle default
         let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         self.buffer.set_current_index(span.end - 1);
-        let attrs = PrintAttributes { enumerate: true, ..Default::default() };
+        let pr_sfx = PrintSuffix { enumerate: true, ..Default::default() };
         for i in span {
-            write_line(output, &self.buffer, i, attrs).unwrap();
+            write_line(output, &self.buffer, i, pr_sfx).unwrap();
         }
         None
     }
@@ -780,25 +746,26 @@ impl Editor {
             .map_err(|e| Error::ReadGlobalCmd { source: Some(Box::new(e)) })?
             {
                 let cs = match cmd {
-                    Cmd::Append(index) => {
-                        self.append_cmd(&mut input, index, IndentMode::Auto)
+                    Cmd::Append { index, source, mode } => {
+                        self.append_cmd(&mut input, output, index, source, mode)
                     }
-                    Cmd::Change(index) => {
-                        self.change_cmd(&mut input, index, IndentMode::Auto)
+                    Cmd::Overwrite { span, source, mode } => self
+                        .overwrite_cmd(&mut input, output, span, source, mode),
+                    Cmd::Copy(span) => {
+                        self.copy_cmd(span);
+                        Ok(None)
                     }
+                    Cmd::Cut(span) => Ok(Some(self.cut_cmd(span))),
                     Cmd::Delete(span) => Ok(self.delete_cmd(span)),
                     Cmd::Enumerate(span) => {
                         Ok(self.enumerate_cmd(output, span))
                     }
                     Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
-                    Cmd::Insert(index) => {
-                        self.insert_cmd(&mut input, index, IndentMode::Auto)
+                    Cmd::Insert { index, source, mode } => {
+                        self.insert_cmd(&mut input, output, index, source, mode)
                     }
                     Cmd::Join(span, separator) => {
                         self.join_cmd(span, separator.as_deref())
-                    }
-                    Cmd::Move(span, destination) => {
-                        self.move_cmd(span, destination)
                     }
                     Cmd::List(span) => Ok(self.list_cmd(output, span)),
                     Cmd::Null(index) => {
@@ -808,9 +775,6 @@ impl Editor {
                     Cmd::Substitute(span, pattern, replacement, scope) => {
                         self.substitute_cmd(span, &pattern, &replacement, scope)
                     }
-                    Cmd::Transfer(span, destination) => {
-                        self.transfer_cmd(span, destination)
-                    }
                     _ => Err(Error::UnsupportedGlobalCmd),
                 }?;
                 if let Some(mut cs) = cs {
@@ -818,12 +782,12 @@ impl Editor {
                         adjust_global_list(&mut matched_lines, &change);
                         changes.push(change);
                     }
-                    if let Some(attrs) = sfx {
+                    if let Some(pr_sfx) = sfx {
                         write_line(
                             output,
                             &self.buffer,
                             self.buffer.current_index(),
-                            attrs,
+                            pr_sfx,
                         )
                         .unwrap();
                     }
@@ -870,7 +834,7 @@ impl Editor {
         let index = index.unwrap_or(self.buffer.current_index() + 1);
 
         self.buffer.set_current_index(index);
-        let pr_attrs = PrintAttributes::default();
+        let pr_attrs = PrintSuffix::default();
         write_line(output, &self.buffer, index, pr_attrs).unwrap();
         Ok(None)
     }
@@ -886,7 +850,7 @@ impl Editor {
         // Handle default
         let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         self.buffer.set_current_index(span.end - 1);
-        let attributes = PrintAttributes::default();
+        let attributes = PrintSuffix::default();
         for i in span {
             write_line(output, &self.buffer, i, attributes).unwrap();
         }
@@ -906,53 +870,48 @@ impl Editor {
         let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         self.buffer.set_current_index(span.end - 1);
         let attributes =
-            PrintAttributes { expand_escapes: true, ..Default::default() };
+            PrintSuffix { expand_escapes: true, ..Default::default() };
         for i in span {
             write_line(output, &self.buffer, i, attributes).unwrap();
         }
         None
     }
 
-    fn move_cmd(
-        &mut self,
-        span: Option<Range<usize>>,
-        destination: usize,
-    ) -> Result<Option<ChangeSet>, Error> {
-        // Handle default
-        let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
-        if span.contains(&destination) {
-            return Err(Error::DestinationIntersectsSource);
-        }
-        Ok(Some(self.buffer.relocate(span, destination)))
-    }
-
     fn insert_cmd(
         &mut self,
         input: &mut impl LineEdit,
+        output: &mut impl fmt::Write,
         index: Option<usize>,
-        indent_mode: IndentMode,
+        source: InputSource,
+        mode: InputMode,
     ) -> Result<Option<ChangeSet>, Error> {
         // Handle default
         let index = index.unwrap_or_else(|| self.buffer.current_index());
-        let indent = match indent_mode {
+        let (indent, eol) = match mode {
             // Auto-indent is same as first non-blank line after index.
-            IndentMode::Auto => self.buffer[index..]
-                .iter()
-                .find(|l| l.contains(|c: char| !c.is_whitespace()))
-                .and_then(|l| INDENT.captures(l))
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().to_owned()),
-            IndentMode::Raw => None,
+            InputMode::Cooked => (
+                self.buffer[index..]
+                    .iter()
+                    .find(|l| l.contains(|c: char| !c.is_whitespace()))
+                    .and_then(|l| INDENT.captures(l))
+                    .and_then(|c| c.get(1))
+                    .map(|m| m.as_str().to_owned()),
+                Some(self.buffer.eols().prevailing()),
+            ),
+            InputMode::Raw => (None, None),
         };
         let mut lines = Vec::new();
-        read_input_lines(
-            input,
-            &mut lines,
-            indent,
-            (indent_mode == IndentMode::Auto)
-                .then_some(self.buffer.eols().prevailing()),
-        )
-        .map_err(|e| Error::ReadLines { source: Some(Box::new(e)) })?;
+        match source {
+            InputSource::Clipboard => {
+                read_lines(&mut lines, &mut Cursor::new(&self.clipboard), eol)?;
+            }
+            InputSource::File(filename) => {
+                read_file_lines(&mut lines, &filename, eol, output)?;
+            }
+            InputSource::StdIn => {
+                read_input_lines(&mut lines, input, indent, eol)?;
+            }
+        }
         let changes = self.buffer.insert(index, lines);
         Ok((!changes.is_empty()).then_some(changes))
     }
@@ -1153,12 +1112,6 @@ impl Editor {
     }
 }
 
-#[derive(Debug, PartialEq, Copy, Clone)]
-enum IndentMode {
-    Auto,
-    Raw,
-}
-
 /// Main event loop.
 ///
 /// Handles prompting, command input, command dispatch, and error display.
@@ -1190,20 +1143,20 @@ pub fn run(
 
         Cmd::read(&mut input, &mut editor.buffer, &mut editor.previous_pattern)
             .and_then(|res| match res {
-                Some((cmd, sfx)) => {
+                Some((cmd, pr_sfx)) => {
                     let res =
-                        editor.dispatch_cmd(&cmd, &mut output.0, &mut input);
+                        editor.dispatch_cmd(cmd, &mut output.0, &mut input);
                     res.map(|cs| {
                         if let Some(cs) = cs {
                             editor.buffer.push_undo(cs);
                         }
                         editor.previous_warning = None;
-                        if let Some(attrs) = sfx {
+                        if let Some(pr_sfx) = pr_sfx {
                             write_line(
                                 &mut output,
                                 &editor.buffer,
                                 editor.buffer.current_index(),
-                                attrs,
+                                pr_sfx,
                             )
                             .unwrap();
                         }
@@ -1264,19 +1217,6 @@ fn adjust_global_list(list: &mut VecDeque<usize>, change: &Change) {
                 }
             });
         }
-        Change::Relocate { span, destination } => {
-            list.retain_mut(|i| {
-                if span.contains(i) {
-                    return false;
-                }
-                let span_len = span.end - span.start;
-                let rem_adj = if *i >= span.end { span_len } else { 0 };
-                let ins_adj = if *i >= *destination { span_len } else { 0 };
-                *i += ins_adj;
-                *i -= rem_adj;
-                true
-            });
-        }
         Change::Insert { index, lines } => {
             for n in list.iter_mut().filter(|n| **n >= *index) {
                 *n += lines.len();
@@ -1290,7 +1230,7 @@ fn write_line(
     output: &mut impl fmt::Write,
     buffer: &EditBuffer,
     index: usize,
-    attributes: PrintAttributes,
+    attributes: PrintSuffix,
 ) -> Result<usize, fmt::Error> {
     let line_number = index + 1;
     let mut columns = 0;
@@ -1344,19 +1284,21 @@ fn expand_escapes(s: &str) -> &str {
 }
 
 fn read_input_lines(
-    input: &mut impl LineEdit,
     buf: &mut Vec<String>,
+    input: &mut impl LineEdit,
     indent: Option<String>,
     prevailing_eol: Option<Eol>,
-) -> Result<usize, io::Error> {
+) -> Result<(), Error> {
     let mut text_read_options =
         EditorOptions { prompt: None, history: false, prefill: indent };
     buf.clear();
     loop {
         let mut line = String::new();
-        let n = input.read_line(&mut line, Some(&text_read_options))?;
+        let n = input
+            .read_line(&mut line, Some(&text_read_options))
+            .map_err(|e| Error::ReadLines { source: Some(Box::new(e)) })?;
         if n == 0 || line == ".\n" || line == ".\r\n" {
-            return Ok(buf.len());
+            return Ok(());
         }
         if let Some(indent) = text_read_options.prefill.as_mut() {
             indent.replace_range(
@@ -1379,14 +1321,57 @@ fn read_input_lines(
     }
 }
 
-fn read_lines(
-    source: &mut impl BufRead,
+fn read_file_lines(
     lines: &mut Vec<String>,
+    filename: &Path,
+    eol: Option<Eol>,
+    output: &mut impl fmt::Write,
+) -> Result<(), Error> {
+    let file = File::open(filename);
+    let mut source = match file {
+        Ok(f) => BufReader::new(f),
+        Err(e) => {
+            return match e.kind() {
+                io::ErrorKind::NotFound => {
+                    Err(Error::FileNotFound(filename.to_path_buf()))
+                }
+                _ => Err(Error::ReadFileOpen {
+                    source: Some(Box::new(e)),
+                    file: filename.to_path_buf(),
+                }),
+            };
+        }
+    };
+
+    let (bytes_read, eol_added) = read_lines(lines, &mut source, eol)?;
+    writeln!(output, "{} lines ({bytes_read} bytes) read", lines.len())
+        .unwrap();
+    if eol_added {
+        writeln!(output, "missing newline appended").unwrap();
+    }
+    Ok(())
+}
+
+// Reads lines from `source` into `lines`, adding missing
+// linefeed to final line if necessary.
+//
+// Added linefeed will be `eol` if Some, otherwise it will
+// be the prevailing eol for the lines read.
+//
+// If successful, returns a tuple of the number of bytes read and
+// a boolean indicating whether a final linefeed was appended.
+//
+// If there is an error, it is returned instead.
+//
+fn read_lines(
+    lines: &mut Vec<String>,
+    source: &mut impl BufRead,
+    eol: Option<Eol>,
 ) -> Result<(usize, bool), Error> {
     let mut line = String::new();
     let mut bytes_read = 0;
     let mut eol_added = false;
-    let mut eols = Eols::new(Eol::Lf);
+    let mut eols = Eols::new(eol.unwrap_or(Eol::Lf));
     loop {
         let len = source
             .read_line(&mut line)
@@ -1403,9 +1388,8 @@ fn read_lines(
             line.push_str(eol.into());
             eol_added = true;
         }
-        line.shrink_to_fit();
-        lines.push(line);
-        line = String::new();
+        lines.push(line.clone());
+        line.clear();
     }
 
     Ok((bytes_read, eol_added))
@@ -1826,8 +1810,10 @@ mod tests {
         editor
             .append_cmd(
                 &mut input,
+                &mut output,
                 Some(editor.buffer.len() - 1),
-                IndentMode::Raw,
+                InputSource::StdIn,
+                InputMode::Raw,
             )
             .unwrap();
         editor.buffer.set_current_index(2);
@@ -1873,10 +1859,10 @@ mod tests {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["one\n", "two", "three"]);
         let mut output = String::new();
-        let pat = Regex::new("four").unwrap();
+        let pat = &Regex::new("four").unwrap();
         let commands = "p\n".to_owned();
         let res = editor
-            .global_cmd(&mut output, None, &pat, &commands)
+            .global_cmd(&mut output, None, pat, &commands)
             .expect("no error");
         assert!(res.is_none(), "should be no changes");
         assert!(output.is_empty());
@@ -1888,9 +1874,9 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["one\r\n", "two", "three"]);
         editor.buffer.set_current_index(1);
         let mut output = String::new();
-        let pat = Regex::new("t..").unwrap();
+        let pat = &Regex::new("t..").unwrap();
         let commands = "1,2g/ee/n\n".to_owned();
-        let res = editor.global_cmd(&mut output, None, &pat, &commands);
+        let res = editor.global_cmd(&mut output, None, pat, &commands);
         assert!(matches!(res, Err(Error::NestedGlobalCmd)));
     }
 
@@ -1901,11 +1887,10 @@ mod tests {
             EditBuffer::with_lines(&["one\r\n", "two", "three", "tweedle dee"]);
         editor.buffer.set_current_index(3);
         let mut output = String::new();
-        let pat = Regex::new("t..").unwrap();
+        let pat = &Regex::new("t..").unwrap();
         let commands = "\n".to_owned();
-        let res = editor
-            .global_cmd(&mut output, Some(0..3), &pat, &commands)
-            .unwrap();
+        let res =
+            editor.global_cmd(&mut output, Some(0..3), pat, &commands).unwrap();
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "two\r\nthree\r\n");
     }
@@ -1916,10 +1901,10 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["one\n", "two", "three"]);
         editor.buffer.set_current_index(1);
         let mut output = String::new();
-        let pat = Regex::new("t..").unwrap();
+        let pat = &Regex::new("t..").unwrap();
         let commands = "p\r\n".to_owned();
         let res = editor
-            .global_cmd(&mut output, None, &pat, &commands)
+            .global_cmd(&mut output, None, pat, &commands)
             .expect("no errors");
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "two\nthree\n");
@@ -1931,10 +1916,10 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["one\n", "two", "three"]);
         editor.buffer.set_current_index(0);
         let mut output = String::new();
-        let pat = Regex::new("t..").unwrap();
+        let pat = &Regex::new("t..").unwrap();
         let commands = "n\r\n".to_owned();
         let res = editor
-            .global_cmd(&mut output, Some(0..3), &pat, &commands)
+            .global_cmd(&mut output, Some(0..3), pat, &commands)
             .expect("no error");
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "2  two\n3  three\n");
@@ -1948,10 +1933,10 @@ mod tests {
         ]);
         editor.buffer.set_current_index(5);
         let mut output = String::new();
-        let pat = Regex::new("e$").unwrap();
+        let pat = &Regex::new("e$").unwrap();
         let commands = "-1,.n\r\n".to_owned();
         let res = editor
-            .global_cmd(&mut output, Some(1..5), &pat, &commands)
+            .global_cmd(&mut output, Some(1..5), pat, &commands)
             .expect("no error");
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "2  two\n3  three\n4  four\n5  five\n");
@@ -1963,10 +1948,10 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["one\n", "two", "three"]);
         editor.buffer.set_current_index(1);
         let mut output = String::new();
-        let pat = Regex::new("t..").unwrap();
+        let pat = &Regex::new("t..").unwrap();
         let commands = "l\r\n".to_owned();
         let res = editor
-            .global_cmd(&mut output, Some(0..3), &pat, &commands)
+            .global_cmd(&mut output, Some(0..3), pat, &commands)
             .expect("no error");
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "two\\n$\nthree\\n$\n");
@@ -1980,13 +1965,80 @@ mod tests {
         ]);
         editor.buffer.set_current_index(5);
         let mut output = String::new();
-        let pat = Regex::new("e$").unwrap();
+        let pat = &Regex::new("e$").unwrap();
         let commands = "-1,.l\r\n".to_owned();
         let res = editor
-            .global_cmd(&mut output, Some(1..5), &pat, &commands)
+            .global_cmd(&mut output, Some(1..5), pat, &commands)
             .expect("no error");
         assert!(res.is_none(), "should be no changes");
         assert_eq!(&output, "two\\n$\nthree\\n$\nfour\\n$\nfive\\n$\n");
+    }
+    #[test]
+    fn global_cmd_copy() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        editor.buffer = EditBuffer::with_lines(&[
+            "one\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = editor.buffer.clone();
+        let expected = EditBuffer::with_lines(&[
+            "three\n", "two", "one", "two", "three", "four", "five", "six",
+        ]);
+        let mut output = String::new();
+        let pat = Regex::new("^t").unwrap();
+        let commands = "c\n1iv\n".to_owned();
+        let changes = editor
+            .global_cmd(&mut output, Some(0..6), &pat, &commands)
+            .expect("no error")
+            .expect("some changes");
+        assert!(!changes.is_empty());
+        assert_eq!(editor.clipboard, "three\n");
+        assert_eq!(&editor.buffer[..], &expected[..]);
+        assert_eq!(editor.buffer.current_index(), 0);
+        editor.buffer.push_undo(changes);
+
+        editor.buffer.undo().expect("something to undo");
+        assert_eq!(&editor.buffer[..], &orig[..]);
+        assert_eq!(&editor.clipboard, "three\n");
+        assert_eq!(editor.buffer.current_index(), orig.current_index());
+
+        editor.buffer.redo().expect("successful redo");
+        assert_eq!(&editor.buffer[..], &expected[..]);
+        assert_eq!(editor.buffer.current_index(), 0);
+        assert_eq!(editor.clipboard, "three\n");
+    }
+
+    #[test]
+    fn global_cmd_cut() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        editor.buffer = EditBuffer::with_lines(&[
+            "one\n", "two", "three", "four", "five", "six",
+        ]);
+        let orig = editor.buffer.clone();
+        let expected = EditBuffer::with_lines(&[
+            "three\n", "two", "one", "four", "five", "six",
+        ]);
+        let mut output = String::new();
+        let pat = Regex::new("^t").unwrap();
+        let commands = "x\n1iv\n".to_owned();
+        let changes = editor
+            .global_cmd(&mut output, Some(0..6), &pat, &commands)
+            .expect("no error")
+            .expect("some changes");
+        assert!(!changes.is_empty());
+        assert_eq!(editor.clipboard, "three\n");
+        assert_eq!(&editor.buffer[..], &expected[..]);
+        assert_eq!(editor.buffer.current_index(), 0);
+        editor.buffer.push_undo(changes);
+
+        editor.buffer.undo().expect("something to undo");
+        assert_eq!(&editor.buffer[..], &orig[..]);
+        assert_eq!(&editor.clipboard, "three\n");
+        assert_eq!(editor.buffer.current_index(), orig.current_index());
+
+        editor.buffer.redo().expect("successful redo");
+        assert_eq!(&editor.buffer[..], &expected[..]);
+        assert_eq!(editor.buffer.current_index(), 0);
+        assert_eq!(editor.clipboard, "three\n");
     }
 
     #[test]
@@ -2001,10 +2053,10 @@ mod tests {
             "append", "six",
         ]);
         let mut output = String::new();
-        let pat = Regex::new("e$").unwrap();
+        let pat = &Regex::new("e$").unwrap();
         let commands = "a\nappend\n.\n".to_owned();
         let changes = editor
-            .global_cmd(&mut output, Some(0..6), &pat, &commands)
+            .global_cmd(&mut output, Some(0..6), pat, &commands)
             .expect("no error")
             .expect("some changes");
         assert!(!changes.is_empty());
@@ -2024,7 +2076,7 @@ mod tests {
     }
 
     #[test]
-    fn global_cmd_change() {
+    fn global_cmd_overwrite() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&[
             "one\n", "one", "two", "two", "three", "three", "four", "four",
@@ -2032,14 +2084,14 @@ mod tests {
         ]);
         let orig = editor.buffer.clone();
         let expected = EditBuffer::with_lines(&[
-            "change 1\n",
-            "change 2",
-            "change 3",
+            "overwrite 1\n",
+            "overwrite 2",
+            "overwrite 3",
             "two",
             "two",
-            "change 1",
-            "change 2",
-            "change 3",
+            "overwrite 1",
+            "overwrite 2",
+            "overwrite 3",
             "four",
             "four",
             "five",
@@ -2048,10 +2100,11 @@ mod tests {
             "six",
         ]);
         let mut output = String::new();
-        let pat = Regex::new("([a-z]*e)$").unwrap();
-        let commands = ".,+c\nchange 1\nchange 2\nchange 3\n.\n".to_owned();
+        let pat = &Regex::new("([a-z]*e)$").unwrap();
+        let commands =
+            ".,+o\noverwrite 1\noverwrite 2\noverwrite 3\n.\n".to_owned();
         let Ok(Some(changes)) =
-            editor.global_cmd(&mut output, Some(0..6), &pat, &commands)
+            editor.global_cmd(&mut output, Some(0..6), pat, &commands)
         else {
             panic!("global_cmd's err return wasn't None!")
         };
@@ -2080,10 +2133,10 @@ mod tests {
         let orig = editor.buffer.clone();
         let expected = EditBuffer::with_lines(&["two\n", "four", "six"]);
         let mut output = String::new();
-        let pat = Regex::new("e$").unwrap();
+        let pat = &Regex::new("e$").unwrap();
         let commands = "dn\n".to_owned();
         let Ok(Some(changes)) =
-            editor.global_cmd(&mut output, Some(0..6), &pat, &commands)
+            editor.global_cmd(&mut output, Some(0..6), pat, &commands)
         else {
             panic!("global_cmd err return wasn't None!");
         };
@@ -2123,10 +2176,10 @@ mod tests {
             "six",
         ]);
         let mut output = String::new();
-        let pat = Regex::new("e$").unwrap();
+        let pat = &Regex::new("e$").unwrap();
         let commands = "i\r\ninsert\r\n.\r\n".to_owned();
         let Ok(Some(changes)) =
-            editor.global_cmd(&mut output, Some(0..6), &pat, &commands)
+            editor.global_cmd(&mut output, Some(0..6), pat, &commands)
         else {
             panic!("global_cmd returned an unexpected error!");
         };
@@ -2157,9 +2210,9 @@ mod tests {
             EditBuffer::with_lines(&["onetwo\n", "threefour", "fivesix"]);
         expected.set_current_index(1);
         let mut output = String::new();
-        let pat = Regex::new("e$").unwrap();
+        let pat = &Regex::new("e$").unwrap();
         let commands = "jn\n".to_owned();
-        let res = editor.global_cmd(&mut output, Some(0..6), &pat, &commands);
+        let res = editor.global_cmd(&mut output, Some(0..6), pat, &commands);
         let changes = match res {
             Err(e) => panic!("unexpected error {e:?}"),
             Ok(None) => panic!("should have returned Some(ChangeSet)"),
@@ -2180,78 +2233,6 @@ mod tests {
         editor.buffer.redo().expect("something there to undo");
         assert_eq!(&editor.buffer[..], &expected[..]);
         assert_eq!(editor.buffer.current_index(), 2);
-    }
-
-    #[test]
-    fn global_cmd_move() {
-        let mut editor = Editor::new(OutputTarget::Other);
-        editor.buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        let orig = editor.buffer.clone();
-        let mut expected = EditBuffer::with_lines(&[
-            "one\r\n", "four", "five", "six", "two", "three",
-        ]);
-        expected.set_current_index(5);
-        let mut output = String::new();
-        let pat = Regex::new("^t").unwrap();
-        let commands = "m$\r\n".to_owned();
-        let Some(changes) = editor
-            .global_cmd(&mut output, Some(0..6), &pat, &commands)
-            .expect("should have been Ok!")
-        else {
-            panic!("should have been Some(changes)!");
-        };
-        assert!(!changes.is_empty());
-        editor.buffer.push_undo(changes);
-        assert_eq!(&editor.buffer[..], &expected[..]);
-        assert_eq!(editor.buffer.current_index(), expected.current_index());
-
-        // now undo
-        editor.buffer.undo().expect("something there to undo");
-        assert_eq!(&editor.buffer[..], &orig[..]);
-        assert_eq!(editor.buffer.current_index(), orig.current_index());
-
-        // redo
-        editor.buffer.redo().expect("something there to undo");
-        assert_eq!(&editor.buffer[..], &expected[..]);
-        assert_eq!(editor.buffer.current_index(), expected.current_index());
-    }
-
-    #[test]
-    fn global_cmd_move_with_overlap() {
-        let mut editor = Editor::new(OutputTarget::Other);
-        editor.buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        let orig = editor.buffer.clone();
-        let mut expected = EditBuffer::with_lines(&[
-            "one\r\n", "four", "five", "six", "two", "three",
-        ]);
-        expected.set_current_index(5);
-        let mut output = String::new();
-        let pat = Regex::new("^t").unwrap();
-        let commands = ".,+m$\r\n".to_owned();
-        let Some(changes) = editor
-            .global_cmd(&mut output, Some(0..6), &pat, &commands)
-            .expect("should have been Ok!")
-        else {
-            panic!("should have been Some(changes)!");
-        };
-        assert!(!changes.is_empty());
-        editor.buffer.push_undo(changes);
-        assert_eq!(&editor.buffer[..], &expected[..]);
-        assert_eq!(editor.buffer.current_index(), expected.current_index());
-
-        // now undo
-        editor.buffer.undo().expect("something there to undo");
-        assert_eq!(&editor.buffer[..], &orig[..]);
-        assert_eq!(editor.buffer.current_index(), orig.current_index());
-
-        // redo
-        editor.buffer.redo().expect("something there to undo");
-        assert_eq!(&editor.buffer[..], &expected[..]);
-        assert_eq!(editor.buffer.current_index(), expected.current_index());
     }
 
     #[test]
@@ -2289,10 +2270,10 @@ mod tests {
         let expected_output = " 6  'xteen\n10  'xteen\n";
 
         let mut output = String::new();
-        let pat = Regex::new("s[aeiou]").unwrap();
+        let pat = &Regex::new("s[aeiou]").unwrap();
         let commands = ".,+2s//\\\n'/n".to_string();
         let Err(Error::GlobalCmdErrorStop { source, changes }) =
-            editor.global_cmd(&mut output, None, &pat, &commands)
+            editor.global_cmd(&mut output, None, pat, &commands)
         else {
             panic!("should have returned GlobalCmdErrorStop");
         };
@@ -2355,10 +2336,10 @@ mod tests {
         let expected_output = " 3  'x seven eight\n 6  'xteen\n 8  'venteen eighteen nineteen twenty\n10  'xteen\n13  'x seven eight\n";
 
         let mut output = String::new();
-        let pat = Regex::new("s[aeiou]").unwrap();
+        let pat = &Regex::new("s[aeiou]").unwrap();
         let commands = "s//\\\n'/n".to_string();
         let Some(changes) = editor
-            .global_cmd(&mut output, None, &pat, &commands)
+            .global_cmd(&mut output, None, pat, &commands)
             .expect("should have been Ok")
         else {
             panic!("should have been Some(changes)!");
@@ -2377,50 +2358,14 @@ mod tests {
     }
 
     #[test]
-    fn global_cmd_transfer() {
-        let mut editor = Editor::new(OutputTarget::Other);
-        editor.buffer = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six",
-        ]);
-        let orig = editor.buffer.clone();
-        let expected = EditBuffer::with_lines(&[
-            "one\r\n", "two", "three", "four", "five", "six", "one", "three",
-            "five",
-        ]);
-        let mut output = String::new();
-        let pat = Regex::new("e$").unwrap();
-        let commands = "t$\r\n".to_owned();
-        let Some(changes) = editor
-            .global_cmd(&mut output, Some(0..6), &pat, &commands)
-            .expect("should have been Ok!")
-        else {
-            panic!("should have been Some(changes)!");
-        };
-        assert!(!changes.is_empty());
-        editor.buffer.push_undo(changes);
-        assert_eq!(&editor.buffer[..], &expected[..]);
-        assert_eq!(editor.buffer.current_index(), 8);
-
-        // now undo
-        editor.buffer.undo().expect("something there to undo");
-        assert_eq!(&editor.buffer[..], &orig[..]);
-        assert_eq!(editor.buffer.current_index(), orig.current_index());
-
-        // redo
-        editor.buffer.redo().expect("something there to undo");
-        assert_eq!(&editor.buffer[..], &expected[..]);
-        assert_eq!(editor.buffer.current_index(), 8);
-    }
-
-    #[test]
     fn global_cmd_unsupported_commands() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["one\r\n", "two", "three"]);
         editor.buffer.set_current_index(1);
         let mut output = String::new();
-        let pat = Regex::new(r"t..").unwrap();
+        let pat = &Regex::new(r"t..").unwrap();
         let commands = "e filename.txt\n".to_owned();
-        let res = editor.global_cmd(&mut output, Some(0..3), &pat, &commands);
+        let res = editor.global_cmd(&mut output, Some(0..3), pat, &commands);
         assert!(matches!(res, Err(Error::UnsupportedGlobalCmd)));
     }
 
@@ -2559,6 +2504,22 @@ mod tests {
     }
 
     #[test]
+    fn append_cmd_paste_dispatch() {
+        let input = b"a\n1\n2\n3\n4\n5\n6\n.\n4,6x\n1Av\n1,$p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
+            .unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("unsaved changes"));
+        let expected = "1\n4\n5\n6\n2\n3\n";
+        assert!(output.contains("unsaved changes"));
+        assert!(
+            output.contains(expected),
+            "expected {expected:?}\n\tin {output:?}"
+        );
+    }
+
+    #[test]
     fn append_cmd_dispatch_p_print_sfx() {
         let input = b"ap\none\ntwo\nthree\n.\n2p\nq\nq\n";
         let mut output = Vec::new();
@@ -2608,8 +2569,8 @@ mod tests {
     }
 
     #[test]
-    fn change_cmd_dispatch() {
-        let input = b"a\n1\n2\n3\n4\n.\n2,3c\na\nb\n.\n1,$p\nq\nq\n";
+    fn overwrite_cmd_dispatch() {
+        let input = b"a\n1\n2\n3\n4\n.\n2,3o\na\nb\n.\n1,$p\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
             .unwrap();
@@ -2618,14 +2579,30 @@ mod tests {
     }
 
     #[test]
-    fn change_raw_cmd_dispatch() {
+    fn overwrite_raw_cmd_dispatch() {
         let input =
-            b"a\n    1\n    2\n    3\n    4\n.\n2,3C\na\nb\n.\n1,$p\nq\nq\n";
+            b"a\n    1\n    2\n    3\n    4\n.\n2,3O\na\nb\n.\n1,$p\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
             .unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("    1\na\nb\n    4\n"));
+    }
+
+    #[test]
+    fn overwrite_cmd_paste_dispatch() {
+        let input = b"a\n1\n2\n3\n4\n5\n6\n.\n5,6c\n1,2Ov\n1,$p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
+            .unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("unsaved changes"));
+        let expected = "5\n6\n3\n4\n5\n6\n";
+        assert!(output.contains("unsaved changes"));
+        assert!(
+            output.contains(expected),
+            "expected {expected:?}\n\tin {output:?}"
+        );
     }
 
     #[test]
@@ -2685,6 +2662,22 @@ mod tests {
     }
 
     #[test]
+    fn insert_cmd_paste_dispatch() {
+        let input = b"a\n1\n2\n3\n4\n5\n6\n.\n4,6x\n1Iv\n1,$p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
+            .unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("unsaved changes"));
+        let expected = "4\n5\n6\n1\n2\n3\n";
+        assert!(output.contains("unsaved changes"));
+        assert!(
+            output.contains(expected),
+            "expected {expected:?}\n\tin {output:?}"
+        );
+    }
+
+    #[test]
     fn global_cmd_dispatch() {
         let input = b"a\none\ntwo\nthree\nfour\nfive\n.\ng/e$/n\nq\nq\n";
         let mut output = Vec::new();
@@ -2726,20 +2719,6 @@ mod tests {
     }
 
     #[test]
-    fn move_cmd_dispatch() {
-        let input = b"a\n3\n4\n5\n1\n2\n.\n1,3m5\n1,$p\nq\nq\n";
-        let mut output = Vec::new();
-        run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
-            .unwrap();
-        let output = str::from_utf8(&output[..]).unwrap();
-        let expected = "1\n2\n3\n4\n5\nunsaved";
-        assert!(
-            output.starts_with(expected),
-            "expected {output:?} \n\tto start with {expected:?}"
-        );
-    }
-
-    #[test]
     fn newline_cmd_dispatch() {
         let input = b"a\n1\n2\n3\n.\nL\nq\nq\n";
         let mut output = Vec::new();
@@ -2778,8 +2757,8 @@ mod tests {
     }
 
     #[test]
-    fn read_cmd_dispatch() {
-        let input = b"a\npre 1\npre 2\npost 1\npost 2\n.\n2r test/assets/text_with_final_eol.txt\nq\nq\n";
+    fn append_cmd_from_file_dispatch() {
+        let input = b"a\npre 1\npre 2\npost 1\npost 2\n.\n2A test/assets/text_with_final_eol.txt\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
             .unwrap();
@@ -2847,20 +2826,6 @@ mod tests {
             .unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("11.11.11\n"));
-    }
-
-    #[test]
-    fn transfer_cmd_dispatch() {
-        let input = b"a\n1\n2\n3\n4\n5\n.\n1,2t5\n1,$p\nq\nq\n";
-        let mut output = Vec::new();
-        run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
-            .unwrap();
-        let output = str::from_utf8(&output[..]).unwrap();
-        let expected = "1\n2\n3\n4\n5\n1\n2\nunsaved";
-        assert!(
-            output.starts_with(expected),
-            "expected {expected:?} at start of {output:?}"
-        );
     }
 
     #[test]
@@ -2979,9 +2944,7 @@ mod tests {
         else {
             panic!("{cmd_line} didn't parse as Cmd::Substitute");
         };
-        editor
-            .substitute_cmd(address, &pattern, replacement.as_str(), scope)
-            .unwrap();
+        editor.substitute_cmd(address, &pattern, &replacement, scope).unwrap();
         let mut expected = EditBuffer::with_lines(&["a line\r\n", "to split"]);
         expected.set_current_index(1);
         assert_eq!(&editor.buffer[..], &expected[..]);
@@ -3008,9 +2971,7 @@ mod tests {
         else {
             panic!("should have parsed to Cmd::Substitute!");
         };
-        editor
-            .substitute_cmd(address, &pattern, replacement.as_str(), scope)
-            .unwrap();
+        editor.substitute_cmd(address, &pattern, &replacement, scope).unwrap();
         let mut expected = EditBuffer::with_lines(&["a line\n", "to split"]);
         expected.set_current_index(1);
         assert_eq!(editor.buffer[..], expected[..]);
@@ -3201,15 +3162,6 @@ mod tests {
     }
 
     #[test]
-    fn transfer_cmd_destination_intersects_source_give_error() {
-        let mut editor = Editor::new(OutputTarget::Other);
-        editor.buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let res = editor.transfer_cmd(Some(2..5), 3).expect_err("should fail");
-        assert!(matches!(res, Error::DestinationIntersectsSource));
-    }
-
-    #[test]
     fn write_propegates_errors() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["1\r\n", "2", "3"]);
@@ -3259,7 +3211,13 @@ mod tests {
         let expected = ["1\n", "2\n", "a\n", "b\n", "c\n", "3\n"];
         let mut input = IndentReader::from(&["a\r\n", "b\r\n", "c\r\n"]);
         let _ = editor
-            .append_cmd(&mut input, Some(1), IndentMode::Auto)
+            .append_cmd(
+                &mut input,
+                &mut String::new(),
+                Some(1),
+                InputSource::StdIn,
+                InputMode::Cooked,
+            )
             .expect("lines appended");
         assert_eq!(editor.buffer[..], expected);
     }
@@ -3271,19 +3229,31 @@ mod tests {
         let expected = ["1\n", "2\n", "a\n", "b\n", "c\n", "3\n"];
         let mut input = IndentReader::from(&["a\r\n", "b\r\n", "c\r\n"]);
         let _ = editor
-            .insert_cmd(&mut input, Some(2), IndentMode::Auto)
+            .insert_cmd(
+                &mut input,
+                &mut String::new(),
+                Some(2),
+                InputSource::StdIn,
+                InputMode::Cooked,
+            )
             .expect("lines appended");
         assert_eq!(editor.buffer[..], expected);
     }
 
     #[test]
-    fn change_cmd_normalizes_eols() {
+    fn overwrite_cmd_normalizes_eols() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
         let expected = ["1\n", "a\n", "b\n", "c\n", "3\n"];
         let mut input = IndentReader::from(&["a\r\n", "b\r\n", "c\r\n"]);
         let _ = editor
-            .change_cmd(&mut input, Some(1..2), IndentMode::Auto)
+            .overwrite_cmd(
+                &mut input,
+                &mut String::new(),
+                Some(1..2),
+                InputSource::StdIn,
+                InputMode::Cooked,
+            )
             .expect("lines appended");
         assert_eq!(editor.buffer[..], expected);
     }
@@ -3301,7 +3271,13 @@ mod tests {
             "three\n",
         ];
         let _ = editor
-            .append_cmd(&mut input, Some(1), IndentMode::Auto)
+            .append_cmd(
+                &mut input,
+                &mut String::new(),
+                Some(1),
+                InputSource::StdIn,
+                InputMode::Cooked,
+            )
             .expect("lines appended");
         assert_eq!(&editor.buffer[..], expected);
     }
@@ -3327,7 +3303,13 @@ mod tests {
             "three\n",
         ];
         let _ = editor
-            .insert_cmd(&mut input, Some(1), IndentMode::Auto)
+            .insert_cmd(
+                &mut input,
+                &mut String::new(),
+                Some(1),
+                InputSource::StdIn,
+                InputMode::Cooked,
+            )
             .expect("lines inserted");
         assert_eq!(&editor.buffer[..], expected);
     }
@@ -3337,17 +3319,18 @@ mod tests {
         let source = b"one\r\ntwo\r\nthree\r\nfour\r\n";
         let source_bytes = source.len();
         let mut lines = Vec::new();
-        let (byte_count, _) =
-            read_lines(&mut &source[..], &mut lines).expect("no error");
+        let (byte_count, added) =
+            read_lines(&mut lines, &mut &source[..], None).expect("no error");
         assert_eq!(byte_count, source_bytes);
         assert_eq!(lines.len(), 4);
+        assert!(!added);
     }
 
     #[test]
     fn read_lines_io_error() {
         let mut source = BufReader::new(BadReader {});
-        let res =
-            read_lines(&mut source, &mut Vec::new()).expect_err("io error");
+        let res = read_lines(&mut Vec::new(), &mut source, None)
+            .expect_err("io error");
         assert!(matches!(res, Error::ReadLines { .. }));
     }
 
@@ -3429,7 +3412,7 @@ mod tests {
     }
 
     #[test]
-    fn change_cmd_auto_indent() {
+    fn overwrite_cmd_auto_indent() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&[
             "one\n",
@@ -3457,7 +3440,13 @@ mod tests {
             "    six\n",
         ];
         let _ = editor
-            .change_cmd(&mut input, Some(7..10), IndentMode::Auto)
+            .overwrite_cmd(
+                &mut input,
+                &mut String::new(),
+                Some(7..10),
+                InputSource::StdIn,
+                InputMode::Cooked,
+            )
             .expect("blanks replaced");
         assert_eq!(&editor.buffer[..], expected);
 
@@ -3472,7 +3461,13 @@ mod tests {
             "    six\n",
         ];
         let _ = editor
-            .change_cmd(&mut input, Some(1..5), IndentMode::Auto)
+            .overwrite_cmd(
+                &mut input,
+                &mut String::new(),
+                Some(1..5),
+                InputSource::StdIn,
+                InputMode::Cooked,
+            )
             .expect("lines changed");
         assert_eq!(&editor.buffer[..], expected);
 
@@ -3487,7 +3482,13 @@ mod tests {
             "    six\n",
         ];
         let _ = editor
-            .change_cmd(&mut input, Some(0..1), IndentMode::Auto)
+            .overwrite_cmd(
+                &mut input,
+                &mut String::new(),
+                Some(0..1),
+                InputSource::StdIn,
+                InputMode::Cooked,
+            )
             .expect("line changed");
         assert_eq!(&editor.buffer[..], expected);
     }
@@ -3523,16 +3524,6 @@ mod tests {
     }
 
     #[test]
-    fn move_cmd_destination_intersects_source_give_error() {
-        let mut editor = Editor::new(OutputTarget::Other);
-        editor.buffer =
-            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
-        let res = editor.move_cmd(Some(2..5), 3).expect_err("should fail");
-        assert!(matches!(res, Error::DestinationIntersectsSource));
-        editor.move_cmd(Some(2..5), 5).expect("shouldn't fail");
-    }
-
-    #[test]
     fn line_number_cmd_with_and_without_address() {
         let mut output = String::new();
         let mut editor = Editor::new(OutputTarget::Other);
@@ -3551,16 +3542,7 @@ mod tests {
     }
 
     #[test]
-    fn read_cmd_no_filename_error() {
-        let mut editor = Editor::new(OutputTarget::Other);
-        let res = editor
-            .read_cmd(&mut String::new(), None, None)
-            .expect_err("no filename");
-        assert!(matches!(res, Error::NoFilename));
-    }
-
-    #[test]
-    fn read_cmd_reads_file() {
+    fn append_cmd_reads_file() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer =
             EditBuffer::with_lines(&["one\n", "two", "three", "four"]);
@@ -3584,10 +3566,127 @@ mod tests {
         ]);
         expected.set_current_index(11);
         let mut output = String::new();
-        let filename1 = Some(Path::new(r"test/assets/text_with_final_eol.txt"));
+        let mut input = "".as_bytes();
+        let filename1 = Path::new(r"test/assets/text_with_final_eol.txt");
 
         let changes = editor
-            .read_cmd(&mut output, None, filename1)
+            .append_cmd(
+                &mut input,
+                &mut output,
+                Some(1),
+                InputSource::File(filename1.to_path_buf()),
+                InputMode::Raw,
+            )
+            .expect("no error")
+            .expect("Some(ChangeSet)");
+        let out_text = &output;
+        assert!(
+            out_text.contains("10 lines") && out_text.contains("312 bytes")
+        );
+        editor.buffer.push_undo(changes);
+
+        assert_eq!(editor.buffer[..], expected[..]);
+        assert_eq!(editor.buffer.current_index(), expected.current_index());
+
+        editor.buffer.undo().expect("something to undo");
+        assert_eq!(editor.buffer[..], orig[..]);
+        assert_eq!(editor.buffer.current_index(), orig.current_index());
+
+        editor.buffer.redo().expect("something to redo");
+        assert_eq!(editor.buffer[..], expected[..]);
+        assert_eq!(editor.buffer.current_index(), expected.current_index());
+    }
+
+    #[test]
+    fn insert_cmd_reads_file() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        editor.buffer =
+            EditBuffer::with_lines(&["one\n", "two", "three", "four"]);
+        editor.buffer.set_current_index(2);
+        let orig = editor.buffer.clone();
+        let mut expected = EditBuffer::with_lines(&[
+            "one\n",
+            "two",
+            "This is a test file with several lines of",
+            "text. It is for unit testing, so it's not long,",
+            "but it will suffice to test commands that",
+            "read",
+            "and",
+            "edit files. The lines",
+            "are of various lengths, and",
+            "end and begin with ",
+            "\"special\" characters (i.e., non-alpha characters).",
+            "Critically, it ends with a final line terminator.",
+            "three",
+            "four",
+        ]);
+        expected.set_current_index(11);
+        let mut output = String::new();
+        let mut input = "".as_bytes();
+        let filename1 = Path::new(r"test/assets/text_with_final_eol.txt");
+
+        let changes = editor
+            .insert_cmd(
+                &mut input,
+                &mut output,
+                Some(2),
+                InputSource::File(filename1.to_path_buf()),
+                InputMode::Raw,
+            )
+            .expect("no error")
+            .expect("Some(ChangeSet)");
+        let out_text = &output;
+        assert!(
+            out_text.contains("10 lines") && out_text.contains("312 bytes")
+        );
+        editor.buffer.push_undo(changes);
+
+        assert_eq!(editor.buffer[..], expected[..]);
+        assert_eq!(editor.buffer.current_index(), expected.current_index());
+
+        editor.buffer.undo().expect("something to undo");
+        assert_eq!(editor.buffer[..], orig[..]);
+        assert_eq!(editor.buffer.current_index(), orig.current_index());
+
+        editor.buffer.redo().expect("something to redo");
+        assert_eq!(editor.buffer[..], expected[..]);
+        assert_eq!(editor.buffer.current_index(), expected.current_index());
+    }
+
+    #[test]
+    fn overwrite_cmd_reads_file() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        editor.buffer =
+            EditBuffer::with_lines(&["one\n", "two", "three", "four"]);
+        editor.buffer.set_current_index(2);
+        let orig = editor.buffer.clone();
+        let mut expected = EditBuffer::with_lines(&[
+            "one\n",
+            "This is a test file with several lines of",
+            "text. It is for unit testing, so it's not long,",
+            "but it will suffice to test commands that",
+            "read",
+            "and",
+            "edit files. The lines",
+            "are of various lengths, and",
+            "end and begin with ",
+            "\"special\" characters (i.e., non-alpha characters).",
+            "Critically, it ends with a final line terminator.",
+            "four",
+        ]);
+        expected.set_current_index(10);
+        let mut output = String::new();
+        let mut input = "".as_bytes();
+        let filename1 = Path::new(r"test/assets/text_with_final_eol.txt");
+
+        let changes = editor
+            .overwrite_cmd(
+                &mut input,
+                &mut output,
+                Some(1..3),
+                InputSource::File(filename1.to_path_buf()),
+                InputMode::Raw,
+            )
             .expect("no error")
             .expect("Some(ChangeSet)");
         let out_text = &output;
@@ -4055,7 +4154,7 @@ mod tests {
         let mut input = b"" as &[u8];
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(Some(9), Some(3), None),
+                Cmd::PageDown(Some(9), Some(3), None),
                 &mut output,
                 &mut input,
             )
@@ -4064,7 +4163,7 @@ mod tests {
         assert_eq!(editor.page_length, NonZero::new(3));
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(None, None, None),
+                Cmd::PageDown(None, None, None),
                 &mut output,
                 &mut input,
             )
@@ -4082,7 +4181,7 @@ mod tests {
         let mut input = b"" as &[u8];
         editor
             .dispatch_cmd(
-                &Cmd::PageUp(Some(9), Some(3), None),
+                Cmd::PageUp(Some(9), Some(3), None),
                 &mut output,
                 &mut input,
             )
@@ -4091,7 +4190,7 @@ mod tests {
         assert_eq!(editor.page_length, NonZero::new(3));
         editor
             .dispatch_cmd(
-                &Cmd::PageUp(None, None, None),
+                Cmd::PageUp(None, None, None),
                 &mut output,
                 &mut input,
             )
@@ -4109,7 +4208,7 @@ mod tests {
         let mut input = b"" as &[u8];
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(Some(0), None, None),
+                Cmd::PageDown(Some(0), None, None),
                 &mut output,
                 &mut input,
             )
@@ -4117,7 +4216,7 @@ mod tests {
         let orig_end_line = editor.buffer.current_index();
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(Some(9), Some(3), None),
+                Cmd::PageDown(Some(9), Some(3), None),
                 &mut output,
                 &mut input,
             )
@@ -4126,7 +4225,7 @@ mod tests {
         assert_eq!(editor.page_length, NonZero::new(3));
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(Some(0), Some(0), None),
+                Cmd::PageDown(Some(0), Some(0), None),
                 &mut output,
                 &mut input,
             )
@@ -4144,7 +4243,7 @@ mod tests {
         let mut input = b"" as &[u8];
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(Some(0), None, None),
+                Cmd::PageDown(Some(0), None, None),
                 &mut output,
                 &mut input,
             )
@@ -4152,7 +4251,7 @@ mod tests {
         assert!(editor.page_length.is_none());
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(Some(9), Some(3), None),
+                Cmd::PageDown(Some(9), Some(3), None),
                 &mut output,
                 &mut input,
             )
@@ -4161,7 +4260,7 @@ mod tests {
         assert_eq!(editor.page_length, NonZero::new(3));
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(None, Some(0), None),
+                Cmd::PageDown(None, Some(0), None),
                 &mut output,
                 &mut input,
             )
@@ -4178,13 +4277,10 @@ mod tests {
         let mut input = b"" as &[u8];
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(
+                Cmd::PageDown(
                     Some(9),
                     Some(3),
-                    Some(PrintAttributes {
-                        enumerate: true,
-                        ..Default::default()
-                    }),
+                    Some(PrintSuffix { enumerate: true, ..Default::default() }),
                 ),
                 &mut output,
                 &mut input,
@@ -4196,10 +4292,10 @@ mod tests {
         assert!(!out_str.contains("13"));
         editor
             .dispatch_cmd(
-                &Cmd::PageDown(
+                Cmd::PageDown(
                     None,
                     None,
-                    Some(PrintAttributes {
+                    Some(PrintSuffix {
                         expand_escapes: true,
                         ..Default::default()
                     }),
@@ -4223,13 +4319,10 @@ mod tests {
         let mut input = b"" as &[u8];
         editor
             .dispatch_cmd(
-                &Cmd::PageUp(
+                Cmd::PageUp(
                     Some(9),
                     Some(3),
-                    Some(PrintAttributes {
-                        enumerate: true,
-                        ..Default::default()
-                    }),
+                    Some(PrintSuffix { enumerate: true, ..Default::default() }),
                 ),
                 &mut output,
                 &mut input,
@@ -4241,10 +4334,10 @@ mod tests {
         assert!(!out_str.contains('7'));
         editor
             .dispatch_cmd(
-                &Cmd::PageUp(
+                Cmd::PageUp(
                     None,
                     None,
-                    Some(PrintAttributes {
+                    Some(PrintSuffix {
                         expand_escapes: true,
                         ..Default::default()
                     }),
@@ -4279,8 +4372,15 @@ mod tests {
         let mut editor = Editor::new(OutputTarget::Other);
         let mut output = FmtWriter(Vec::new());
         let name = Path::new(r"test/assets/text_with_final_eol.txt");
-        let _ =
-            editor.read_cmd(&mut output, None, Some(name)).expect("no error");
+        let _ = editor
+            .append_cmd(
+                &mut String::new().as_bytes(),
+                &mut output,
+                None,
+                InputSource::File(name.to_owned()),
+                InputMode::Raw,
+            )
+            .expect("no error");
         let _ = editor.delete_cmd(Some(5..6)).expect("no error");
         let _ =
             editor.show_diff_cmd(&mut output.0, Some(name)).expect("no error");
@@ -4390,5 +4490,80 @@ mod tests {
         assert_eq!(editor.buffer[..], expected[..]);
         assert_eq!(editor.buffer.current_index(), expected.current_index());
         assert_eq!(editor.buffer.eols(), expected.eols());
+    }
+
+    #[test]
+    fn copy_cmd_with_no_span() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        editor.buffer =
+            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
+        editor.buffer.set_current_index(2);
+        assert!(editor.clipboard.is_empty());
+        editor.copy_cmd(None);
+        assert_eq!(&editor.clipboard, "3\n");
+        editor.buffer.set_current_index(5);
+        editor.copy_cmd(None);
+        assert_eq!(&editor.clipboard, "6\n");
+    }
+
+    #[test]
+    fn copy_cmd_with_span() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        editor.buffer =
+            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
+        editor.buffer.set_current_index(1);
+        assert!(editor.clipboard.is_empty());
+        editor.copy_cmd(Some(1..3));
+        assert_eq!(&editor.clipboard, "2\n3\n");
+        editor.copy_cmd(Some(0..6));
+        assert_eq!(&editor.clipboard, "1\n2\n3\n4\n5\n6\n");
+    }
+
+    #[test]
+    fn cut_cmd_with_no_span() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        editor.buffer =
+            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
+        editor.buffer.set_current_index(2);
+        assert!(editor.clipboard.is_empty());
+        let changes = editor.cut_cmd(None);
+        editor.buffer.push_undo(changes);
+        assert_eq!(&editor.clipboard, "3\n");
+        assert_eq!(editor.buffer[..], ["1\n", "2\n", "4\n", "5\n", "6\n"]);
+
+        editor.buffer.undo().expect("no error");
+        assert_eq!(&editor.clipboard, "3\n");
+        assert_eq!(
+            editor.buffer[..],
+            ["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"]
+        );
+
+        editor.buffer.redo().expect("no error");
+        assert_eq!(&editor.clipboard, "3\n");
+        assert_eq!(editor.buffer[..], ["1\n", "2\n", "4\n", "5\n", "6\n"]);
+    }
+
+    #[test]
+    fn cut_cmd_with_span() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        editor.buffer =
+            EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
+        editor.buffer.set_current_index(2);
+        assert!(editor.clipboard.is_empty());
+        let changes = editor.cut_cmd(Some(1..4));
+        editor.buffer.push_undo(changes);
+        assert_eq!(&editor.clipboard, "2\n3\n4\n");
+        assert_eq!(editor.buffer[..], ["1\n", "5\n", "6\n"]);
+
+        editor.buffer.undo().expect("no error");
+        assert_eq!(&editor.clipboard, "2\n3\n4\n");
+        assert_eq!(
+            editor.buffer[..],
+            ["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"]
+        );
+
+        editor.buffer.redo().expect("no error");
+        assert_eq!(&editor.clipboard, "2\n3\n4\n");
+        assert_eq!(editor.buffer[..], ["1\n", "5\n", "6\n"]);
     }
 }

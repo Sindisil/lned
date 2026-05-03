@@ -144,38 +144,85 @@ last line displayed becomes the current line.
 Writes the line number of the addressed line to stdout.
 The current line number will be unchanged.
 
-### 'a' Append 
+### 'a' Append
+
+Text is read from the input source, and the resulting lines are inserted
+into the buffer after the addressed line. If lines are appended, the
+current line is set to the last line appended, otherwise the addressed
+line. Newline sequences for the input lines are normalized to match the
+buffer's prevailing style. Other details specific to the input source are
+detailed below.
+
+#### Append from terminal
 
     (.)a
-    \<input text\>
-    .
 
-Text is accepted in input mode, and the resulting lines are apended after
-the addressed line. The last appended line, or, if none, the addressed
-line, becomes the current line. A line address of '0' is valid for the
-append command; the input text will then be placed at the beginning of the
-buffer.
+Lines input at the terminal are the input source.
 
-### 'c' Change 
+In addition to the base append behavior, input text is prompted for with an
+auto-indent prefilled. The indent prefill is set to match the first non-
+blank line at or before the addressed line, and each additional input
+prompt is auto-indented to match the previously entered line.
 
-    (.,.)c
-    \<input text\>
-    .
+#### Append from clipboard
 
-Text is accepted in input mode, the addressed lines are deleted, and the
-input text is inserted in their place. After a change command, the
-current address will be set to the first of:
+    (.)av
 
-    * The last replacement line
-    * If no replacement lines, the line after those deleted
-    * If lines deleted were at the buffer's end, the last remaining line
-      in the buffer
-    * If no lines remain, 0
+Lines from the application clipboard are used as the input source.
 
-An address of '0' is valid, and will result in no lines deleted and any
-replacement text inserted at the beginning of the buffer. An address with
-a lower bound of 0 is also valid, and will be interpreted in this case as
-the first line in the buffer (i.e., 0 if empty, 1 otherwise).
+#### Append from file
+
+    (.)a filename
+
+Lines read from the file specified are used as the input source.
+
+If the final line read is unterminated, a newline sequence matching the
+buffer's prevailing EOL style is appended to it. A message detailing the
+number of lines and bytes read is printed to the terminal, as well as an
+indication if a missing final newline was appended.
+
+If there are errors opening or reading the specified file, the current
+line remains unchanged.
+
+### 'A' Append raw
+
+Text is read from the input source, and the resulting lines are inserted
+into the buffer after the addressed line. If lines are appended, the
+current line is set to the last line appended, otherwise the addressed
+line. No other modifications (e.g. normalization of newline style) are
+performed. Other details specific to the input source are detailed below.
+
+#### Append raw from terminal
+
+    (.)A
+
+Lines input at the terminal are the input source.
+
+#### Append raw from clipboard
+
+    (.)Av
+
+Lines from the application clipboard are used as the input source.
+
+#### Append raw from file
+
+    (.)A filename
+
+Lines read from the file specified are used as the input source.
+
+If the final line read is unterminated, a newline sequence is appended to
+it. The appended newline will match the prevailing style for the lines read. A message detailing the number of lines and bytes read is printed to
+the terminal, as well as an indication if a missing final newline was appended.
+
+If there are errors opening or reading the specified file, the current
+line remains unchanged.
+
+### 'c' Copy
+
+    (.)c
+
+The addressed lines replace any existing lines in the application
+clipboard. The current line remains unchanged.
 
 ### 'd' Delete
 
@@ -240,7 +287,7 @@ The current line is not affected by this command.
     (1,$)g/__RE__/__commands__
 
 The g command will first note every line matching the specified regex.
-Then, working from beginning to end, the command list will be executed for
+Then, working from beginning to end, the command list will be exeed for
 each matching line, with the current line set to the address of that line.
 Any matched line modified by the command list will be removed from the
 list of matching lines. Any error will immediately stop execution. Any
@@ -257,10 +304,10 @@ global command. All additional lines in the command list but the last must
 be backslash terminated to escape the line terminator.
 
 The list of permitted commands in a global command list includes any of:
-'a', 'c', 'd', 'i', 'j', 'm', 'n', 'p', 's', and 't'. Input lines
-associated with the 'a', 'c', and 'i' commands must be included in the
-command list. The terminating '.' may be omitted if it would be the last
-line in the command list.
+'a', 'A', 'd', 'i', 'I', 'j', 'n', 'o', 'O', 'p', and 's'. Input lines
+associated with the append, insert, and overwrite commands must be included
+in the command list. The terminating '.' may be omitted if it would be the
+last line in the command list.
 
 If no command is provided, it will be interpreted as if a 'p' command were
 given.
@@ -268,17 +315,78 @@ given.
 Only those commands in the command list that successfully modify the edit
 buffer will be included when *undo*ing or *redo*ing a global command.
 
-### 'i' Insert 
+### 'i' Insert
+
+Text is read from the input source, and the resulting lines are inserted
+into the buffer before the addressed line. If lines are inserted, the
+current line is set to the last one, otherwise to the addressed line.
+Newline sequences for the input lines are normalized to match the
+buffer's prevailing style. Other details specific to the input source are
+detailed below.
+
+#### Insert from terminal
 
     (.)i
-    \<input text\>
-    .
 
-Text is accepted in input mode, and the resulting lines are inserted
-before the addressed line. The last inserted line, or, if none, the
-addressed line, becomes the current line. A line address of '0' is valid
-for the insert command; the input text will then be placed at the
-beginning of the buffer.
+Lines input at the terminal are the input source.
+
+In addition to the base insert behavior, input text is prompted for with an
+auto-indent prefilled. The indent prefill is set to match the first non-
+blank line at or before the addressed line, and each additional input
+prompt is auto-indented to match the previously entered line.
+
+#### Insert from clipboard
+
+    (.)iv
+
+Lines from the application clipboard are used as the input source.
+
+#### Insert from file
+
+    (.)i filename
+
+Lines read from the file specified are used as the input source.
+
+If the final line read is unterminated, a newline sequence matching the
+buffer's prevailing EOL style is appended to it. A message detailing the
+number of lines and bytes read is printed to the terminal, as well as an
+indication if a missing final newline was appended.
+
+If there are errors opening or reading the specified file, the current
+line remains unchanged.
+
+### 'I' Insert raw
+
+Text is read from the input source, and the resulting lines are inserted
+into the buffer before the addressed line. If lines are inserted, the
+current line is set to the last line appended, otherwise the addressed
+line. No other modifications (e.g. normalization of newline style) are
+performed. Other details specific to the input source are detailed below.
+
+#### Insert raw from terminal
+
+    (.)I
+
+Lines input at the terminal are the input source.
+
+#### Insert raw from clipboard
+
+    (.)Iv
+
+Lines from the application clipboard are used as the input source.
+
+#### Insert raw from file
+
+    (.)I filename
+
+Lines read from the file specified are used as the input source.
+
+If the final line read is unterminated, a newline sequence is appended to
+it. The appended newline will match the prevailing style for the lines read. A message detailing the number of lines and bytes read is printed to
+the terminal, as well as an indication if a missing final newline was appended.
+
+If there are errors opening or reading the specified file, the current
+line remains unchanged.
 
 ### 'j' Join 
 
@@ -314,21 +422,6 @@ visually as follows:
 * EOL (end of line):      $
 * $ within text:         \$
 
-
-### 'm' Move 
-
-    (.,.)m(destination)
-
-Move the addressed lines to just after the last line specified by
-destination.
-
-If '0' is specified as the destination, the addressed lines are moved to
-the beginning of the buffer. The destination may not fall within the
-span of moved lines.
-
-The current line number will be set to the resulting address of the last
-line moved.
-
 ### 'n' Enumerate
 
     (.,.)n
@@ -347,6 +440,82 @@ Discard the buffer contents and unset current file.
 A waring will be given if there are unsaved buffer changes. Repeating
 the command will procede, discarding changes.
 
+### 'o' Overwrite
+
+Text is read from the input source, the addressed lines are deleted, and
+the input lines are inserted after the first line preceding the addressed
+span. If lines are inserted, the current line is set to the last one,
+otherwise to the first line after the deleted span, or the last buffer
+line if the span was at the end of the buffer. Newline sequences for the
+input lines are normalized to match the buffer's prevailing style. Other
+details specific to the input source are detailed below.
+
+#### Overwrite from terminal
+
+    (.)o
+
+Lines input at the terminal are the input source.
+
+In addition to the base overwrite behavior, input text is prompted for with
+an auto-indent prefilled. The indent prefill is set to match the first non-
+blank line at or before the addressed line, and each additional input
+prompt is auto-indented to match the previously entered line.
+
+#### Overwrite from clipboard
+
+    (.)ov
+
+Lines from the application clipboard are used as the input source.
+
+#### Overwrite from file
+
+    (.)o filename
+
+Lines read from the file specified are used as the input source.
+
+If the final line read is unterminated, a newline sequence matching the
+buffer's prevailing EOL style is appended to it. A message detailing the
+number of lines and bytes read is printed to the terminal, as well as an
+indication if a missing final newline was appended.
+
+If there are errors opening or reading the specified file, the current
+line remains unchanged.
+
+### 'O' Overwrite raw
+
+Text is read from the input source, the addressed lines are deleted, and
+the input lines are inserted after the first line preceding the addressed
+span. If lines are inserted, the current line is set to the last one,
+otherwise to the first line after the deleted span, or the last buffer
+line if the span was at the end of the buffer. No other modifications
+(e.g. normalization of newline style) are performed. Other details specific
+to the input source are detailed below.
+
+#### Overwrite raw from terminal
+
+    (.)O
+
+Lines input at the terminal are the input source.
+
+#### Overwrite raw from clipboard
+
+    (.)Ov
+
+Lines from the application clipboard are used as the input source.
+
+#### Overwrite raw from file
+
+    (.)O filename
+
+Lines read from the file specified are used as the input source.
+
+If the final line read is unterminated, a newline sequence is appended to
+it. The appended newline will match the prevailing style for the lines read. A message detailing the number of lines and bytes read is printed to
+the terminal, as well as an indication if a missing final newline was appended.
+
+If there are errors opening or reading the specified file, the current
+line remains unchanged.
+
 ### 'p' Print 
 
     (.,.)p
@@ -360,23 +529,6 @@ the current line.
 
 Exits the editor. If there are unsaved changes, a warning will be
 printed. Repeating the command will discard the changes and exit.
-
-### 'r' Read 
-
-    ($)r (file)
-
-Inserts the contents of the specified file (or the current file, if none
-is specified) into the buffer after the specified address (or after the
-current_line if no address is specified).
-
-Line terminators are normalized to the prevailing newline, and a final
-newline is appended if missing. The current line number is set to the
-address of the last line inserted. The number of lines and bytes
-read is displayed, as is the prevailing newline.
-
-A read may be undone as if it were an Insert command. As such, if
-a Read is undone, then redone by issuing a Redo command, the file
-is *not* reread; the lines previously read are simply reinserted.
 
 ### 'S' Show diff 
 
@@ -453,6 +605,8 @@ executed.
 All commands executed as part of a 'g' command are reverted as one
 action.
 
+The clipboard is unaffected by undo/redo commands.
+
 Undone actions are themselves remembered on a redo stack, so that
 they can be redone (effectively "undoing the undo").
 
@@ -501,6 +655,15 @@ buffer is considered to be saved.
 The current line number will not be changed in any case.
 
 The number of lines and bytes written is printed to stdout if successful.
+
+### 'x' Cut
+
+    (.)x
+
+The addressed lines replace any existing lines in the application clipboard
+and are deleted from the buffer. The first line after the addressed lines
+becomes the current line. If the last addressed lines were at the end of
+the buffer, the last remaining buffer line becomes the current line.
 
 ### 'z' PageDown
 
