@@ -1,9 +1,10 @@
-use core::fmt::{self, Display, Formatter};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
 
 use lexopt::prelude::*;
+
+use crate::error::Error;
 
 pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
 pub const APP_VERSION: &str = env!("LNED_VERSION");
@@ -22,37 +23,6 @@ File, if specified, will be loaded into buffer for editing.
 If no file is specified, an empty buffer will be created instead.
 ";
 
-#[derive(Debug)]
-pub enum Error {
-    WroteMessage, // Wrote message to ouput and should exit with no error
-    NextArg { source: lexopt::Error }, // Error reading next argument
-    UnexpectedArg { source: lexopt::Error }, // Unexpected cmd line argument
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match *self {
-            Error::WroteMessage => None,
-            Error::NextArg { ref source }
-            | Error::UnexpectedArg { ref source } => Some(source),
-        }
-    }
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::WroteMessage => write!(f, "message output, no error"),
-            Error::NextArg { .. } => {
-                write!(f, "error parsing next command line argument")
-            }
-            Error::UnexpectedArg { .. } => {
-                write!(f, "unexpected command line argument")
-            }
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct CmdArgs {
     /// Specifies a file to edit
@@ -62,12 +32,13 @@ pub struct CmdArgs {
 pub fn parse_args(
     mut output: impl Write,
     args: impl IntoIterator<Item = impl Into<OsString>>,
-) -> Result<CmdArgs, Error> {
+) -> Result<Option<CmdArgs>, Error> {
     let mut cmd_args = CmdArgs { file: None };
 
     let mut parser = lexopt::Parser::from_iter(args);
-    while let Some(arg) =
-        parser.next().map_err(|source| Error::NextArg { source })?
+    while let Some(arg) = parser
+        .next()
+        .map_err(|e| Error::InvalidCmdLine { source: Some(Box::new(e)) })?
     {
         match arg {
             Short('h') | Long("help") => {
@@ -75,19 +46,23 @@ pub fn parse_args(
                     .unwrap();
                 writeln!(&mut output, "{APP_VERSION}").unwrap();
                 write!(&mut output, "{APP_HELP}").unwrap();
-                return Err(Error::WroteMessage);
+                return Ok(None);
             }
             Short('V') | Long("version") => {
                 writeln!(&mut output, "{APP_NAME} {APP_VERSION}").unwrap();
-                return Err(Error::WroteMessage);
+                return Ok(None);
             }
             Value(val) if cmd_args.file.is_none() => {
                 cmd_args.file = Some(PathBuf::from(val));
             }
-            _ => return Err(Error::UnexpectedArg { source: arg.unexpected() }),
+            _ => {
+                return Err(Error::InvalidCmdLine {
+                    source: Some(Box::new(arg.unexpected())),
+                });
+            }
         }
     }
-    Ok(cmd_args)
+    Ok(Some(cmd_args))
 }
 
 #[cfg(test)]
@@ -105,13 +80,13 @@ mod tests {
         );
         let mut output = Vec::new();
         let args = &["test", "-h"];
-        let res = parse_args(&mut output, args);
-        assert!(matches!(res, Err(Error::WroteMessage)));
+        let res = parse_args(&mut output, args).unwrap();
+        assert!(res.is_none());
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
         output.clear();
         let args = &["test", "--help"];
-        let res = parse_args(&mut output, args);
-        assert!(matches!(res, Err(Error::WroteMessage)));
+        let res = parse_args(&mut output, args).unwrap();
+        assert!(res.is_none());
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
     }
 
@@ -120,13 +95,13 @@ mod tests {
         let expected = format!("{APP_NAME} {APP_VERSION}\n");
         let mut output = Vec::new();
         let args = &["test", "-V"];
-        let res = parse_args(&mut output, args);
-        assert!(matches!(res, Err(Error::WroteMessage)));
+        let res = parse_args(&mut output, args).unwrap();
+        assert!(res.is_none());
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
         output.clear();
         let args = &["test", "--version"];
-        let res = parse_args(&mut output, args);
-        assert!(matches!(res, Err(Error::WroteMessage)));
+        let res = parse_args(&mut output, args).unwrap();
+        assert!(res.is_none());
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
     }
 
@@ -135,7 +110,7 @@ mod tests {
         let mut output = Vec::new();
         let args = &["test", "--unexpected-arg"];
         let res = parse_args(&mut output, args);
-        assert!(matches!(res, Err(Error::UnexpectedArg { .. })));
+        assert!(matches!(res, Err(Error::InvalidCmdLine { .. })));
     }
 
     #[test]
@@ -143,7 +118,9 @@ mod tests {
         let args = &["test", r"src\cli.rs"];
         let mut output = Vec::new();
         let res = parse_args(&mut output, args).unwrap();
-        assert!(matches!(res.file, Some(p) if p == Path::new(r"src\cli.rs")));
+        assert!(
+            matches!(res.unwrap().file, Some(p) if p == Path::new(r"src\cli.rs"))
+        );
     }
 
     #[test]
@@ -151,6 +128,6 @@ mod tests {
         let args = &["test", r"src\cli.rs", r"src\main.rs"];
         let mut output = Vec::new();
         let res = parse_args(&mut output, args).expect_err("unexpected arg");
-        assert!(matches!(res, Error::UnexpectedArg { .. }));
+        assert!(matches!(res, Error::InvalidCmdLine { .. }));
     }
 }

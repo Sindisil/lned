@@ -2,9 +2,11 @@
 mod cli;
 mod command;
 mod edit_buffer;
+mod editor;
 mod eol;
+mod error;
 mod iter_utils;
-mod main_loop;
+mod undo_stack;
 
 use std::error::Error;
 use std::io::{self, IsTerminal};
@@ -12,22 +14,27 @@ use std::iter;
 
 use line_edit::LineEditor;
 
+use crate::editor::OutputTarget;
+
+#[cfg(not(tarpaulin_include))]
 fn main() {
     let args = match cli::parse_args(&mut io::stdout(), wild::args_os()) {
-        Ok(args) => args,
-        Err(cli::Error::WroteMessage) => std::process::exit(0),
+        Ok(Some(args)) => args,
+        Ok(None) => std::process::exit(0),
         Err(err) => {
             eprintln!("Error: {err}");
             std::process::exit(1);
         }
     };
 
-    if let Err(err) = main_loop::run(
-        LineEditor::new(),
-        io::stdout(),
-        io::stdout().is_terminal(),
-        &args,
-    ) {
+    let output_target = if io::stdout().is_terminal() {
+        OutputTarget::Terminal
+    } else {
+        OutputTarget::Other
+    };
+    if let Err(err) =
+        editor::run(LineEditor::new(), io::stdout(), output_target, &args)
+    {
         eprintln!("Error: {err}");
         if let Some(cause) = err.source() {
             println!("\nCaused by:");

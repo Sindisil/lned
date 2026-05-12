@@ -10,11 +10,10 @@
 /// history).
 use std::mem;
 use std::ops::Range;
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::vec::Drain;
 
-use crate::edit_buffer::{Eol, PrevailingEol};
+use crate::eol::{Eol, Eols};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct UndoStack {
@@ -25,18 +24,21 @@ pub struct UndoStack {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChangeSet {
     id: Option<u64>,
-    pub current_line_before: usize,
-    pub current_line_after: usize,
-    pub prevailing_eol_before: Option<PrevailingEol>,
-    pub prevailing_eol_after: Option<PrevailingEol>,
+    pub current_index_before: usize,
+    pub current_index_after: usize,
+    pub eols_before: Eols,
+    pub eols_after: Eols,
     changes: Vec<Change>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
-    Add(usize, Vec<String>),        // Add/Insert of lines
-    Remove(usize, Vec<String>),     // Removal of lines
-    SetEol(Range<usize>, Eol, Eol), // Eol change
+    /// Lines inserted
+    Insert { index: usize, lines: Vec<String> },
+    /// Lines Removed
+    Remove { index: usize, lines: Vec<String> },
+    /// EOLs changed for span of lines
+    SetEols { span: Range<usize>, old: Eol, new: Eol },
 }
 
 static INST_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -46,16 +48,13 @@ fn next_id() -> u64 {
 }
 
 impl ChangeSet {
-    pub fn new(
-        current_line: usize,
-        prevailing_eol: Option<PrevailingEol>,
-    ) -> Self {
+    pub fn new(current_index: usize, eol: Eols) -> Self {
         ChangeSet {
             id: None,
-            current_line_before: current_line,
-            current_line_after: current_line,
-            prevailing_eol_before: prevailing_eol,
-            prevailing_eol_after: prevailing_eol,
+            current_index_before: current_index,
+            current_index_after: current_index,
+            eols_before: eol,
+            eols_after: eol,
             changes: Vec::new(),
         }
     }
@@ -73,30 +72,41 @@ impl ChangeSet {
     }
 
     pub fn drain(&mut self) -> Drain<'_, Change> {
-        self.current_line_after = self.current_line_before;
-        self.prevailing_eol_after = self.prevailing_eol_before;
+        self.current_index_after = self.current_index_before;
+        self.eols_after = self.eols_before;
         self.changes.drain(..)
     }
 
     fn invert(mut change_set: ChangeSet) -> ChangeSet {
         mem::swap(
-            &mut change_set.current_line_before,
-            &mut change_set.current_line_after,
+            &mut change_set.current_index_before,
+            &mut change_set.current_index_after,
         );
-        mem::swap(
-            &mut change_set.prevailing_eol_before,
-            &mut change_set.prevailing_eol_after,
-        );
+        mem::swap(&mut change_set.eols_before, &mut change_set.eols_after);
         for change in &mut change_set.changes {
             let new_change = match change {
-                Change::Add(p, l) => Change::Remove(*p, mem::take(l)),
-                Change::Remove(p, l) => Change::Add(*p, mem::take(l)),
-                Change::SetEol(r, o, n) => Change::SetEol(mem::take(r), *n, *o),
+                Change::Insert { index, lines } => {
+                    Change::Remove { index: *index, lines: mem::take(lines) }
+                }
+                Change::Remove { index, lines } => {
+                    Change::Insert { index: *index, lines: mem::take(lines) }
+                }
+                Change::SetEols { span, old, new } => Change::SetEols {
+                    span: mem::take(span),
+                    old: *new,
+                    new: *old,
+                },
             };
             *change = new_change;
         }
         change_set.changes.reverse();
         change_set
+    }
+
+    pub fn extend(&mut self, other: ChangeSet) {
+        self.current_index_after = other.current_index_after;
+        self.eols_after = other.eols_after;
+        self.changes.extend(other.changes);
     }
 }
 
@@ -121,8 +131,8 @@ impl UndoStack {
     pub fn push_undo(
         &mut self,
         mut cset: ChangeSet,
-        current_line: usize,
-        eol: Option<PrevailingEol>,
+        current_index: usize,
+        eol: Eols,
     ) {
         if cset.id.is_none() {
             cset.id = Some(next_id());
@@ -133,8 +143,8 @@ impl UndoStack {
                 self.undo.extend(self.redo.drain(..).map(ChangeSet::invert));
             }
         }
-        cset.current_line_after = current_line;
-        cset.prevailing_eol_after = eol;
+        cset.current_index_after = current_index;
+        cset.eols_after = eol;
         self.undo.push(cset);
     }
 
@@ -169,34 +179,40 @@ mod tests {
 
     #[test]
     fn invert_swaps_sense_of_changes() {
-        let eol_before = Some(PrevailingEol::lf(false));
-        let eol_after = Some(PrevailingEol::crlf(false));
-        let cl_before = 13;
-        let cl_after = 42;
-        let mut orig = ChangeSet::new(cl_before, eol_before);
-        orig.push(Change::Add(2, vec!["added\n".to_owned()]));
-        orig.push(Change::Remove(1, vec!["removed\n".to_owned()]));
-        orig.push(Change::SetEol(1..4, Eol::Lf, Eol::Crlf));
-        orig.current_line_after = cl_after;
-        orig.prevailing_eol_after = eol_after;
+        let eols_before = Eols { default_eol: Eol::Lf, lfs: 10, crlfs: 0 };
+        let eols_after = Eols { default_eol: Eol::Crlf, lfs: 0, crlfs: 10 };
+        let ci_before = 3;
+        let ci_after = 8;
+        let mut orig = ChangeSet::new(ci_before, eols_before);
+        orig.push(Change::Insert {
+            index: 2,
+            lines: vec!["added\n".to_owned()],
+        });
+        orig.push(Change::Remove {
+            index: 1,
+            lines: vec!["removed\n".to_owned()],
+        });
+        orig.push(Change::SetEols { span: 1..5, old: Eol::Lf, new: Eol::Crlf });
+        orig.current_index_after = ci_after;
+        orig.eols_after = eols_after;
 
         let inverted = ChangeSet::invert(orig.clone());
-        assert_eq!(inverted.current_line_before, orig.current_line_after);
-        assert_eq!(inverted.current_line_after, orig.current_line_before);
-        assert_eq!(inverted.prevailing_eol_before, orig.prevailing_eol_after);
-        assert_eq!(inverted.prevailing_eol_after, orig.prevailing_eol_before);
+        assert_eq!(inverted.current_index_before, orig.current_index_after);
+        assert_eq!(inverted.current_index_after, orig.current_index_before);
+        assert_eq!(inverted.eols_before, orig.eols_after);
+        assert_eq!(inverted.eols_after, orig.eols_before);
         for change in inverted.changes() {
             match change {
-                Change::Add(p, l) => {
-                    assert_eq!(*p, 1);
-                    assert_eq!(*l, vec!["removed\n".to_owned()]);
+                Change::Insert { index, lines } => {
+                    assert_eq!(*index, 1);
+                    assert_eq!(*lines, vec!["removed\n".to_owned()]);
                 }
-                Change::Remove(p, l) => {
-                    assert_eq!(*p, 2);
-                    assert_eq!(*l, vec!["added\n".to_owned()]);
+                Change::Remove { index, lines } => {
+                    assert_eq!(*index, 2);
+                    assert_eq!(*lines, vec!["added\n".to_owned()]);
                 }
-                Change::SetEol(span, old, new) => {
-                    assert_eq!(*span, 1..4);
+                Change::SetEols { span, old, new } => {
+                    assert_eq!(*span, 1..5);
                     assert_eq!(*old, Eol::Crlf);
                     assert_eq!(*new, Eol::Lf);
                 }
