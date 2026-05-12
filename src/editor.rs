@@ -522,6 +522,9 @@ impl Editor {
             if e.kind() == io::ErrorKind::NotFound {
                 self.buffer.clear();
                 self.current_file = Some(filename.to_owned());
+                self.update_file_metadata();
+                self.file_hash = None;
+                self.buffer_sync_hash = self.buffer.content_hash();
                 Error::FileNotFound(filename.into())
             } else {
                 Error::EditFileOpen {
