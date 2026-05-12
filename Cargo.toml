@@ -1,7 +1,7 @@
 [package]
 name = "lned"
 description = "A line oriented text editor"
-version = "0.6.0"
+version = "0.7.0"
 build = "build.rs"
 edition = "2024"
 
@@ -12,7 +12,7 @@ unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
 wild = "2.2.1"
 line_edit = { version = "0.5.2", git = "https://github.com/Sindisil/line_edit.git" }
-similar = { version = "2.7.0", features = ["unicode"] }
+similar = { version = "3.0.0", features = ["unicode"] }
 crossterm = "0.29.0"
 
 [lints.rust]
@@ -23,5 +23,5 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 pedantic = "warn"
 
 [dev-dependencies]
-similar-asserts = "1.6.0"
+similar-asserts = "2.0.0"
 tempfile = "3.20.0"
