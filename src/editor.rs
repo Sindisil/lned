@@ -117,7 +117,7 @@ impl Editor {
                 Ok(None)
             }
             Cmd::Cut(span) => Ok(Some(self.cut_cmd(span))),
-            Cmd::Delete(span) => Ok(self.delete_cmd(span)),
+            Cmd::Delete(span) => self.delete_cmd(span),
             Cmd::Edit(filename) => {
                 self.edit_cmd(&mut output, filename.as_path())
             }
@@ -136,7 +136,8 @@ impl Editor {
                 self.join_cmd(span, separator.as_deref())
             }
             Cmd::LineNumber(index) => {
-                Ok(self.line_number_cmd(&mut output, index))
+                self.line_number_cmd(&mut output, index);
+                Ok(None)
             }
             Cmd::List(span) => Ok(self.list_cmd(&mut output, span)),
             Cmd::New => self.new_cmd(),
@@ -274,6 +275,9 @@ impl Editor {
         source: InputSource,
         mode: InputMode,
     ) -> Result<Option<ChangeSet>, Error> {
+        if self.buffer.is_empty() {
+            return Err(Error::NothingToOverwrite);
+        }
         let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         let (indent, eol) = match mode {
             // Auto-indent is same as first non-blank line in changed
@@ -313,14 +317,17 @@ impl Editor {
         Ok((!changes.is_empty()).then_some(changes))
     }
 
-    fn delete_cmd(&mut self, span: Option<Range<usize>>) -> Option<ChangeSet> {
+    fn delete_cmd(
+        &mut self,
+        span: Option<Range<usize>>,
+    ) -> Result<Option<ChangeSet>, Error> {
         if span.is_none() && self.buffer.is_empty() {
-            return None;
+            return Err(Error::NothingToDelete);
         }
 
         let span = span.unwrap_or_else(|| self.buffer.current_index_as_range());
         let changes = self.buffer.remove(span);
-        (!changes.is_empty()).then_some(changes)
+        Ok((!changes.is_empty()).then_some(changes))
     }
 
     fn copy_cmd(&mut self, span: Option<Range<usize>>) {
@@ -573,6 +580,10 @@ impl Editor {
         replacement: &str,
         scope: SubstitutionScope,
     ) -> Result<Option<ChangeSet>, Error> {
+        if self.buffer.is_empty() && span.is_none() {
+            return Err(Error::NoMatch);
+        }
+
         // Handle default
         let mut span =
             span.unwrap_or_else(|| self.buffer.current_index_as_range());
@@ -698,8 +709,6 @@ impl Editor {
         pattern: &Regex,
         commands: &str,
     ) -> Result<Option<ChangeSet>, Error> {
-        let mut changes =
-            ChangeSet::new(self.buffer.current_index(), self.buffer.eols());
         self.previous_pattern = Some(pattern.clone());
         // Compile indices of lines that match pattern
         // (not including EOL)
@@ -712,6 +721,13 @@ impl Editor {
                     .is_some_and(|l| pattern.is_match(l))
             })
             .collect::<VecDeque<usize>>();
+
+        if matched_lines.is_empty() {
+            return Err(Error::NoMatch);
+        }
+
+        let mut changes =
+            ChangeSet::new(self.buffer.current_index(), self.buffer.eols());
         let res =
             self.do_global_cmds(output, commands, matched_lines, &mut changes);
         let changes = if changes.is_empty() { None } else { Some(changes) };
@@ -759,7 +775,7 @@ impl Editor {
                         Ok(None)
                     }
                     Cmd::Cut(span) => Ok(Some(self.cut_cmd(span))),
-                    Cmd::Delete(span) => Ok(self.delete_cmd(span)),
+                    Cmd::Delete(span) => self.delete_cmd(span),
                     Cmd::Enumerate(span) => {
                         Ok(self.enumerate_cmd(output, span))
                     }
@@ -962,6 +978,9 @@ impl Editor {
         }
 
         // Handle default
+        if self.buffer.is_empty() {
+            return Err(Error::NothingToJoin);
+        }
         let mut span =
             span.unwrap_or_else(|| self.buffer.current_index_as_range());
         // If only one line addressed, join with next line
@@ -990,8 +1009,11 @@ impl Editor {
         &mut self,
         output: &mut impl fmt::Write,
         index: Option<usize>,
-    ) -> Option<ChangeSet> {
+    ) {
         match index {
+            None if self.buffer.is_empty() => {
+                writeln!(output, "empty buffer").unwrap();
+            }
             None => {
                 writeln!(output, "{}", self.buffer.len()).unwrap();
             }
@@ -999,7 +1021,6 @@ impl Editor {
                 writeln!(output, "{}", index + 1).unwrap();
             }
         }
-        None
     }
 
     /// Implements quit command.
@@ -1858,6 +1879,22 @@ mod tests {
     }
 
     #[test]
+    fn global_cmd_empty_buffer() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        let mut output = String::new();
+        let commands = "n\n".to_owned();
+        let res = editor
+            .global_cmd(
+                &mut output,
+                None,
+                &Regex::new("no match").unwrap(),
+                &commands,
+            )
+            .expect_err("no match");
+        assert!(matches!(res, Error::NoMatch));
+    }
+
+    #[test]
     fn global_cmd_no_matches() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["one\n", "two", "three"]);
@@ -1866,8 +1903,8 @@ mod tests {
         let commands = "p\n".to_owned();
         let res = editor
             .global_cmd(&mut output, None, pat, &commands)
-            .expect("no error");
-        assert!(res.is_none(), "should be no changes");
+            .expect_err("no match");
+        assert!(matches!(res, Error::NoMatch));
         assert!(output.is_empty());
     }
 
@@ -2832,6 +2869,20 @@ mod tests {
     }
 
     #[test]
+    fn substitute_cmd_empty_buffer() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        let res = editor
+            .substitute_cmd(
+                None,
+                &Regex::new("won't match").unwrap(),
+                "",
+                SubstitutionScope::Single(1),
+            )
+            .expect_err("no match");
+        assert!(matches!(res, Error::NoMatch));
+    }
+
+    #[test]
     fn substitute_cmd_no_matches() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&[
@@ -3244,6 +3295,21 @@ mod tests {
     }
 
     #[test]
+    fn overwrite_cmd_empty_buffer() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        let res = editor
+            .overwrite_cmd(
+                &mut "".as_bytes(),
+                &mut String::new(),
+                None,
+                InputSource::StdIn,
+                InputMode::Cooked,
+            )
+            .expect_err("nothing to overwrite");
+        assert!(matches!(res, Error::NothingToOverwrite));
+    }
+
+    #[test]
     fn overwrite_cmd_normalizes_eols() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::with_lines(&["1\n", "2", "3"]);
@@ -3289,8 +3355,8 @@ mod tests {
     fn delete_cmd_empty_buffer() {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::new();
-        let res = editor.delete_cmd(None);
-        assert!(res.is_none());
+        let res = editor.delete_cmd(None).expect_err("nothing to delete");
+        assert!(matches!(res, Error::NothingToDelete));
     }
 
     #[test]
@@ -3501,7 +3567,7 @@ mod tests {
         let mut editor = Editor::new(OutputTarget::Other);
         editor.buffer = EditBuffer::new();
         let res = editor.join_cmd(None, None).expect_err("should fail");
-        assert!(matches!(res, Error::InvalidAddress));
+        assert!(matches!(res, Error::NothingToJoin));
     }
 
     #[test]
@@ -3533,15 +3599,19 @@ mod tests {
         editor.buffer =
             EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
         editor.buffer.set_current_index(2);
-        let res = editor.line_number_cmd(&mut output, None);
-        let out_text = &output;
-        assert_eq!(out_text, "6\n");
-        assert!(res.is_none());
+        editor.line_number_cmd(&mut output, None);
+        assert_eq!(&output, "6\n");
         output.clear();
-        let res = editor.line_number_cmd(&mut output, Some(1));
-        let out_text = &output;
-        assert!(res.is_none());
-        assert_eq!(out_text, "2\n");
+        editor.line_number_cmd(&mut output, Some(1));
+        assert_eq!(&output, "2\n");
+    }
+
+    #[test]
+    fn line_number_cmd_with_empty_buffer() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        let mut output = String::new();
+        editor.line_number_cmd(&mut output, None);
+        assert_eq!(output.trim(), "empty buffer");
     }
 
     #[test]

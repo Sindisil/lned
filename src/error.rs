@@ -32,6 +32,9 @@ pub enum Error {
     NoFilename,
     NoMatch,
     NoPreviousPattern,
+    NothingToDelete,
+    NothingToJoin,
+    NothingToOverwrite,
     NothingToRedo,
     NothingToUndo,
     Quit,
@@ -99,6 +102,9 @@ impl std::error::Error for Error {
             | Error::NoMatch
             | Error::NoPreviousPattern
             | Error::NothingToUndo
+            | Error::NothingToDelete
+            | Error::NothingToJoin
+            | Error::NothingToOverwrite
             | Error::NothingToRedo
             | Error::Quit
             | Error::TrailingBackslash
@@ -165,6 +171,9 @@ impl Display for Error {
                 write!(f, "no matches found")
             }
             Error::NoPreviousPattern => write!(f, "no previous pattern"),
+            Error::NothingToDelete => write!(f, "no lines to delete"),
+            Error::NothingToJoin => write!(f, "no lines to join"),
+            Error::NothingToOverwrite => write!(f, "no lines to overwrite"),
             Error::NothingToRedo => write!(f, "nothing to redo"),
             Error::NothingToUndo => write!(f, "nothing to undo"),
             Error::Quit => write!(f, "exiting ..."),
