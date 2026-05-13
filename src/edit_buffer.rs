@@ -178,7 +178,11 @@ impl EditBuffer {
     }
 
     pub fn current_index_as_range(&self) -> Range<usize> {
-        self.current_index..(self.current_index + 1)
+        if self.is_empty() {
+            return 0..0;
+        }
+
+        self.current_index..self.current_index + 1
     }
 
     pub fn set_current_index(&mut self, index: usize) {
@@ -234,7 +238,7 @@ impl EditBuffer {
         }
         self.current_index = index + lines.len() - 1;
         self.content_hash = None;
-        self.lines.splice(index..index, lines.clone());
+        self.lines.splice(index..index, lines.iter().cloned());
 
         changes.push(Change::Insert { index, lines });
         changes
@@ -340,6 +344,7 @@ impl EditBuffer {
         self.undo_stack.push_undo(redo, self.current_index, self.eols);
         Ok(())
     }
+
     pub fn clear(&mut self) {
         self.lines.clear();
         self.current_index = 0;

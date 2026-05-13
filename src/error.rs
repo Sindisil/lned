@@ -25,6 +25,7 @@ pub enum Error {
     },
     InvalidCmdSuffix,
     InvalidDelimiter,
+    InvalidLeftMargin,
     InvalidNewline,
     InvalidOffset,
     MissingPatternDelimiter,
@@ -34,9 +35,11 @@ pub enum Error {
     NoPreviousPattern,
     NothingToDelete,
     NothingToJoin,
+    NothingToJustify,
     NothingToOverwrite,
     NothingToRedo,
     NothingToUndo,
+    NumberParse,
     Quit,
     ReadCommand {
         source: Option<Box<dyn std::error::Error>>,
@@ -94,6 +97,7 @@ impl std::error::Error for Error {
             | Error::InvalidAddress
             | Error::InvalidCmdSuffix
             | Error::InvalidDelimiter
+            | Error::InvalidLeftMargin
             | Error::InvalidNewline
             | Error::InvalidOffset
             | Error::MissingPatternDelimiter
@@ -104,8 +108,10 @@ impl std::error::Error for Error {
             | Error::NothingToUndo
             | Error::NothingToDelete
             | Error::NothingToJoin
+            | Error::NothingToJustify
             | Error::NothingToOverwrite
             | Error::NothingToRedo
+            | Error::NumberParse
             | Error::Quit
             | Error::TrailingBackslash
             | Error::UnexpectedAddress
@@ -156,6 +162,9 @@ impl Display for Error {
             Error::InvalidDelimiter => {
                 write!(f, "invalid delimiter")
             }
+            Error::InvalidLeftMargin => {
+                write!(f, "left margin must be < line width")
+            }
             Error::InvalidNewline => {
                 write!(f, "invalid newline (valid: CR, CRLF)")
             }
@@ -173,9 +182,11 @@ impl Display for Error {
             Error::NoPreviousPattern => write!(f, "no previous pattern"),
             Error::NothingToDelete => write!(f, "no lines to delete"),
             Error::NothingToJoin => write!(f, "no lines to join"),
+            Error::NothingToJustify => write!(f, "no lines to justify"),
             Error::NothingToOverwrite => write!(f, "no lines to overwrite"),
             Error::NothingToRedo => write!(f, "nothing to redo"),
             Error::NothingToUndo => write!(f, "nothing to undo"),
+            Error::NumberParse => write!(f, "error parsing number"),
             Error::Quit => write!(f, "exiting ..."),
             Error::ReadCommand { .. } => {
                 write!(f, "error reading command input")

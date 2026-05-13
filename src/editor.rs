@@ -15,10 +15,11 @@ use crossterm::{ExecutableCommand, terminal};
 use regex::Regex;
 use similar::TextDiff;
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use crate::cli;
 use crate::command::{
-    Cmd, InputMode, InputSource, PrintSuffix, SubstitutionScope,
+    Cmd, InputMode, InputSource, PrintSuffix, SubstitutionScope, Wrapping,
 };
 use crate::edit_buffer::EditBuffer;
 use crate::eol::{Eol, Eols};
@@ -134,6 +135,9 @@ impl Editor {
             }
             Cmd::Join(span, separator) => {
                 self.join_cmd(span, separator.as_deref())
+            }
+            Cmd::Justify { span, wrap, left_margin, line_width } => {
+                self.justify_cmd(span, wrap, left_margin, line_width)
             }
             Cmd::LineNumber(index) => {
                 self.line_number_cmd(&mut output, index);
@@ -1001,6 +1005,180 @@ impl Editor {
         Ok(Some(changes))
     }
 
+    fn justify_cmd(
+        &mut self,
+        span: Option<Range<usize>>,
+        wrap: Wrapping,
+
+        left_margin: Option<usize>,
+        line_width: Option<usize>,
+    ) -> Result<Option<ChangeSet>, Error> {
+        fn first_printable_column(line: &str) -> Option<usize> {
+            line.grapheme_indices(true)
+                .find(|(_, gr)| gr.contains(|c: char| !c.is_whitespace()))
+                .map(|(i, _)| line[..i].width())
+        }
+
+        if self.buffer.is_empty() {
+            return Err(Error::NothingToJustify);
+        }
+
+        // Handle defaults
+        let mut remaining_span =
+            span.unwrap_or_else(|| self.buffer.current_index_as_range());
+        let left_margin = left_margin
+            .or_else(|| {
+                first_printable_column(&self.buffer[remaining_span.start])
+            })
+            .unwrap_or_default();
+        let line_width = if wrap == Wrapping::None {
+            0
+        } else {
+            line_width
+                .unwrap_or_else(|| self.terminal_size().0)
+                .checked_sub(left_margin)
+                .ok_or(Error::InvalidLeftMargin)?
+        };
+
+        // Init working variables
+        let prefix = " ".repeat(left_margin);
+        let mut changes =
+            ChangeSet::new(self.buffer.current_index(), self.buffer.eols());
+        let mut line =
+            String::with_capacity(self.buffer[remaining_span.start].len());
+
+        let mut replacement_span = remaining_span.start..remaining_span.start;
+        let mut replacements = Vec::new();
+        let mut justified_line = line.clone();
+
+        loop {
+            // Join next line to be justified if either:
+            //  - current line is empty
+            //  - or we're filling, the next line isn't blank,
+            //    and there's still room on current line
+            if wrap == Wrapping::Fill {
+                while line.width() < line_width
+                    && !remaining_span.is_empty()
+                    && self.buffer[remaining_span.start]
+                        .chars()
+                        .any(|ch| !ch.is_whitespace())
+                {
+                    if let Some(i) = remaining_span.next() {
+                        if !line.is_empty() {
+                            line.push(' ');
+                        }
+                        line.push_str(self.buffer[i].trim());
+                        replacement_span.end += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            if line.is_empty() {
+                if let Some(i) = remaining_span.next() {
+                    line.push_str(self.buffer[i].trim());
+                    replacement_span.end += 1;
+                } else {
+                    break;
+                }
+            }
+
+            // Compute line break
+            let line_break = if wrap == Wrapping::None {
+                line.len()
+            } else {
+                let mut cols = 0;
+                let mut index = 0;
+                let mut last_break = index;
+                let mut words = line.split_word_bounds();
+                loop {
+                    if let Some(word) = words.next() {
+                        if word.chars().all(char::is_whitespace) {
+                            last_break = index;
+                        }
+                        let word_cols = word.width();
+                        let cols_left = line_width - cols;
+                        // Done if next word or space won't fit and
+                        // line isn't empty
+                        if cols_left < word_cols && !line[..index].is_empty() {
+                            break;
+                        }
+                        cols += word_cols;
+                        index += word.len();
+                    } else {
+                        last_break = line.len();
+                        break;
+                    }
+                }
+                last_break
+            };
+
+            // Construct replacement line with prefix
+            if !line.is_empty() {
+                justified_line.push_str(&prefix);
+                justified_line.extend(line.drain(..line_break));
+                if let Some(first_printable_char) =
+                    line.find(|c: char| !c.is_whitespace())
+                {
+                    line.drain(..first_printable_char);
+                }
+            }
+            justified_line
+                .push_str(self.buffer.eols().prevailing().str_value());
+
+            if justified_line != self.buffer[replacement_span.end - 1] {
+                // Add justified_line to replacements
+                replacements.push(justified_line.drain(..).collect::<String>());
+            } else {
+                // replace justified span
+                if !replacements.is_empty() {
+                    replacement_span.end -= 1;
+                    let before = replacement_span.end - replacement_span.start;
+                    let after = replacements.len();
+                    changes
+                        .extend(self.buffer.remove(replacement_span.clone()));
+                    changes.extend(self.buffer.insert(
+                        replacement_span.start,
+                        replacements.drain(..).collect(),
+                    ));
+                    if before < after {
+                        let adj = after - before;
+                        remaining_span.start += adj;
+                        remaining_span.end += adj;
+                    } else if after < before {
+                        let adj = before - after;
+                        remaining_span.start -= adj;
+                        remaining_span.end -= adj;
+                    }
+                }
+
+                justified_line.clear();
+                replacement_span = remaining_span.start..remaining_span.start;
+            }
+        }
+
+        if !replacements.is_empty() {
+            let before = replacement_span.end - replacement_span.start;
+            let after = replacements.len();
+            changes.extend(self.buffer.remove(replacement_span.clone()));
+            changes.extend(
+                self.buffer.insert(replacement_span.start, replacements),
+            );
+            if before < after {
+                let adj = after - before;
+                remaining_span.start += adj;
+                remaining_span.end += adj;
+            } else if after < before {
+                let adj = before - after;
+                remaining_span.start -= adj;
+                remaining_span.end -= adj;
+            }
+        }
+
+        self.buffer.set_current_index(remaining_span.end - 1);
+        Ok((!changes.is_empty()).then_some(changes))
+    }
+
     fn line_number_cmd(
         &mut self,
         output: &mut impl fmt::Write,
@@ -1269,7 +1447,6 @@ fn write_line(
         for gr in graphemes {
             output.write_str(gr)?;
             if gr != "\n" && gr != "\r\n" {
-                use unicode_width::UnicodeWidthStr;
                 columns += gr.width();
             }
         }
@@ -1283,7 +1460,6 @@ fn write_line(
             } else {
                 output.write_str(gr)?;
                 if gr != "\n" && gr != "\r\n" {
-                    use unicode_width::UnicodeWidthStr;
                     columns += gr.width();
                 }
             }
@@ -4680,5 +4856,239 @@ mod tests {
         editor.buffer.redo().expect("no error");
         assert_eq!(&editor.clipboard, "2\n3\n4\n");
         assert_eq!(editor.buffer[..], ["1\n", "5\n", "6\n"]);
+    }
+
+    #[test]
+    fn justify_cmd_empty_buffer() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        let err = editor
+            .justify_cmd(None, Wrapping::NoFill, None, None)
+            .expect_err("empty buffer");
+        assert!(matches!(err, Error::NothingToJustify));
+    }
+
+    #[test]
+    fn justify_cmd_single_line_defaults() {
+        let long_line = "This is a line long enough to wrap past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.\n";
+        let short_line = "This is a short line for testing.\n";
+
+        let mut editor = Editor::new(OutputTarget::Other);
+
+        editor.buffer =
+            EditBuffer::with_lines(&["First line\n", short_line, "Last line"]);
+        editor.buffer.set_current_index(1);
+        let orig = editor.buffer.clone();
+        let changes = editor
+            .justify_cmd(None, Wrapping::NoFill, None, None)
+            .expect("no error");
+        assert!(changes.is_none());
+        assert_eq!(editor.buffer, orig);
+
+        editor.buffer =
+            EditBuffer::with_lines(&["First line\n", long_line, "Last line"]);
+        editor.buffer.set_current_index(1);
+        let orig = editor.buffer.clone();
+        let mut expected = EditBuffer::with_lines(&[
+            "First line\n",
+            "This is a line long enough to wrap past the default 80 columns so that I can",
+            "test the wrapping behavior of the Justify command. In fact, it wraps to a total",
+            "of three lines so that I don't miss an edge case.",
+            "Last line",
+        ]);
+        expected.set_current_index(3);
+        let changes = editor
+            .justify_cmd(None, Wrapping::NoFill, None, None)
+            .expect("no error")
+            .expect("some changes");
+        editor.buffer.push_undo(changes);
+        assert_eq!(editor.buffer, expected);
+
+        editor.buffer.undo().expect("no error");
+        assert_eq!(editor.buffer, orig);
+        editor.buffer.redo().expect("no error");
+        assert_eq!(editor.buffer, expected);
+    }
+
+    #[test]
+    fn justify_cmd_multi_line_defaults() {
+        let mut editor = Editor::new(OutputTarget::Other);
+
+        editor.buffer = EditBuffer::with_lines(&[
+            "First line\n",
+            "    Second line",
+            "		This is a long, indented line wrapping past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "Another line",
+            "    A correctly indented line",
+            "        ",
+            "This is a line long enough to wrap past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "   This line was indented, but short.",
+            "Last line",
+        ]);
+        editor.buffer.set_current_index(1);
+        let orig = editor.buffer.clone();
+        let mut expected = EditBuffer::with_lines(&[
+            "First line\n",
+            "    Second line",
+            "    This is a long, indented line wrapping past the default 80 columns so that I",
+            "    can test the wrapping behavior of the Justify command. In fact, it wraps to",
+            "    a total of three lines so that I don't miss an edge case.",
+            "    Another line",
+            "    A correctly indented line",
+            "",
+            "    This is a line long enough to wrap past the default 80 columns so that I can",
+            "    test the wrapping behavior of the Justify command. In fact, it wraps to a",
+            "    total of three lines so that I don't miss an edge case.",
+            "    This line was indented, but short.",
+            "Last line",
+        ]);
+        expected.set_current_index(11);
+
+        let changes = editor
+            .justify_cmd(Some(1..8), Wrapping::NoFill, None, None)
+            .expect("no error")
+            .expect("some changes");
+        editor.buffer.push_undo(changes);
+        assert_eq!(editor.buffer, expected);
+
+        editor.buffer.undo().expect("no error");
+        assert_eq!(editor.buffer, orig);
+        editor.buffer.redo().expect("no error");
+        assert_eq!(editor.buffer, expected);
+    }
+
+    #[test]
+    fn justify_cmd_multi_line_margins() {
+        let mut editor = Editor::new(OutputTarget::Other);
+
+        editor.buffer = EditBuffer::with_lines(&[
+            "First line\n",
+            "    Second line",
+            "		This is a long, indented line wrapping past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "Another line",
+            "        A correctly indented line",
+            "        ",
+            "This is a line long enough to wrap past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "   This line was indented, but short.",
+            "Last line",
+        ]);
+        editor.buffer.set_current_index(1);
+        let orig = editor.buffer.clone();
+        let mut expected = EditBuffer::with_lines(&[
+            "First line\n",
+            "        Second line",
+            "        This is a long, indented line wrapping past the default 80",
+            "        columns so that I can test the wrapping behavior of the Justify",
+            "        command. In fact, it wraps to a total of three lines so that I",
+            "        don't miss an edge case.",
+            "        Another line",
+            "        A correctly indented line",
+            "",
+            "        This is a line long enough to wrap past the default 80 columns",
+            "        so that I can test the wrapping behavior of the Justify command.",
+            "        In fact, it wraps to a total of three lines so that I don't miss",
+            "        an edge case.",
+            "        This line was indented, but short.",
+            "Last line",
+        ]);
+        expected.set_current_index(13);
+        let changes = editor
+            .justify_cmd(Some(1..8), Wrapping::NoFill, Some(8), Some(72))
+            .expect("no error")
+            .expect("some changes");
+        editor.buffer.push_undo(changes);
+        assert_eq!(editor.buffer[..], expected[..]);
+        assert_eq!(editor.buffer.current_index(), expected.current_index());
+
+        editor.buffer.undo().expect("no error");
+        assert_eq!(editor.buffer, orig);
+        editor.buffer.redo().expect("no error");
+        assert_eq!(editor.buffer, expected);
+    }
+
+    #[test]
+    fn justify_cmd_fill() {
+        let mut editor = Editor::new(OutputTarget::Other);
+
+        editor.buffer = EditBuffer::with_lines(&[
+            "First line\n",
+            "    Second line",
+            "		This is a long, indented line wrapping past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "Another line",
+            "        A correctly indented line",
+            "        ",
+            "This is a line long enough to wrap past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "   This line was indented, but short.",
+            "Last line",
+        ]);
+        editor.buffer.set_current_index(1);
+        let orig = editor.buffer.clone();
+        let mut expected = EditBuffer::with_lines(&[
+            "First line\n",
+            "        Second line This is a long, indented line wrapping past the",
+            "        default 80 columns so that I can test the wrapping behavior of",
+            "        the Justify command. In fact, it wraps to a total of three lines",
+            "        so that I don't miss an edge case. Another line A correctly",
+            "        indented line",
+            "",
+            "        This is a line long enough to wrap past the default 80 columns",
+            "        so that I can test the wrapping behavior of the Justify command.",
+            "        In fact, it wraps to a total of three lines so that I don't miss",
+            "        an edge case. This line was indented, but short.",
+            "Last line",
+        ]);
+        expected.set_current_index(10);
+        let changes = editor
+            .justify_cmd(Some(1..8), Wrapping::Fill, Some(8), Some(72))
+            .expect("no error")
+            .expect("some changes");
+        editor.buffer.push_undo(changes);
+        assert_eq!(editor.buffer, expected);
+
+        editor.buffer.undo().expect("no error");
+        assert_eq!(editor.buffer, orig);
+        editor.buffer.redo().expect("no error");
+        assert_eq!(editor.buffer, expected);
+    }
+
+    #[test]
+    fn justify_cmd_no_wrap() {
+        let mut editor = Editor::new(OutputTarget::Other);
+
+        editor.buffer = EditBuffer::with_lines(&[
+            "First line\n",
+            "    Second line",
+            "		This is a long, indented line wrapping past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "Another line",
+            "        A correctly indented line",
+            "        ",
+            "This is a line long enough to wrap past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "   This line was indented, but short.",
+            "Last line",
+        ]);
+        editor.buffer.set_current_index(1);
+        let orig = editor.buffer.clone();
+        let mut expected = EditBuffer::with_lines(&[
+            "First line\n",
+            "        Second line",
+            "        This is a long, indented line wrapping past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "        Another line",
+            "        A correctly indented line",
+            "",
+            "        This is a line long enough to wrap past the default 80 columns so that I can test the wrapping behavior of the Justify command. In fact, it wraps to a total of three lines so that I don't miss an edge case.",
+            "        This line was indented, but short.",
+            "Last line",
+        ]);
+        expected.set_current_index(7);
+        let changes = editor
+            .justify_cmd(Some(1..8), Wrapping::None, Some(8), Some(72))
+            .expect("no error")
+            .expect("some changes");
+        editor.buffer.push_undo(changes);
+        assert_eq!(editor.buffer, expected);
+
+        editor.buffer.undo().expect("no error");
+        assert_eq!(editor.buffer, orig);
+        editor.buffer.redo().expect("no error");
+        assert_eq!(editor.buffer, expected);
     }
 }

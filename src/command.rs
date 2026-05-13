@@ -34,6 +34,12 @@ pub enum Cmd {
         mode: InputMode,
     },
     Join(Option<Range<usize>>, Option<String>),
+    Justify {
+        span: Option<Range<usize>>,
+        wrap: Wrapping,
+        left_margin: Option<usize>,
+        line_width: Option<usize>,
+    },
     LineNumber(Option<usize>),
     List(Option<Range<usize>>),
     Newline(Option<Eol>),
@@ -81,6 +87,14 @@ pub enum InputSource {
     Clipboard,
     File(PathBuf),
     StdIn,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub enum Wrapping {
+    #[default]
+    NoFill,
+    Fill,
+    None,
 }
 
 impl Cmd {
@@ -133,6 +147,7 @@ impl Cmd {
                 parse_insert_cmd(&mut graphemes, address, InputMode::Raw)
             }
             Some("j") => parse_join_cmd(&mut graphemes, address),
+            Some("J") => parse_justify_cmd(&mut graphemes, address),
             Some("l") => parse_no_args(&mut graphemes, Cmd::List(address)),
             Some("L") => parse_newline_cmd(&mut graphemes, address.as_ref()),
             Some("n") => parse_no_args(&mut graphemes, Cmd::Enumerate(address)),
@@ -566,7 +581,7 @@ pub fn parse_usize(
             v.and(Some(v))
         });
 
-    digits.ok_or(Error::InvalidOffset)
+    digits.ok_or(Error::NumberParse)
 }
 
 fn parse_global_command_line(
@@ -700,6 +715,39 @@ fn parse_join_cmd(
         }
     };
     Ok(Some((cmd, sfx)))
+}
+
+fn parse_justify_cmd(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+    span: Option<Range<usize>>,
+) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
+    // Parse optional wrapping style
+    let wrap = match graphemes.peek() {
+        Some(&"/") => {
+            graphemes.next();
+            Wrapping::NoFill
+        }
+        Some(&"^") => {
+            graphemes.next();
+            Wrapping::Fill
+        }
+        Some(&"!") => {
+            graphemes.next();
+            Wrapping::None
+        }
+        _ => Wrapping::default(),
+    };
+
+    // Parse optional left margin
+    let left_margin = parse_usize(graphemes)?;
+
+    // Parse optional right margin
+    while graphemes.next_if(|&gr| gr == " " || gr == "\t").is_some() {}
+    let line_width = parse_usize(graphemes)?;
+
+    // Parse optional print suffix
+    let pr_sfx = parse_print_suffix(graphemes)?;
+    Ok(Some((Cmd::Justify { span, wrap, left_margin, line_width }, pr_sfx)))
 }
 
 fn parse_newline_cmd<'a>(
@@ -1885,5 +1933,85 @@ mod tests {
         let res =
             parse_newline_cmd(&mut cmd_line, None).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
+    }
+
+    #[test]
+    fn parse_justify_cmd_with_addr() {
+        let expected_addr = 1..5;
+        let expected_sfx =
+            PrintSuffix { enumerate: true, ..Default::default() };
+
+        // No line_width, no print_suffix
+        let mut input = "n\n".graphemes(true).peekable();
+
+        let (cmd, pr_sfx) =
+            parse_justify_cmd(&mut input, Some(expected_addr.clone()))
+                .expect("no error")
+                .expect("should parse");
+        let Cmd::Justify { span, wrap, left_margin, line_width } = cmd else {
+            panic!("expected Cmd::Justify, got {cmd:?}");
+        };
+        assert_eq!(span, Some(expected_addr));
+        assert_eq!(wrap, Wrapping::NoFill);
+        assert!(left_margin.is_none());
+        assert!(line_width.is_none());
+        assert_eq!(pr_sfx, Some(expected_sfx));
+    }
+
+    #[test]
+    fn parse_justify_cmd_left_margin_no_wrap() {
+        let expected_addr = 1..5;
+        let expected_sfx =
+            PrintSuffix { enumerate: true, ..Default::default() };
+
+        // No line_width, no print_suffix
+        let mut input = "!10n\n".graphemes(true).peekable();
+
+        let (cmd, pr_sfx) =
+            parse_justify_cmd(&mut input, Some(expected_addr.clone()))
+                .expect("no error")
+                .expect("should parse");
+        let Cmd::Justify { span, wrap, left_margin, line_width } = cmd else {
+            panic!("expected Cmd::Justify, got {cmd:?}");
+        };
+        assert_eq!(span, Some(expected_addr));
+        assert_eq!(wrap, Wrapping::None);
+        assert_eq!(left_margin, Some(10));
+        assert!(line_width.is_none());
+        assert_eq!(pr_sfx, Some(expected_sfx));
+    }
+
+    #[test]
+    fn parse_justify_cmd_default() {
+        let mut input = "\n".graphemes(true).peekable();
+
+        let (cmd, pr_sfx) = parse_justify_cmd(&mut input, None)
+            .expect("no error")
+            .expect("should parse");
+        let Cmd::Justify { span, wrap, left_margin, line_width } = cmd else {
+            panic!("expected Cmd::Justify, got {cmd:?}");
+        };
+        assert!(span.is_none());
+        assert_eq!(wrap, Wrapping::NoFill);
+        assert!(left_margin.is_none());
+        assert!(line_width.is_none());
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_justify_cmd_all_parameters() {
+        let mut input = "^20 72\n".graphemes(true).peekable();
+
+        let (cmd, pr_sfx) = parse_justify_cmd(&mut input, None)
+            .expect("no error")
+            .expect("should parse");
+        let Cmd::Justify { span, wrap, left_margin, line_width } = cmd else {
+            panic!("expected Cmd::Justify, got {cmd:?}");
+        };
+        assert!(span.is_none());
+        assert_eq!(wrap, Wrapping::Fill);
+        assert_eq!(left_margin, Some(20));
+        assert_eq!(line_width, Some(72));
+        assert!(pr_sfx.is_none());
     }
 }
