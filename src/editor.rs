@@ -154,12 +154,13 @@ impl Editor {
                 let rows = self
                     .page_length
                     .map_or(term_rows.saturating_sub(3) / 2, usize::from);
-                Ok(self.page_down_cmd(
+                self.page_down_cmd(
                     &mut output,
                     index,
                     pr_sfx,
                     PageBounds { cols, rows },
-                ))
+                );
+                Ok(None)
             }
             Cmd::PageUp(index, page_length, pr_sfx) => {
                 let (cols, term_rows) = self.terminal_size();
@@ -169,12 +170,13 @@ impl Editor {
                 let rows = self
                     .page_length
                     .map_or(term_rows.saturating_sub(3) / 2, usize::from);
-                Ok(self.page_up_cmd(
+                self.page_up_cmd(
                     &mut output,
                     index,
                     pr_sfx,
                     PageBounds { cols, rows },
-                ))
+                );
+                Ok(None)
             }
             Cmd::Print(span) => Ok(self.print_cmd(&mut output, span)),
             Cmd::Quit => self.quit_cmd(),
@@ -349,12 +351,14 @@ impl Editor {
         index: Option<usize>,
         pr_sfx: Option<PrintSuffix>,
         bounds: PageBounds,
-    ) -> Option<ChangeSet> {
-        let start = if let Some(index) = index {
-            index
-        } else {
-            self.buffer.current_index() + 1
-        };
+    ) {
+        if index.is_none()
+            && self.buffer.current_index()
+                == self.buffer.len().saturating_sub(1)
+        {
+            return;
+        }
+        let start = index.unwrap_or(self.buffer.current_index() + 1);
         let end = cmp::min(self.buffer.len(), start + bounds.rows + 1);
 
         self.size_page_buffer(bounds.rows);
@@ -381,26 +385,20 @@ impl Editor {
             output.write_str(line).unwrap();
         }
         self.buffer.set_current_index(start + pb_end.saturating_sub(1));
-
-        None
     }
 
-    /// Write to `output` the "page" of lines (defined by `bounds`)
-    /// that ends with the last addressed line or the line preceding
-    /// the current line, if None.
-    /// addressed line (or the line before `current_index`, if None).
     fn page_up_cmd(
         &mut self,
         output: &mut impl fmt::Write,
         index: Option<usize>,
         pr_sfx: Option<PrintSuffix>,
         bounds: PageBounds,
-    ) -> Option<ChangeSet> {
-        let end = if let Some(index) = index {
-            index + 1
-        } else {
-            self.buffer.current_index()
-        };
+    ) {
+        let end = index.map_or(self.buffer.current_index(), |i| i + 1);
+        if end == 0 {
+            return;
+        }
+
         let start = end.saturating_sub(bounds.rows);
 
         self.size_page_buffer(bounds.rows);
@@ -428,8 +426,6 @@ impl Editor {
         }
         self.buffer
             .set_current_index(end.saturating_sub(bounds.rows - pb_start));
-
-        None
     }
 
     fn show_diff_cmd(
@@ -4149,19 +4145,54 @@ mod tests {
     }
 
     #[test]
-    fn page_down_cmd_at_end() {
+    fn page_down_cmd_empty_buffer() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        let mut output = String::new();
+        editor.page_down_cmd(
+            &mut output,
+            None,
+            None,
+            PageBounds { cols: 80, rows: 24 },
+        );
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn page_up_cmd_empty_buffer() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        let mut output = String::new();
+        editor.page_up_cmd(
+            &mut output,
+            None,
+            None,
+            PageBounds { cols: 80, rows: 24 },
+        );
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn page_down_cmd_to_end() {
         let mut editor = Editor::new(OutputTarget::Other);
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
         editor.buffer = EditBuffer::from(lines);
         let mut output = String::new();
-        let res = editor.page_down_cmd(
+        editor.page_down_cmd(
             &mut output,
             Some(59),
             None,
             PageBounds { cols: 80, rows: 24 },
         );
-        assert!(res.is_none());
         assert!(output.contains("60\r\n61\r\n62\r\n63\r\n64\r\n"));
+        assert_eq!(editor.buffer.current_index(), 63);
+
+        output.clear();
+        editor.page_down_cmd(
+            &mut output,
+            None,
+            None,
+            PageBounds { cols: 80, rows: 24 },
+        );
+        assert!(output.is_empty());
         assert_eq!(editor.buffer.current_index(), 63);
     }
 
@@ -4171,14 +4202,23 @@ mod tests {
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\r\n")).collect();
         editor.buffer = EditBuffer::from(lines);
         let mut output = String::new();
-        let res = editor.page_up_cmd(
+        editor.page_up_cmd(
             &mut output,
             Some(4),
             None,
             PageBounds { cols: 80, rows: 24 },
         );
-        assert!(res.is_none());
         assert!(output.contains("1\r\n2\r\n3\r\n4\r\n5\r\n"));
+        assert_eq!(editor.buffer.current_index(), 0);
+
+        output.clear();
+        editor.page_up_cmd(
+            &mut output,
+            None,
+            None,
+            PageBounds { cols: 80, rows: 24 },
+        );
+        assert!(output.is_empty());
         assert_eq!(editor.buffer.current_index(), 0);
     }
 
@@ -4190,13 +4230,16 @@ mod tests {
         editor.buffer = EditBuffer::from(lines);
         editor.buffer.set_current_index(0);
         let mut output = String::new();
-        let res = editor.page_down_cmd(
+        editor.page_down_cmd(
             &mut output,
             None,
             None,
             PageBounds { cols: 80, rows: 24 },
         );
-        assert!(res.is_none());
+        assert!(
+            output.ends_with("13 ********************************************************************************\r\n"),
+            "expected to end with\n\t{:?}got:\n\t{output:?}", editor.buffer[12]
+        );
         assert_eq!(editor.buffer.current_index(), 12);
     }
 
@@ -4208,13 +4251,12 @@ mod tests {
         editor.buffer = EditBuffer::from(lines);
         editor.buffer.set_current_index(63);
         let mut output = String::new();
-        let res = editor.page_up_cmd(
+        editor.page_up_cmd(
             &mut output,
             None,
             None,
             PageBounds { cols: 80, rows: 24 },
         );
-        assert!(res.is_none());
         assert_eq!(editor.buffer.current_index(), 51);
     }
 
