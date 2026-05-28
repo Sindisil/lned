@@ -408,6 +408,35 @@ If any lines are joined, the current line will be set to the address of
 the resulting joined line, otherwise the current line number will not
 be set.
 
+### 'J' Justify
+
+    (.)J(wrapping_style)(left_margin)( line_width)
+
+Justifies text lines according to the specified parameters by replacing
+leading whitespace with the appropriate number of spaces (' '), leaving
+the right margin ragged and setting current line to last line in newly
+justified span of lines.
+
+The optional left_margin defaults to the number of columns preceding the
+first printable character on the first line to be justified.
+
+The optional line_width defaults to terminal width, and must be preceded
+by one or more blanks (' ' or '\t') if specified.
+
+The optional wrapping_style is specified with one of the following
+characters and it defaults to NoFill if unspecified.
+
+'/' NoFill  Move words to start of next line as necessary to maintain
+            line width and left margin, possibly inserting new lines
+            after those addressed, but do not fill from next line even
+            if there would be room. Only overflow margins if unbroken
+            word is wider than the space between margins.
+'^' Fill    Move words to or from the ends of lines as necessary to
+            maintain line width and left margin, possibly inserting
+            new lines after those addressed. Only overflow margins
+            if unbroken word is wider than the space between margins.
+'!' None    Do not wrap. Line width, if specified, is ignored.
+ 
 ### 'l' List 
 
     (.)l
