@@ -107,7 +107,7 @@ impl Eols {
     }
 
     pub fn is_mixed(&self) -> bool {
-        self.lfs & self.crlfs != 0
+        self.lfs != 0 && self.crlfs != 0
     }
 
     pub fn is_empty(&self) -> bool {
@@ -267,6 +267,21 @@ mod tests {
         let actual = Eols::from_lines(&lines);
         assert!(actual.is_mixed());
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn mixed_eols() {
+        let mostly_lf = Eols { lfs: 10, crlfs: 5, ..Default::default() };
+        let all_lf = Eols { lfs: 64, crlfs: 0, ..Default::default() };
+        let mostly_crlf = Eols { lfs: 5, crlfs: 10, ..Default::default() };
+        let all_crlf = Eols { lfs: 0, crlfs: 64, ..Default::default() };
+        let empty = Eols::default();
+
+        assert!(mostly_lf.is_mixed());
+        assert!(mostly_crlf.is_mixed());
+        assert!(!all_lf.is_mixed());
+        assert!(!all_crlf.is_mixed());
+        assert!(!empty.is_mixed());
     }
 
     // Eol tests
