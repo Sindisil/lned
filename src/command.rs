@@ -92,8 +92,8 @@ pub enum InputSource {
 #[derive(Debug, Default, PartialEq)]
 pub enum Wrapping {
     #[default]
-    NoFill,
     Fill,
+    NoFill,
     None,
 }
 
