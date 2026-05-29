@@ -266,7 +266,7 @@ the command will procede, discarding changes.
 
 ### 'L' Line Terminator (a.k.a. Newline)
 
-    L (CR|CRLF)
+    L (LF|CRLF)
 
 Set the buffer's prevailing newline to the one specified, if any. If a
 newline is specified, buffer lines are normalized to that newline.
