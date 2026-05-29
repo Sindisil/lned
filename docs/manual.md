@@ -423,8 +423,8 @@ first printable character on the first line to be justified.
 The optional line_width defaults to terminal width, and must be preceded
 by one or more blanks (' ' or '\t') if specified.
 
-The optional wrapping_style is specified with one of the following
-characters and it defaults to NoFill if unspecified.
+The optional wrapping style may be specified with one of the following
+characters and it defaults to Fill if unspecified.
 
 '/' NoFill  Move words to start of next line as necessary to maintain
             line width and left margin, possibly inserting new lines
