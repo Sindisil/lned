@@ -503,8 +503,7 @@ impl Editor {
             format_number(bytes_read)
         )
         .unwrap();
-        let prevailing_eol = self.buffer.eols().prevailing();
-        writeln!(output, " [{prevailing_eol}]").unwrap();
+        writeln!(output, " [{}]", self.buffer.eols()).unwrap();
         if eol_added {
             writeln!(output, "missing newline appended").unwrap();
         }
@@ -564,8 +563,7 @@ impl Editor {
             format_number(bytes_read)
         )
         .unwrap();
-        let eol = self.buffer.eols().prevailing();
-        writeln!(output, " [{eol}]").unwrap();
+        writeln!(output, " [{}]", self.buffer.eols()).unwrap();
         if eol_added {
             writeln!(output, "missing newline appended").unwrap();
         }
@@ -1791,7 +1789,7 @@ fn write_file(
     if buffer.is_empty() {
         writeln!(output, "[empty buffer]").unwrap();
     } else {
-        writeln!(output, "[{}]", buffer.eols().prevailing()).unwrap();
+        writeln!(output, "[{}]", buffer.eols()).unwrap();
     }
 
     writer.remove_backup().map_err(|e| Error::WriteRemoveBackup {
