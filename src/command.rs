@@ -846,6 +846,14 @@ fn eval_address(
                 graphemes.next();
                 right = Some(eval_line_number(graphemes, buffer.len())?);
             }
+            Some(&"%") => {
+                graphemes.next();
+                if buffer.is_empty() {
+                    return Err(Error::InvalidAddress);
+                }
+                left = Some(1);
+                right = Some(buffer.len());
+            }
             Some(&delim) if delim == <&str>::from(Delimiter::Fwd) => {
                 graphemes.next();
                 let line = eval_pattern(
@@ -1131,6 +1139,23 @@ mod tests {
             eval_address(&mut cmd_line, &mut buffer, &mut None).unwrap();
         assert_eq!(address, Some(2..3));
         assert_eq!(cmd_line.next(), Some("d"));
+    }
+
+    #[test]
+    fn eval_percent_addr() {
+        let mut cmd_line = "%d\r\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::with_lines(&["1\r\n", "2", "3"]);
+        buffer.set_current_index(2);
+        let address =
+            eval_address(&mut cmd_line, &mut buffer, &mut None).unwrap();
+        assert_eq!(cmd_line.next(), Some("d"));
+        assert_eq!(address, Some(0..3));
+
+        let mut cmd_line = "%d\r\n".graphemes(true).peekable();
+        buffer.clear();
+        let res = eval_address(&mut cmd_line, &mut buffer, &mut None)
+            .expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
