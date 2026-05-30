@@ -2464,7 +2464,8 @@ mod tests {
         let mut expected = EditBuffer::with_lines(&[
             "1:one two three four\n",
             "2:five ",
-            "'x seven eight",
+            "'x ",
+            "'ven eight",
             "3:nine ten eleven twelve",
             "4:thirteen fourteen fifteen ",
             "'xteen",
@@ -2476,8 +2477,8 @@ mod tests {
             "8:five six seven eight",
             "9:one two three four\n",
         ]);
-        expected.set_current_index(11);
-        let expected_output = " 6  'xteen\n10  'xteen\n";
+        expected.set_current_index(12);
+        let expected_output = " 7  'xteen\n11  'xteen\n";
 
         let mut output = String::new();
         let pat = &Regex::new("s[aeiou]").unwrap();
@@ -2529,7 +2530,8 @@ mod tests {
         let mut expected = EditBuffer::with_lines(&[
             "1:one two three four\n",
             "2:five ",
-            "'x seven eight",
+            "'x ",
+            "'ven eight",
             "3:nine ten eleven twelve",
             "4:thirteen fourteen fifteen ",
             "'xteen",
@@ -2539,11 +2541,12 @@ mod tests {
             "'xteen",
             "7:nine ten eleven twelve",
             "8:five ",
-            "'x seven eight",
+            "'x ",
+            "'ven eight",
             "9:one two three four\n",
         ]);
-        expected.set_current_index(12);
-        let expected_output = " 3  'x seven eight\n 6  'xteen\n 8  'venteen eighteen nineteen twenty\n10  'xteen\n13  'x seven eight\n";
+        expected.set_current_index(14);
+        let expected_output = " 4  'ven eight\n 7  'xteen\n 9  'venteen eighteen nineteen twenty\n11  'xteen\n15  'ven eight\n";
 
         let mut output = String::new();
         let pat = &Regex::new("s[aeiou]").unwrap();

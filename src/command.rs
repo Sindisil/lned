@@ -442,7 +442,7 @@ fn parse_substitution_scope(
         graphemes.next();
         Ok(SubstitutionScope::Global)
     } else {
-        Ok(SubstitutionScope::Single(1))
+        Ok(SubstitutionScope::Global)
     }
 }
 
