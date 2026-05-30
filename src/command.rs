@@ -408,27 +408,30 @@ fn parse_replacement_line(
     replacement: &mut String,
     delimiter: &str,
 ) -> Result<bool, Error> {
-    Ok(loop {
+    loop {
         match graphemes.next() {
-            None => break false,
-            Some(gr) if gr == delimiter || gr.is_eol() => {
-                break false;
+            Some(gr) if gr == delimiter => {
+                return Ok(false);
             }
             Some("\\") => {
                 let escaped =
                     graphemes.next().ok_or(Error::TrailingBackslash)?;
                 if escaped.is_eol() {
                     replacement.push_str(buffer.eols().prevailing().into());
-                    break true;
+                    return Ok(true);
                 }
                 if escaped != delimiter && escaped != "\\" {
                     replacement.push('\\');
                 }
                 replacement.push_str(escaped);
             }
+            Some(gr) if gr.is_eol() => {
+                return Err(Error::MissingPatternDelimiter);
+            }
+            None => return Err(Error::MissingPatternDelimiter),
             Some(gr) => replacement.push_str(gr),
         }
-    })
+    }
 }
 
 fn parse_substitution_scope(

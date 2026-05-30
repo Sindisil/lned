@@ -1850,7 +1850,6 @@ mod tests {
     use similar_asserts::assert_eq;
     use tempfile::tempdir;
 
-    use crate::command;
     use crate::eol::Eol;
 
     struct BadWriter {}
@@ -3176,33 +3175,6 @@ mod tests {
         expected.set_current_index(1);
         assert_eq!(&editor.buffer[..], &expected[..]);
         assert_eq!(editor.buffer, expected);
-    }
-
-    #[test]
-    fn substitute_split_line_no_end_delimiter() {
-        let mut editor = Editor::new(OutputTarget::Other);
-        editor.buffer = EditBuffer::with_lines(&["a line, to split\n"]);
-        editor.buffer.set_current_index(0);
-        let mut cmd_line = "/, /\\\n".graphemes(true).peekable();
-        let mut input = "\n".as_bytes();
-        let Ok(Some((
-            Cmd::Substitute(address, pattern, replacement, scope),
-            None,
-        ))) = command::parse_substitute_cmd(
-            &mut cmd_line,
-            &mut input,
-            &editor.buffer,
-            &mut None,
-            None,
-        )
-        else {
-            panic!("should have parsed to Cmd::Substitute!");
-        };
-        editor.substitute_cmd(address, &pattern, &replacement, scope).unwrap();
-        let mut expected = EditBuffer::with_lines(&["a line\n", "to split"]);
-        expected.set_current_index(1);
-        assert_eq!(editor.buffer[..], expected[..]);
-        assert_eq!(editor.buffer.current_index(), expected.current_index());
     }
 
     #[test]
