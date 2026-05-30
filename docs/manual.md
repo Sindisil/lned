@@ -74,7 +74,8 @@ that precedes it on the command line.
 Several symbols have special meaning within a line address.
 
 * '.' is iterpreted as the address of the _current line_
-* '$' is interprete as the address of the last line in the buffer
+* '$' is interpreted as the address of the last line in the buffer
+* '%' is interpreted as all lines in the buffer (i.e., equivalant to .,$)
 * '/' characters delimiting a regex address the first line found to match
 	the _current line_
 * '?' characters delimiting a regex address the first line found matching
