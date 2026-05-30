@@ -1604,7 +1604,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_single_substitute() {
+    fn parse_default_substitute() {
         let mut cmd_line = "/[^01]*/./n\r\n".graphemes(true).peekable();
         let buffer = EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
         let address = Some(0..5);
@@ -1621,7 +1621,7 @@ mod tests {
         let expected_sfx =
             PrintSuffix { enumerate: true, ..Default::default() };
         assert!(
-            matches!(cmd, Cmd::Substitute(a, p, r, SubstitutionScope::Single(s)) if a == address && p.as_str() == "[^01]*" && r == "." && s == 1)
+            matches!(cmd, Cmd::Substitute(a, p, r, SubstitutionScope::Global) if a == address && p.as_str() == "[^01]*" && r == ".")
         );
         assert!(matches!(pr_sfx, Some(a) if a == expected_sfx));
     }
@@ -1952,7 +1952,7 @@ mod tests {
             panic!("expected Cmd::Justify, got {cmd:?}");
         };
         assert_eq!(span, Some(expected_addr));
-        assert_eq!(wrap, Wrapping::NoFill);
+        assert_eq!(wrap, Wrapping::Fill);
         assert!(left_margin.is_none());
         assert!(line_width.is_none());
         assert_eq!(pr_sfx, Some(expected_sfx));
@@ -1992,7 +1992,7 @@ mod tests {
             panic!("expected Cmd::Justify, got {cmd:?}");
         };
         assert!(span.is_none());
-        assert_eq!(wrap, Wrapping::NoFill);
+        assert_eq!(wrap, Wrapping::Fill);
         assert!(left_margin.is_none());
         assert!(line_width.is_none());
         assert!(pr_sfx.is_none());
