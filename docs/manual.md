@@ -574,12 +574,13 @@ The current current filename is not changed by this command.
 
 ### 's' Substitute 
 
-    (.,.)s/regex/replacement/flags
+    (.,.)s/regex/replacement/(target_match)
 
-Matches each line in the addressed range witht he specified regular
-expression pattern, replacing one or all (depending upon flags)
-non-overlapping occurances with the specified replacement pattern. An
-error will be reported if no matches are found.
+Matches each line in the addressed range with the specified regular
+expression pattern, replacing all non-overlapping occurances with the
+specified replacement pattern, or a single occurance indicated by an
+integer indicating which match should be replaced. An error will be
+reported if no matches are found.
 
 Any character other than ' ' (space) or '\n' (new line) may be used
 instead of '/' (slash) to delimit the regex, and within the regex the
@@ -597,12 +598,6 @@ See the regex crate's documentation for more details:
 
 [regex](https://docs.rs/regex/1.11.0/regex/index.html#syntax).
 [replace()](https://docs.rs/regex/1.11.0/regex/struct.Regex.html#method.replace) method.
-
-Flags may be either (but not both) of:
-
-* 'g'    Globaly replace all non-overlapping of regex with replacement
-* _number_    Replace the _number_th occurrance of regex with
-  replacement
 
 ### 't' Transfer (a.k.a. Copy)
 

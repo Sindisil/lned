@@ -18,9 +18,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::cli;
-use crate::command::{
-    Cmd, InputMode, InputSource, PrintSuffix, SubstitutionScope, Wrapping,
-};
+use crate::command::{Cmd, InputMode, InputSource, PrintSuffix, Wrapping};
 use crate::edit_buffer::EditBuffer;
 use crate::eol::{Eol, Eols};
 use crate::error::{Error, Warning};
@@ -189,8 +187,8 @@ impl Editor {
             Cmd::ShowDiff(filename) => {
                 self.show_diff_cmd(&mut output.0, filename.as_deref())
             }
-            Cmd::Substitute(span, pattern, replacement, scope) => {
-                self.substitute_cmd(span, &pattern, &replacement, scope)
+            Cmd::Substitute(span, pattern, replacement, target_match) => {
+                self.substitute_cmd(span, &pattern, &replacement, target_match)
             }
             Cmd::Undo => self.buffer.undo().map(|()| None),
             Cmd::Version => {
@@ -576,7 +574,7 @@ impl Editor {
         span: Option<Range<usize>>,
         pattern: &Regex,
         replacement: &str,
-        scope: SubstitutionScope,
+        target_match: Option<usize>,
     ) -> Result<Option<ChangeSet>, Error> {
         if self.buffer.is_empty() && span.is_none() {
             return Err(Error::NoMatch);
@@ -588,12 +586,7 @@ impl Editor {
         let prevailing_eol = self.buffer.eols().prevailing();
 
         let mut index = span.start;
-        let (target_match, limit) = if let SubstitutionScope::Single(n) = scope
-        {
-            (n - 1, 1)
-        } else {
-            (0, 0)
-        };
+        let (target_match, limit) = target_match.map_or((0, 0), |tm| (tm, 1));
 
         let mut changes =
             ChangeSet::new(self.buffer.current_index(), self.buffer.eols());
@@ -3032,7 +3025,7 @@ mod tests {
 
     #[test]
     fn substitute_cmd_dispatch() {
-        let input = b"a\n11231145611\n.\n1s/[^01]+/./g\n1p\nq\nq\n";
+        let input = b"a\n11231145611\n.\n1s/[^01]+/./\n1p\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
             .unwrap();
@@ -3048,7 +3041,7 @@ mod tests {
                 None,
                 &Regex::new("won't match").unwrap(),
                 "",
-                SubstitutionScope::Single(1),
+                Some(1),
             )
             .expect_err("no match");
         assert!(matches!(res, Error::NoMatch));
@@ -3070,7 +3063,7 @@ mod tests {
                 Some(0..5),
                 &Regex::new("won't match").unwrap(),
                 "",
-                SubstitutionScope::Global,
+                None,
             )
             .expect_err("should give error");
         assert!(matches!(res, Error::NoMatch));
@@ -3088,12 +3081,7 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         editor
-            .substitute_cmd(
-                None,
-                &Regex::new("e+n").unwrap(),
-                "'",
-                SubstitutionScope::Global,
-            )
+            .substitute_cmd(None, &Regex::new("e+n").unwrap(), "'", None)
             .unwrap();
         assert_eq!(editor.buffer[4], "sev't' eight' ninet' tw'ty\r\n");
     }
@@ -3104,12 +3092,7 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["some text\n"]);
         let expected = EditBuffer::with_lines(&["some text!\n"]);
         editor
-            .substitute_cmd(
-                None,
-                &Regex::new("$").unwrap(),
-                "!",
-                SubstitutionScope::Single(1),
-            )
+            .substitute_cmd(None, &Regex::new("$").unwrap(), "!", Some(0))
             .unwrap();
         assert_eq!(&editor.buffer[..], &expected[..]);
     }
@@ -3126,12 +3109,7 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         editor
-            .substitute_cmd(
-                None,
-                &Regex::new("e+n").unwrap(),
-                "'",
-                SubstitutionScope::Single(1),
-            )
+            .substitute_cmd(None, &Regex::new("e+n").unwrap(), "'", Some(0))
             .unwrap();
         assert_eq!(editor.buffer[4], "sev'teen eighteen nineteen twenty\r\n");
     }
@@ -3148,12 +3126,7 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         editor
-            .substitute_cmd(
-                None,
-                &Regex::new("e+n").unwrap(),
-                "'",
-                SubstitutionScope::Single(4),
-            )
+            .substitute_cmd(None, &Regex::new("e+n").unwrap(), "'", Some(3))
             .unwrap();
         assert_eq!(editor.buffer[4], "seventeen eighteen ninet' twenty\r\n");
     }
@@ -3209,7 +3182,7 @@ mod tests {
                 Some(1..9),
                 &Regex::new("s[aeiou]").unwrap(),
                 "'",
-                SubstitutionScope::Single(1),
+                Some(0),
             )
             .unwrap();
         assert_eq!(&editor.buffer[..], &expected[..]);
@@ -3249,7 +3222,7 @@ mod tests {
                 Some(1..9),
                 &Regex::new("s[aeiou]").unwrap(),
                 "'",
-                SubstitutionScope::Single(1),
+                Some(0),
             )
             .unwrap()
         else {
@@ -3283,7 +3256,7 @@ mod tests {
                 Some(1..3),
                 &Regex::new("e+n").unwrap(),
                 "'",
-                SubstitutionScope::Single(1),
+                Some(0),
             )
             .unwrap();
         assert_eq!(
@@ -3308,7 +3281,7 @@ mod tests {
                 Some(1..4),
                 &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
                 "$1 ($0)",
-                SubstitutionScope::Single(2),
+                Some(1),
             )
             .unwrap();
         assert_eq!(
@@ -3337,7 +3310,7 @@ mod tests {
             Some(1..4),
             &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
             "$1 ($0)",
-            SubstitutionScope::Single(2),
+            Some(1),
         ) else {
             panic!("expected Ok(Some(ChangeSet))!");
         };

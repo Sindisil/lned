@@ -28,6 +28,7 @@ pub enum Error {
     InvalidLeftMargin,
     InvalidNewline,
     InvalidOffset,
+    InvalidTargetMatch,
     MissingPatternDelimiter,
     NestedGlobalCmd,
     NoFilename,
@@ -100,6 +101,7 @@ impl std::error::Error for Error {
             | Error::InvalidLeftMargin
             | Error::InvalidNewline
             | Error::InvalidOffset
+            | Error::InvalidTargetMatch
             | Error::MissingPatternDelimiter
             | Error::NestedGlobalCmd
             | Error::NoFilename
@@ -169,6 +171,7 @@ impl Display for Error {
                 write!(f, "invalid newline (valid: CR, CRLF)")
             }
             Error::InvalidOffset => write!(f, "invalid offset"),
+            Error::InvalidTargetMatch => write!(f, "invalid target match"),
             Error::MissingPatternDelimiter => {
                 write!(f, "missing pattern delimiter")
             }

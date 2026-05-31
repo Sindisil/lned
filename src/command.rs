@@ -57,17 +57,11 @@ pub enum Cmd {
     Quit,
     Redo,
     ShowDiff(Option<PathBuf>),
-    Substitute(Option<Range<usize>>, Regex, String, SubstitutionScope),
+    Substitute(Option<Range<usize>>, Regex, String, Option<usize>),
     Undo,
     Version,
     Write,
     WriteAs(Option<Range<usize>>, PathBuf),
-}
-
-#[derive(Debug, PartialEq, Copy, Clone)]
-pub enum SubstitutionScope {
-    Single(usize),
-    Global,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -434,21 +428,6 @@ fn parse_replacement_line(
     }
 }
 
-fn parse_substitution_scope(
-    graphemes: &mut Peekable<Graphemes<'_>>,
-) -> Result<SubstitutionScope, Error> {
-    if let Some(i) = parse_usize(graphemes)? {
-        Ok(SubstitutionScope::Single(i))
-    } else if let Some(gr) = graphemes.peek()
-        && *gr == "g"
-    {
-        graphemes.next();
-        Ok(SubstitutionScope::Global)
-    } else {
-        Ok(SubstitutionScope::Global)
-    }
-}
-
 pub(crate) fn parse_substitute_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     input: &mut impl LineEdit,
@@ -474,10 +453,14 @@ pub(crate) fn parse_substitute_cmd(
     )?;
 
     if !more_lines {
-        let scope = parse_substitution_scope(graphemes)?;
+        let target_match = if let Some(n) = parse_usize(graphemes)? {
+            Some(n.checked_sub(1).ok_or(Error::InvalidTargetMatch)?)
+        } else {
+            None
+        };
         let sfx = parse_print_suffix(graphemes)?;
         return Ok(Some((
-            Cmd::Substitute(address, pattern, replacement, scope),
+            Cmd::Substitute(address, pattern, replacement, target_match),
             sfx,
         )));
     }
@@ -497,9 +480,16 @@ pub(crate) fn parse_substitute_cmd(
             delimiter.as_str(),
         )?;
         if !more_lines {
-            let scope = parse_substitution_scope(&mut graphemes)?;
+            let target_match = if let Some(n) = parse_usize(&mut graphemes)? {
+                Some(n.checked_sub(1).ok_or(Error::InvalidTargetMatch)?)
+            } else {
+                None
+            };
             let sfx = parse_print_suffix(&mut graphemes)?;
-            break (Cmd::Substitute(address, pattern, replacement, scope), sfx);
+            break (
+                Cmd::Substitute(address, pattern, replacement, target_match),
+                sfx,
+            );
         }
         line.clear();
     };
@@ -2115,14 +2105,14 @@ mod tests {
         let expected_sfx =
             PrintSuffix { enumerate: true, ..Default::default() };
         assert!(
-            matches!(cmd, Cmd::Substitute(a, p, r, SubstitutionScope::Global) if a == address && p.as_str() == "[^01]*" && r == ".")
+            matches!(cmd, Cmd::Substitute(a, p, r, None) if a == address && p.as_str() == "[^01]*" && r == ".")
         );
         assert!(matches!(pr_sfx, Some(a) if a == expected_sfx));
     }
 
     #[test]
-    fn parse_substitute_global() {
-        let mut cmd_line = "/[^01]*/./g\r\n".graphemes(true).peekable();
+    fn parse_substitute_default() {
+        let mut cmd_line = "/[^01]*/./\r\n".graphemes(true).peekable();
         let buffer = EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
         let address = Some(0..5);
         let mut prev_pattern = None;
@@ -2134,9 +2124,7 @@ mod tests {
             address.clone(),
         )
         .unwrap();
-        let Some((Cmd::Substitute(a, p, r, SubstitutionScope::Global), None)) =
-            res
-        else {
+        let Some((Cmd::Substitute(a, p, r, None), None)) = res else {
             panic!("Not Global!");
         };
         assert_eq!(a, address);
@@ -2145,14 +2133,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_substitute_global_escaped_lf() {
+    fn parse_substitute_escaped_lf() {
         let mut cmd_line = "/, */,\\\n".graphemes(true).peekable();
         let buffer = EditBuffer::with_lines(&["1\n", "2", "3", "4", "5", "6"]);
         let address = Some(0..5);
         let mut prev_pattern = None;
         let res = parse_substitute_cmd(
             &mut cmd_line,
-            &mut "/g\n".as_bytes(),
+            &mut "/\n".as_bytes(),
             &buffer,
             &mut prev_pattern,
             address.clone(),
@@ -2162,7 +2150,7 @@ mod tests {
             panic!("Expected Cmd::Substitute, got {res:?}");
         };
         assert!(
-            matches!(s, SubstitutionScope::Global),
+            matches!(s, None),
             "expected SubstitutionScope::Global, got {s:?}"
         );
         assert_eq!(a, address);
@@ -2183,12 +2171,8 @@ mod tests {
             Some(0..5),
         )
         .unwrap();
-        let Some((
-            Cmd::Substitute(a, p, r, SubstitutionScope::Single(3)),
-            None,
-        )) = res
-        else {
-            panic!("not Single(3)!");
+        let Some((Cmd::Substitute(a, p, r, Some(2)), None)) = res else {
+            panic!("not Some(2)!");
         };
         assert_eq!(a, Some(0..5));
         assert_eq!(p.as_str(), "[^01]*");
