@@ -57,11 +57,18 @@ pub enum Cmd {
     Quit,
     Redo,
     ShowDiff(Option<PathBuf>),
-    Substitute(Option<Range<usize>>, Regex, String, Option<usize>),
+    Substitute(Option<Range<usize>>, Substitution, Option<PrintSuffix>),
     Undo,
     Version,
     Write,
     WriteAs(Option<Range<usize>>, PathBuf),
+}
+
+#[derive(Debug)]
+pub struct Substitution {
+    pub pattern: Regex,
+    pub replacement: String,
+    pub target_match: Option<usize>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -458,10 +465,14 @@ pub(crate) fn parse_substitute_cmd(
         } else {
             None
         };
-        let sfx = parse_print_suffix(graphemes)?;
+        let pr_sfx = parse_print_suffix(graphemes)?;
         return Ok(Some((
-            Cmd::Substitute(address, pattern, replacement, target_match),
-            sfx,
+            Cmd::Substitute(
+                address,
+                Substitution { pattern, replacement, target_match },
+                pr_sfx,
+            ),
+            None,
         )));
     }
 
@@ -485,10 +496,14 @@ pub(crate) fn parse_substitute_cmd(
             } else {
                 None
             };
-            let sfx = parse_print_suffix(&mut graphemes)?;
+            let pr_sfx = parse_print_suffix(&mut graphemes)?;
             break (
-                Cmd::Substitute(address, pattern, replacement, target_match),
-                sfx,
+                Cmd::Substitute(
+                    address,
+                    Substitution { pattern, replacement, target_match },
+                    pr_sfx,
+                ),
+                None,
             );
         }
         line.clear();
@@ -2105,9 +2120,9 @@ mod tests {
         let expected_sfx =
             PrintSuffix { enumerate: true, ..Default::default() };
         assert!(
-            matches!(cmd, Cmd::Substitute(a, p, r, None) if a == address && p.as_str() == "[^01]*" && r == ".")
+            matches!(cmd, Cmd::Substitute(a, sub, pr_sfx) if a == address && sub.pattern.as_str() == "[^01]*" && sub.replacement == "." && pr_sfx == Some(expected_sfx))
         );
-        assert!(matches!(pr_sfx, Some(a) if a == expected_sfx));
+        assert!(pr_sfx.is_none());
     }
 
     #[test]
@@ -2124,12 +2139,12 @@ mod tests {
             address.clone(),
         )
         .unwrap();
-        let Some((Cmd::Substitute(a, p, r, None), None)) = res else {
+        let Some((Cmd::Substitute(a, sub, None), None)) = res else {
             panic!("Not Global!");
         };
         assert_eq!(a, address);
-        assert_eq!(p.as_str(), "[^01]*");
-        assert_eq!(r, ".");
+        assert_eq!(sub.pattern.as_str(), "[^01]*");
+        assert_eq!(sub.replacement, ".");
     }
 
     #[test]
@@ -2146,16 +2161,13 @@ mod tests {
             address.clone(),
         )
         .unwrap();
-        let Some((Cmd::Substitute(a, p, r, s), None)) = res else {
+        let Some((Cmd::Substitute(a, sub, None), None)) = res else {
             panic!("Expected Cmd::Substitute, got {res:?}");
         };
-        assert!(
-            matches!(s, None),
-            "expected SubstitutionScope::Global, got {s:?}"
-        );
+        assert!(sub.target_match.is_none());
         assert_eq!(a, address);
-        assert_eq!(p.as_str(), ", *");
-        assert_eq!(r, ",\n");
+        assert_eq!(sub.pattern.as_str(), ", *");
+        assert_eq!(sub.replacement, ",\n");
     }
 
     #[test]
@@ -2171,12 +2183,13 @@ mod tests {
             Some(0..5),
         )
         .unwrap();
-        let Some((Cmd::Substitute(a, p, r, Some(2)), None)) = res else {
-            panic!("not Some(2)!");
+        let Some((Cmd::Substitute(a, sub, None), None)) = res else {
+            panic!("expected Cmd::Substitute");
         };
         assert_eq!(a, Some(0..5));
-        assert_eq!(p.as_str(), "[^01]*");
-        assert_eq!(r, ".");
+        assert_eq!(sub.pattern.as_str(), "[^01]*");
+        assert_eq!(sub.replacement, ".");
+        assert_eq!(sub.target_match, Some(2));
     }
 
     #[test]

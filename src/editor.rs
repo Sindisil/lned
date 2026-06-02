@@ -18,7 +18,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::cli;
-use crate::command::{Cmd, InputMode, InputSource, PrintSuffix, Wrapping};
+use crate::command::{
+    Cmd, InputMode, InputSource, PrintSuffix, Substitution, Wrapping,
+};
 use crate::edit_buffer::EditBuffer;
 use crate::eol::{Eol, Eols};
 use crate::error::{Error, Warning};
@@ -187,8 +189,8 @@ impl Editor {
             Cmd::ShowDiff(filename) => {
                 self.show_diff_cmd(&mut output.0, filename.as_deref())
             }
-            Cmd::Substitute(span, pattern, replacement, target_match) => {
-                self.substitute_cmd(span, &pattern, &replacement, target_match)
+            Cmd::Substitute(span, sub, pr_sfx) => {
+                self.substitute_cmd(&mut output, span, sub, pr_sfx)
             }
             Cmd::Undo => self.buffer.undo().map(|()| None),
             Cmd::Version => {
@@ -571,10 +573,10 @@ impl Editor {
 
     fn substitute_cmd(
         &mut self,
+        output: &mut impl fmt::Write,
         span: Option<Range<usize>>,
-        pattern: &Regex,
-        replacement: &str,
-        target_match: Option<usize>,
+        sub: Substitution,
+        pr_sfx: Option<PrintSuffix>,
     ) -> Result<Option<ChangeSet>, Error> {
         if self.buffer.is_empty() && span.is_none() {
             return Err(Error::NoMatch);
@@ -586,7 +588,8 @@ impl Editor {
         let prevailing_eol = self.buffer.eols().prevailing();
 
         let mut index = span.start;
-        let (target_match, limit) = target_match.map_or((0, 0), |tm| (tm, 1));
+        let (target_match, limit) =
+            sub.target_match.map_or((0, 0), |tm| (tm, 1));
 
         let mut changes =
             ChangeSet::new(self.buffer.current_index(), self.buffer.eols());
@@ -595,10 +598,18 @@ impl Editor {
         loop {
             if index == span.end {
                 if let Some(span_start) = span_start {
+                    let replacement_span =
+                        span_start..span_start + replacement_lines.len();
                     changes.extend(self.buffer.remove(span_start..index));
                     changes.extend(
                         self.buffer.insert(span_start, replacement_lines),
                     );
+                    if let Some(pr_sfx) = pr_sfx {
+                        for i in replacement_span {
+                            write_line(output, &self.buffer, i, pr_sfx)
+                                .expect("stdout should be reliable");
+                        }
+                    }
                 }
                 break;
             }
@@ -609,15 +620,15 @@ impl Editor {
                     .str_value()
                     .len();
             let first_match =
-                pattern.find_iter(&line[..eol_idx]).nth(target_match);
+                sub.pattern.find_iter(&line[..eol_idx]).nth(target_match);
             let step = if let Some(first_match) = first_match {
                 // Note start of span of matches
                 span_start.get_or_insert(index);
                 let mut edited_line = line[..first_match.start()].to_owned();
-                edited_line.push_str(&pattern.replacen(
+                edited_line.push_str(&sub.pattern.replacen(
                     &line[first_match.start()..eol_idx],
                     limit,
-                    replacement,
+                    &sub.replacement,
                 ));
                 edited_line.push_str(&line[eol_idx..]);
                 replacement_lines.extend(
@@ -630,12 +641,20 @@ impl Editor {
                 // no match - apply span of matches up to this point,
                 // if any
                 if let Some(span_start) = span_start.take() {
+                    let replacement_span =
+                        span_start..span_start + replacement_lines.len();
                     let step =
                         replacement_lines.len() - (index - span_start) + 1;
                     changes.extend(self.buffer.remove(span_start..index));
                     changes.extend(
                         self.buffer.insert(span_start, replacement_lines),
                     );
+                    if let Some(pr_sfx) = pr_sfx {
+                        for i in replacement_span {
+                            write_line(output, &self.buffer, i, pr_sfx)
+                                .expect("stdout should be reliable");
+                        }
+                    }
                     replacement_lines = Vec::new();
                     step
                 } else {
@@ -782,8 +801,8 @@ impl Editor {
                         Ok(self.print_cmd(output, index.map(|i| i..i + 1)))
                     }
                     Cmd::Print(span) => Ok(self.print_cmd(output, span)),
-                    Cmd::Substitute(span, pattern, replacement, scope) => {
-                        self.substitute_cmd(span, &pattern, &replacement, scope)
+                    Cmd::Substitute(span, sub, pr_sfx) => {
+                        self.substitute_cmd(output, span, sub, pr_sfx)
                     }
                     _ => Err(Error::UnsupportedGlobalCmd),
                 }?;
@@ -3036,13 +3055,13 @@ mod tests {
     #[test]
     fn substitute_cmd_empty_buffer() {
         let mut editor = Editor::new(OutputTarget::Other);
+        let sub = Substitution {
+            pattern: Regex::new("won't match").unwrap(),
+            replacement: String::new(),
+            target_match: Some(1),
+        };
         let res = editor
-            .substitute_cmd(
-                None,
-                &Regex::new("won't match").unwrap(),
-                "",
-                Some(1),
-            )
+            .substitute_cmd(&mut String::new(), None, sub, None)
             .expect_err("no match");
         assert!(matches!(res, Error::NoMatch));
     }
@@ -3060,9 +3079,13 @@ mod tests {
         editor.buffer.set_current_index(4);
         let res = editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(0..5),
-                &Regex::new("won't match").unwrap(),
-                "",
+                Substitution {
+                    pattern: Regex::new("won't match").unwrap(),
+                    replacement: String::new(),
+                    target_match: None,
+                },
                 None,
             )
             .expect_err("should give error");
@@ -3081,7 +3104,16 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         editor
-            .substitute_cmd(None, &Regex::new("e+n").unwrap(), "'", None)
+            .substitute_cmd(
+                &mut String::new(),
+                None,
+                Substitution {
+                    pattern: Regex::new("e+n").unwrap(),
+                    replacement: ";".to_owned(),
+                    target_match: None,
+                },
+                None,
+            )
             .unwrap();
         assert_eq!(editor.buffer[4], "sev't' eight' ninet' tw'ty\r\n");
     }
@@ -3092,7 +3124,16 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["some text\n"]);
         let expected = EditBuffer::with_lines(&["some text!\n"]);
         editor
-            .substitute_cmd(None, &Regex::new("$").unwrap(), "!", Some(0))
+            .substitute_cmd(
+                &mut String::new(),
+                None,
+                Substitution {
+                    pattern: Regex::new("$").unwrap(),
+                    replacement: String::new(),
+                    target_match: Some(0),
+                },
+                None,
+            )
             .unwrap();
         assert_eq!(&editor.buffer[..], &expected[..]);
     }
@@ -3109,7 +3150,16 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         editor
-            .substitute_cmd(None, &Regex::new("e+n").unwrap(), "'", Some(0))
+            .substitute_cmd(
+                &mut String::new(),
+                None,
+                Substitution {
+                    pattern: Regex::new("e+n").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(0),
+                },
+                None,
+            )
             .unwrap();
         assert_eq!(editor.buffer[4], "sev'teen eighteen nineteen twenty\r\n");
     }
@@ -3126,7 +3176,16 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         editor
-            .substitute_cmd(None, &Regex::new("e+n").unwrap(), "'", Some(3))
+            .substitute_cmd(
+                &mut String::new(),
+                None,
+                Substitution {
+                    pattern: Regex::new("e+n").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(3),
+                },
+                None,
+            )
             .unwrap();
         assert_eq!(editor.buffer[4], "seventeen eighteen ninet' twenty\r\n");
     }
@@ -3138,12 +3197,14 @@ mod tests {
         editor.buffer.set_current_index(0);
         let cmd_line = "s/, /\\\r\n/";
         let mut input = cmd_line.as_bytes();
-        let Some((Cmd::Substitute(address, pattern, replacement, scope), None)) =
+        let Some((Cmd::Substitute(address, substitution, None), None)) =
             Cmd::read(&mut input, &mut editor.buffer, &mut None).unwrap()
         else {
             panic!("{cmd_line} didn't parse as Cmd::Substitute");
         };
-        editor.substitute_cmd(address, &pattern, &replacement, scope).unwrap();
+        editor
+            .substitute_cmd(&mut String::new(), address, substitution, None)
+            .unwrap();
         let mut expected = EditBuffer::with_lines(&["a line\r\n", "to split"]);
         expected.set_current_index(1);
         assert_eq!(&editor.buffer[..], &expected[..]);
@@ -3179,10 +3240,14 @@ mod tests {
         expected.set_current_index(7);
         editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(1..9),
-                &Regex::new("s[aeiou]").unwrap(),
-                "'",
-                Some(0),
+                Substitution {
+                    pattern: Regex::new("s[aeiou]").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(0),
+                },
+                None,
             )
             .unwrap();
         assert_eq!(&editor.buffer[..], &expected[..]);
@@ -3219,10 +3284,14 @@ mod tests {
         expected.set_current_index(7);
         let Some(changes) = editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(1..9),
-                &Regex::new("s[aeiou]").unwrap(),
-                "'",
-                Some(0),
+                Substitution {
+                    pattern: Regex::new("s[aeiou]").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(0),
+                },
+                None,
             )
             .unwrap()
         else {
@@ -3253,10 +3322,14 @@ mod tests {
         editor.buffer.set_current_index(4);
         editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(1..3),
-                &Regex::new("e+n").unwrap(),
-                "'",
-                Some(0),
+                Substitution {
+                    pattern: Regex::new("e+n").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(0),
+                },
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3278,10 +3351,14 @@ mod tests {
         editor.buffer.set_current_index(4);
         editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(1..4),
-                &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
-                "$1 ($0)",
-                Some(1),
+                Substitution {
+                    pattern: Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
+                    replacement: "$1 ($0)".to_owned(),
+                    target_match: Some(1),
+                },
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3307,10 +3384,14 @@ mod tests {
         editor.buffer.set_current_index(4);
         let before = editor.buffer.clone();
         let Ok(Some(changes)) = editor.substitute_cmd(
+            &mut String::new(),
             Some(1..4),
-            &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
-            "$1 ($0)",
-            Some(1),
+            Substitution {
+                pattern: Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
+                replacement: "$1 ($0)".to_owned(),
+                target_match: Some(1),
+            },
+            None,
         ) else {
             panic!("expected Ok(Some(ChangeSet))!");
         };
