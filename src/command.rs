@@ -90,7 +90,7 @@ pub enum InputSource {
     StdIn,
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub enum Wrapping {
     #[default]
     Fill,

@@ -5,6 +5,7 @@ use std::fmt::{self, Write as _};
 use std::fs::{self, File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufRead, BufReader, Cursor, prelude::*};
+use std::mem;
 use std::num::NonZero;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -190,7 +191,7 @@ impl Editor {
                 self.show_diff_cmd(&mut output.0, filename.as_deref())
             }
             Cmd::Substitute(span, sub, pr_sfx) => {
-                self.substitute_cmd(&mut output, span, sub, pr_sfx)
+                self.substitute_cmd(&mut output, span, &sub, pr_sfx)
             }
             Cmd::Undo => self.buffer.undo().map(|()| None),
             Cmd::Version => {
@@ -575,7 +576,7 @@ impl Editor {
         &mut self,
         output: &mut impl fmt::Write,
         span: Option<Range<usize>>,
-        sub: Substitution,
+        sub: &Substitution,
         pr_sfx: Option<PrintSuffix>,
     ) -> Result<Option<ChangeSet>, Error> {
         if self.buffer.is_empty() && span.is_none() {
@@ -807,7 +808,7 @@ impl Editor {
                     }
                     Cmd::Print(span) => Ok(self.print_cmd(output, span)),
                     Cmd::Substitute(span, sub, pr_sfx) => {
-                        self.substitute_cmd(output, span, sub, pr_sfx)
+                        self.substitute_cmd(output, span, &sub, pr_sfx)
                     }
                     _ => Err(Error::UnsupportedGlobalCmd),
                 }?;
@@ -1028,12 +1029,6 @@ impl Editor {
         left_margin: Option<usize>,
         line_width: Option<usize>,
     ) -> Result<Option<ChangeSet>, Error> {
-        fn first_printable_column(line: &str) -> Option<usize> {
-            line.grapheme_indices(true)
-                .find(|(_, gr)| gr.contains(|c: char| !c.is_whitespace()))
-                .map(|(i, _)| line[..i].width())
-        }
-
         if self.buffer.is_empty() {
             return Err(Error::NothingToJustify);
         }
@@ -1099,34 +1094,7 @@ impl Editor {
             }
 
             // Compute line break
-            let line_break = if wrap == Wrapping::None {
-                line.len()
-            } else {
-                let mut cols = 0;
-                let mut index = 0;
-                let mut last_break = index;
-                let mut words = line.split_word_bounds();
-                loop {
-                    if let Some(word) = words.next() {
-                        if word.chars().all(char::is_whitespace) {
-                            last_break = index;
-                        }
-                        let word_cols = word.width();
-                        let cols_left = line_width - cols;
-                        // Done if next word or space won't fit and
-                        // line isn't empty
-                        if cols_left < word_cols && !line[..index].is_empty() {
-                            break;
-                        }
-                        cols += word_cols;
-                        index += word.len();
-                    } else {
-                        last_break = line.len();
-                        break;
-                    }
-                }
-                last_break
-            };
+            let line_break = compute_line_break(&line, line_width, wrap);
 
             // Construct replacement line with prefix
             if !line.is_empty() {
@@ -1141,57 +1109,61 @@ impl Editor {
             justified_line
                 .push_str(self.buffer.eols().prevailing().str_value());
 
-            if justified_line != self.buffer[replacement_span.end - 1] {
-                // Add justified_line to replacements
-                replacements.push(justified_line.drain(..).collect::<String>());
-            } else {
+            if justified_line == self.buffer[replacement_span.end - 1] {
                 // replace justified span
                 if !replacements.is_empty() {
                     replacement_span.end -= 1;
-                    let before = replacement_span.end - replacement_span.start;
-                    let after = replacements.len();
-                    changes
-                        .extend(self.buffer.remove(replacement_span.clone()));
-                    changes.extend(self.buffer.insert(
-                        replacement_span.start,
-                        replacements.drain(..).collect(),
-                    ));
-                    if before < after {
-                        let adj = after - before;
-                        remaining_span.start += adj;
-                        remaining_span.end += adj;
-                    } else if after < before {
-                        let adj = before - after;
-                        remaining_span.start -= adj;
-                        remaining_span.end -= adj;
-                    }
+                    self.replace_span(
+                        replacement_span,
+                        &mut replacements,
+                        &mut remaining_span,
+                        &mut changes,
+                    );
                 }
 
                 justified_line.clear();
                 replacement_span = remaining_span.start..remaining_span.start;
+            } else {
+                // Add justified_line to replacements
+                replacements.push(mem::take(&mut justified_line));
             }
         }
 
         if !replacements.is_empty() {
-            let before = replacement_span.end - replacement_span.start;
-            let after = replacements.len();
-            changes.extend(self.buffer.remove(replacement_span.clone()));
-            changes.extend(
-                self.buffer.insert(replacement_span.start, replacements),
+            self.replace_span(
+                replacement_span,
+                &mut replacements,
+                &mut remaining_span,
+                &mut changes,
             );
-            if before < after {
-                let adj = after - before;
-                remaining_span.start += adj;
-                remaining_span.end += adj;
-            } else if after < before {
-                let adj = before - after;
-                remaining_span.start -= adj;
-                remaining_span.end -= adj;
-            }
         }
 
         self.buffer.set_current_index(remaining_span.end - 1);
         Ok((!changes.is_empty()).then_some(changes))
+    }
+
+    fn replace_span(
+        &mut self,
+        replacement_span: Range<usize>,
+        replacements: &mut Vec<String>,
+        remaining_span: &mut Range<usize>,
+        changes: &mut ChangeSet,
+    ) {
+        let before = replacement_span.end - replacement_span.start;
+        let after = replacements.len();
+        changes.extend(self.buffer.remove(replacement_span.clone()));
+        changes.extend(
+            self.buffer.insert(replacement_span.start, mem::take(replacements)),
+        );
+        if before < after {
+            let adj = after - before;
+            remaining_span.start += adj;
+            remaining_span.end += adj;
+        } else if after < before {
+            let adj = before - after;
+            remaining_span.start -= adj;
+            remaining_span.end -= adj;
+        }
     }
 
     fn line_number_cmd(
@@ -1406,6 +1378,43 @@ fn write_backtrace(
         writeln!(output, "  {n}: {source}").unwrap();
         err = source;
         n += 1;
+    }
+}
+
+fn first_printable_column(line: &str) -> Option<usize> {
+    line.grapheme_indices(true)
+        .find(|(_, gr)| gr.contains(|c: char| !c.is_whitespace()))
+        .map(|(i, _)| line[..i].width())
+}
+
+fn compute_line_break(line: &str, line_width: usize, wrap: Wrapping) -> usize {
+    if wrap == Wrapping::None {
+        line.len()
+    } else {
+        let mut cols = 0;
+        let mut index = 0;
+        let mut last_break = index;
+        let mut words = line.split_word_bounds();
+        loop {
+            if let Some(word) = words.next() {
+                if word.chars().all(char::is_whitespace) {
+                    last_break = index;
+                }
+                let word_cols = word.width();
+                let cols_left = line_width - cols;
+                // Done if next word or space won't fit and
+                // line isn't empty
+                if cols_left < word_cols && !line[..index].is_empty() {
+                    break;
+                }
+                cols += word_cols;
+                index += word.len();
+            } else {
+                last_break = line.len();
+                break;
+            }
+        }
+        last_break
     }
 }
 
@@ -3066,7 +3075,7 @@ mod tests {
             target_match: Some(1),
         };
         let res = editor
-            .substitute_cmd(&mut String::new(), None, sub, None)
+            .substitute_cmd(&mut String::new(), None, &sub, None)
             .expect_err("no match");
         assert!(matches!(res, Error::NoMatch));
     }
@@ -3086,7 +3095,7 @@ mod tests {
             .substitute_cmd(
                 &mut String::new(),
                 Some(0..5),
-                Substitution {
+                &Substitution {
                     pattern: Regex::new("won't match").unwrap(),
                     replacement: String::new(),
                     target_match: None,
@@ -3112,7 +3121,7 @@ mod tests {
             .substitute_cmd(
                 &mut String::new(),
                 None,
-                Substitution {
+                &Substitution {
                     pattern: Regex::new("e+n").unwrap(),
                     replacement: "'".to_owned(),
                     target_match: None,
@@ -3132,7 +3141,7 @@ mod tests {
             .substitute_cmd(
                 &mut String::new(),
                 None,
-                Substitution {
+                &Substitution {
                     pattern: Regex::new("$").unwrap(),
                     replacement: "!".to_owned(),
                     target_match: Some(0),
@@ -3158,7 +3167,7 @@ mod tests {
             .substitute_cmd(
                 &mut String::new(),
                 None,
-                Substitution {
+                &Substitution {
                     pattern: Regex::new("e+n").unwrap(),
                     replacement: "'".to_owned(),
                     target_match: Some(0),
@@ -3184,7 +3193,7 @@ mod tests {
             .substitute_cmd(
                 &mut String::new(),
                 None,
-                Substitution {
+                &Substitution {
                     pattern: Regex::new("e+n").unwrap(),
                     replacement: "'".to_owned(),
                     target_match: Some(3),
@@ -3208,7 +3217,7 @@ mod tests {
             panic!("{cmd_line} didn't parse as Cmd::Substitute");
         };
         editor
-            .substitute_cmd(&mut String::new(), address, substitution, None)
+            .substitute_cmd(&mut String::new(), address, &substitution, None)
             .unwrap();
         let mut expected = EditBuffer::with_lines(&["a line\r\n", "to split"]);
         expected.set_current_index(1);
@@ -3247,7 +3256,7 @@ mod tests {
             .substitute_cmd(
                 &mut String::new(),
                 Some(1..9),
-                Substitution {
+                &Substitution {
                     pattern: Regex::new("s[aeiou]").unwrap(),
                     replacement: "'".to_owned(),
                     target_match: Some(0),
@@ -3291,7 +3300,7 @@ mod tests {
             .substitute_cmd(
                 &mut String::new(),
                 Some(1..9),
-                Substitution {
+                &Substitution {
                     pattern: Regex::new("s[aeiou]").unwrap(),
                     replacement: "'".to_owned(),
                     target_match: Some(0),
@@ -3329,7 +3338,7 @@ mod tests {
             .substitute_cmd(
                 &mut String::new(),
                 Some(1..3),
-                Substitution {
+                &Substitution {
                     pattern: Regex::new("e+n").unwrap(),
                     replacement: "'".to_owned(),
                     target_match: Some(0),
@@ -3358,7 +3367,7 @@ mod tests {
             .substitute_cmd(
                 &mut String::new(),
                 Some(1..4),
-                Substitution {
+                &Substitution {
                     pattern: Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
                     replacement: "$1 ($0)".to_owned(),
                     target_match: Some(1),
@@ -3391,7 +3400,7 @@ mod tests {
         let Ok(Some(changes)) = editor.substitute_cmd(
             &mut String::new(),
             Some(1..4),
-            Substitution {
+            &Substitution {
                 pattern: Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
                 replacement: "$1 ($0)".to_owned(),
                 target_match: Some(1),
