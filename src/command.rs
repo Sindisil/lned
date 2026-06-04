@@ -27,7 +27,7 @@ pub enum Cmd {
     Edit(PathBuf),
     Enumerate(Option<Range<usize>>),
     File,
-    Global(Option<Range<usize>>, Regex, String),
+    Global(Option<Range<usize>>, Regex, Vec<String>),
     Insert {
         index: Option<usize>,
         source: InputSource,
@@ -57,11 +57,18 @@ pub enum Cmd {
     Quit,
     Redo,
     ShowDiff(Option<PathBuf>),
-    Substitute(Option<Range<usize>>, Regex, String, Option<usize>),
+    Substitute(Option<Range<usize>>, Substitution, Option<PrintSuffix>),
     Undo,
     Version,
     Write,
     WriteAs(Option<Range<usize>>, PathBuf),
+}
+
+#[derive(Debug)]
+pub struct Substitution {
+    pub pattern: Regex,
+    pub replacement: String,
+    pub target_match: Option<usize>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
@@ -83,7 +90,7 @@ pub enum InputSource {
     StdIn,
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub enum Wrapping {
     #[default]
     Fill,
@@ -240,6 +247,14 @@ fn parse_append_cmd(
                 InputSource::File(PathBuf::from(filename))
             }
         }
+        Some(&"\\") => {
+            // handle escaped newline to support use in global
+            graphemes.next();
+            match graphemes.next() {
+                Some("\n" | "\r\n") => InputSource::StdIn,
+                _ => return Err(Error::InvalidCmdSuffix),
+            }
+        }
         _ => InputSource::StdIn,
     };
 
@@ -270,6 +285,14 @@ fn parse_insert_cmd(
                 InputSource::File(PathBuf::from(filename))
             }
         }
+        Some(&"\\") => {
+            // handle escaped newline to support use in global
+            graphemes.next();
+            match graphemes.next() {
+                Some("\n" | "\r\n") => InputSource::StdIn,
+                _ => return Err(Error::InvalidCmdSuffix),
+            }
+        }
         _ => InputSource::StdIn,
     };
 
@@ -297,6 +320,14 @@ fn parse_overwrite_cmd(
                 InputSource::StdIn
             } else {
                 InputSource::File(PathBuf::from(filename))
+            }
+        }
+        Some(&"\\") => {
+            // handle escaped newline to support use in global
+            graphemes.next();
+            match graphemes.next() {
+                Some("\n" | "\r\n") => InputSource::StdIn,
+                _ => return Err(Error::InvalidCmdSuffix),
             }
         }
         _ => InputSource::StdIn,
@@ -458,10 +489,14 @@ pub(crate) fn parse_substitute_cmd(
         } else {
             None
         };
-        let sfx = parse_print_suffix(graphemes)?;
+        let pr_sfx = parse_print_suffix(graphemes)?;
         return Ok(Some((
-            Cmd::Substitute(address, pattern, replacement, target_match),
-            sfx,
+            Cmd::Substitute(
+                address,
+                Substitution { pattern, replacement, target_match },
+                pr_sfx,
+            ),
+            None,
         )));
     }
 
@@ -485,10 +520,14 @@ pub(crate) fn parse_substitute_cmd(
             } else {
                 None
             };
-            let sfx = parse_print_suffix(&mut graphemes)?;
+            let pr_sfx = parse_print_suffix(&mut graphemes)?;
             break (
-                Cmd::Substitute(address, pattern, replacement, target_match),
-                sfx,
+                Cmd::Substitute(
+                    address,
+                    Substitution { pattern, replacement, target_match },
+                    pr_sfx,
+                ),
+                None,
             );
         }
         line.clear();
@@ -577,93 +616,41 @@ pub fn parse_usize(
     digits.ok_or(Error::NumberParse)
 }
 
-fn parse_global_command_line(
-    graphemes: &mut Peekable<Graphemes<'_>>,
-    cmd_line: &mut String,
-    mut subst_delimiter: String,
-) -> Result<(bool, String), Error> {
-    if subst_delimiter.is_empty()
-        && let Some(gr) = graphemes.peek()
-        && *gr == "s"
-    {
-        // substitute command
-        cmd_line.push('s');
-        graphemes.next();
-        let (pattern, delimiter) = parse_pattern(graphemes, None, true)?;
-        cmd_line.push_str(&delimiter);
-        cmd_line.push_str(&pattern);
-        cmd_line.push_str(&delimiter);
-        subst_delimiter = delimiter;
-    }
-
-    if !subst_delimiter.is_empty() {
-        // We're reading a substitute replacement string
-        for gr in graphemes.by_ref() {
-            cmd_line.push_str(gr);
-            if gr == subst_delimiter {
-                subst_delimiter.clear();
-                break;
-            } else if gr == "\r\n" || gr == "\n" {
-                return Ok((true, subst_delimiter));
-            }
-        }
-    }
-
-    Ok(loop {
-        let gr = graphemes.next();
-        match gr {
-            None => break (false, subst_delimiter),
-            Some("\\") => {
-                let escaped =
-                    graphemes.next().ok_or(Error::TrailingBackslash)?;
-                if escaped == "\n" || escaped == "\r\n" {
-                    cmd_line.push_str(escaped);
-                    break (true, subst_delimiter);
-                }
-
-                cmd_line.push('\\');
-                cmd_line.push_str(escaped);
-            }
-            Some(gr) => {
-                cmd_line.push_str(gr);
-                if gr == "\r\n" || gr == "\n" {
-                    break (false, subst_delimiter);
-                }
-            }
-        }
-    })
-}
-
 fn parse_global_command_list(
     cmd_line: &mut Peekable<Graphemes<'_>>,
     input: &mut impl LineEdit,
-) -> Result<String, Error> {
-    let mut commands = String::new();
-    // Copy first command to commands string,
-    // noting and unescaping escaped EOL.
-    let (mut more_lines, mut subst_delimiter) =
-        parse_global_command_line(cmd_line, &mut commands, String::new())?;
+) -> Result<Vec<String>, Error> {
+    let line_read_options =
+        EditorOptions { prompt: None, history: false, ..Default::default() };
+    let mut commands = Vec::new();
 
-    if more_lines {
-        let line_read_options = EditorOptions {
-            prompt: None,
-            history: false,
-            ..Default::default()
-        };
-        let mut line = String::new();
-        while more_lines {
-            input.read_line(&mut line, Some(&line_read_options)).map_err(
-                |e| Error::ReadCommand { source: Some(Box::new(e)) },
-            )?;
-            let mut graphemes = line.graphemes(true).peekable();
-            (more_lines, subst_delimiter) = parse_global_command_line(
-                &mut graphemes,
-                &mut commands,
-                subst_delimiter,
-            )?;
-            line.clear();
+    // Init cmd with remainder of global cmd line
+    let mut cmd = cmd_line.collect::<String>();
+    loop {
+        let last_idx = cmd.trim_end().len().saturating_sub(1);
+        match cmd.get(last_idx..last_idx + 1) {
+            Some("\\") => (), // escaped newline
+            Some("&") => {
+                // Global command separator
+                let mut new_cmd = String::with_capacity(cmd.len() - 1);
+                new_cmd.push_str(&cmd[..last_idx]);
+                new_cmd.push('\n');
+                commands.push(new_cmd);
+                cmd.clear();
+            }
+            Some(_) | None => {
+                // No continuation; done
+                if !cmd.is_empty() {
+                    commands.push(cmd);
+                }
+                break;
+            }
         }
+        input
+            .read_line(&mut cmd, Some(&line_read_options))
+            .map_err(|e| Error::ReadCommand { source: Some(Box::new(e)) })?;
     }
+
     Ok(commands)
 }
 
@@ -2024,7 +2011,7 @@ mod tests {
         };
         assert!(addr.is_none());
         assert_eq!(pat.as_str(), "pat");
-        assert_eq!(cmds, "p\r\n");
+        assert_eq!(cmds, vec!["p\r\n"]);
     }
 
     #[test]
@@ -2044,7 +2031,7 @@ mod tests {
         };
         assert!(addr.is_none());
         assert_eq!(pat.as_str(), "pat");
-        assert_eq!(cmds, "s//replacement\n");
+        assert_eq!(cmds, vec!["s//replacement\n"]);
     }
 
     #[test]
@@ -2064,12 +2051,12 @@ mod tests {
         };
         assert!(addr.is_none());
         assert_eq!(pat.as_str(), "pattern");
-        assert_eq!(cmds, "s//pat-\\\ntern/n\n");
+        assert_eq!(cmds, vec!["s//pat-\\\ntern/n\n"]);
     }
 
     #[test]
     fn parse_global_multi_cmd() {
-        let mut input = "/pat/n\\\r\n".graphemes(true).peekable();
+        let mut input = "/pat/n&\r\n".graphemes(true).peekable();
         let mut more_input = "d\r\n".as_bytes();
         let mut prev_pattern = None;
         let res = parse_global_cmd(
@@ -2084,7 +2071,7 @@ mod tests {
         };
         assert!(addr.is_none());
         assert_eq!(pat.as_str(), "pat");
-        assert_eq!(cmds, "n\r\nd\r\n");
+        assert_eq!(cmds, vec!["n\n", "d\r\n"]);
     }
 
     #[test]
@@ -2105,9 +2092,9 @@ mod tests {
         let expected_sfx =
             PrintSuffix { enumerate: true, ..Default::default() };
         assert!(
-            matches!(cmd, Cmd::Substitute(a, p, r, None) if a == address && p.as_str() == "[^01]*" && r == ".")
+            matches!(cmd, Cmd::Substitute(a, sub, pr_sfx) if a == address && sub.pattern.as_str() == "[^01]*" && sub.replacement == "." && pr_sfx == Some(expected_sfx))
         );
-        assert!(matches!(pr_sfx, Some(a) if a == expected_sfx));
+        assert!(pr_sfx.is_none());
     }
 
     #[test]
@@ -2124,12 +2111,12 @@ mod tests {
             address.clone(),
         )
         .unwrap();
-        let Some((Cmd::Substitute(a, p, r, None), None)) = res else {
+        let Some((Cmd::Substitute(a, sub, None), None)) = res else {
             panic!("Not Global!");
         };
         assert_eq!(a, address);
-        assert_eq!(p.as_str(), "[^01]*");
-        assert_eq!(r, ".");
+        assert_eq!(sub.pattern.as_str(), "[^01]*");
+        assert_eq!(sub.replacement, ".");
     }
 
     #[test]
@@ -2146,16 +2133,13 @@ mod tests {
             address.clone(),
         )
         .unwrap();
-        let Some((Cmd::Substitute(a, p, r, s), None)) = res else {
+        let Some((Cmd::Substitute(a, sub, None), None)) = res else {
             panic!("Expected Cmd::Substitute, got {res:?}");
         };
-        assert!(
-            matches!(s, None),
-            "expected SubstitutionScope::Global, got {s:?}"
-        );
+        assert!(sub.target_match.is_none());
         assert_eq!(a, address);
-        assert_eq!(p.as_str(), ", *");
-        assert_eq!(r, ",\n");
+        assert_eq!(sub.pattern.as_str(), ", *");
+        assert_eq!(sub.replacement, ",\n");
     }
 
     #[test]
@@ -2171,12 +2155,13 @@ mod tests {
             Some(0..5),
         )
         .unwrap();
-        let Some((Cmd::Substitute(a, p, r, Some(2)), None)) = res else {
-            panic!("not Some(2)!");
+        let Some((Cmd::Substitute(a, sub, None), None)) = res else {
+            panic!("expected Cmd::Substitute");
         };
         assert_eq!(a, Some(0..5));
-        assert_eq!(p.as_str(), "[^01]*");
-        assert_eq!(r, ".");
+        assert_eq!(sub.pattern.as_str(), "[^01]*");
+        assert_eq!(sub.replacement, ".");
+        assert_eq!(sub.target_match, Some(2));
     }
 
     #[test]

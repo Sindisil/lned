@@ -5,6 +5,7 @@ use std::fmt::{self, Write as _};
 use std::fs::{self, File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufRead, BufReader, Cursor, prelude::*};
+use std::mem;
 use std::num::NonZero;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -18,7 +19,9 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::cli;
-use crate::command::{Cmd, InputMode, InputSource, PrintSuffix, Wrapping};
+use crate::command::{
+    Cmd, InputMode, InputSource, PrintSuffix, Substitution, Wrapping,
+};
 use crate::edit_buffer::EditBuffer;
 use crate::eol::{Eol, Eols};
 use crate::error::{Error, Warning};
@@ -187,8 +190,8 @@ impl Editor {
             Cmd::ShowDiff(filename) => {
                 self.show_diff_cmd(&mut output.0, filename.as_deref())
             }
-            Cmd::Substitute(span, pattern, replacement, target_match) => {
-                self.substitute_cmd(span, &pattern, &replacement, target_match)
+            Cmd::Substitute(span, sub, pr_sfx) => {
+                self.substitute_cmd(&mut output, span, &sub, pr_sfx)
             }
             Cmd::Undo => self.buffer.undo().map(|()| None),
             Cmd::Version => {
@@ -571,10 +574,10 @@ impl Editor {
 
     fn substitute_cmd(
         &mut self,
+        output: &mut impl fmt::Write,
         span: Option<Range<usize>>,
-        pattern: &Regex,
-        replacement: &str,
-        target_match: Option<usize>,
+        sub: &Substitution,
+        pr_sfx: Option<PrintSuffix>,
     ) -> Result<Option<ChangeSet>, Error> {
         if self.buffer.is_empty() && span.is_none() {
             return Err(Error::NoMatch);
@@ -586,7 +589,8 @@ impl Editor {
         let prevailing_eol = self.buffer.eols().prevailing();
 
         let mut index = span.start;
-        let (target_match, limit) = target_match.map_or((0, 0), |tm| (tm, 1));
+        let (target_match, limit) =
+            sub.target_match.map_or((0, 0), |tm| (tm, 1));
 
         let mut changes =
             ChangeSet::new(self.buffer.current_index(), self.buffer.eols());
@@ -595,10 +599,18 @@ impl Editor {
         loop {
             if index == span.end {
                 if let Some(span_start) = span_start {
+                    let replacement_span =
+                        span_start..span_start + replacement_lines.len();
                     changes.extend(self.buffer.remove(span_start..index));
                     changes.extend(
                         self.buffer.insert(span_start, replacement_lines),
                     );
+                    if let Some(pr_sfx) = pr_sfx {
+                        for i in replacement_span {
+                            write_line(output, &self.buffer, i, pr_sfx)
+                                .expect("stdout should be reliable");
+                        }
+                    }
                 }
                 break;
             }
@@ -609,15 +621,15 @@ impl Editor {
                     .str_value()
                     .len();
             let first_match =
-                pattern.find_iter(&line[..eol_idx]).nth(target_match);
+                sub.pattern.find_iter(&line[..eol_idx]).nth(target_match);
             let step = if let Some(first_match) = first_match {
                 // Note start of span of matches
                 span_start.get_or_insert(index);
                 let mut edited_line = line[..first_match.start()].to_owned();
-                edited_line.push_str(&pattern.replacen(
+                edited_line.push_str(&sub.pattern.replacen(
                     &line[first_match.start()..eol_idx],
                     limit,
-                    replacement,
+                    &sub.replacement,
                 ));
                 edited_line.push_str(&line[eol_idx..]);
                 replacement_lines.extend(
@@ -630,12 +642,20 @@ impl Editor {
                 // no match - apply span of matches up to this point,
                 // if any
                 if let Some(span_start) = span_start.take() {
+                    let replacement_span =
+                        span_start..span_start + replacement_lines.len();
                     let step =
                         replacement_lines.len() - (index - span_start) + 1;
                     changes.extend(self.buffer.remove(span_start..index));
                     changes.extend(
                         self.buffer.insert(span_start, replacement_lines),
                     );
+                    if let Some(pr_sfx) = pr_sfx {
+                        for i in replacement_span {
+                            write_line(output, &self.buffer, i, pr_sfx)
+                                .expect("stdout should be reliable");
+                        }
+                    }
                     replacement_lines = Vec::new();
                     step
                 } else {
@@ -698,7 +718,7 @@ impl Editor {
         span: Option<Range<usize>>,
 
         pattern: &Regex,
-        commands: &str,
+        commands: &Vec<String>,
     ) -> Result<Option<ChangeSet>, Error> {
         self.previous_pattern = Some(pattern.clone());
         // Compile indices of lines that match pattern
@@ -738,23 +758,28 @@ impl Editor {
     fn do_global_cmds(
         &mut self,
         output: &mut impl fmt::Write,
-        commands: &str,
+        commands: &Vec<String>,
         mut matched_lines: VecDeque<usize>,
         changes: &mut ChangeSet,
     ) -> Result<(), Error> {
         // iterate over list
         while let Some(index) = matched_lines.pop_front() {
             self.buffer.set_current_index(index);
-            let mut input = commands.as_bytes();
 
             // parse and execute command list for line
-            while let Some((cmd, sfx)) = Cmd::read(
-                &mut input,
-                &mut self.buffer,
-                &mut self.previous_pattern,
-            )
-            .map_err(|e| Error::ReadGlobalCmd { source: Some(Box::new(e)) })?
-            {
+            for cmd in commands {
+                let mut input = cmd.as_bytes();
+                let Some((cmd, sfx)) = Cmd::read(
+                    &mut input,
+                    &mut self.buffer,
+                    &mut self.previous_pattern,
+                )
+                .map_err(|e| Error::ReadGlobalCmd {
+                    source: Some(Box::new(e)),
+                })?
+                else {
+                    break;
+                };
                 let cs = match cmd {
                     Cmd::Append { index, source, mode } => {
                         self.append_cmd(&mut input, output, index, source, mode)
@@ -782,8 +807,8 @@ impl Editor {
                         Ok(self.print_cmd(output, index.map(|i| i..i + 1)))
                     }
                     Cmd::Print(span) => Ok(self.print_cmd(output, span)),
-                    Cmd::Substitute(span, pattern, replacement, scope) => {
-                        self.substitute_cmd(span, &pattern, &replacement, scope)
+                    Cmd::Substitute(span, sub, pr_sfx) => {
+                        self.substitute_cmd(output, span, &sub, pr_sfx)
                     }
                     _ => Err(Error::UnsupportedGlobalCmd),
                 }?;
@@ -1004,12 +1029,6 @@ impl Editor {
         left_margin: Option<usize>,
         line_width: Option<usize>,
     ) -> Result<Option<ChangeSet>, Error> {
-        fn first_printable_column(line: &str) -> Option<usize> {
-            line.grapheme_indices(true)
-                .find(|(_, gr)| gr.contains(|c: char| !c.is_whitespace()))
-                .map(|(i, _)| line[..i].width())
-        }
-
         if self.buffer.is_empty() {
             return Err(Error::NothingToJustify);
         }
@@ -1075,34 +1094,7 @@ impl Editor {
             }
 
             // Compute line break
-            let line_break = if wrap == Wrapping::None {
-                line.len()
-            } else {
-                let mut cols = 0;
-                let mut index = 0;
-                let mut last_break = index;
-                let mut words = line.split_word_bounds();
-                loop {
-                    if let Some(word) = words.next() {
-                        if word.chars().all(char::is_whitespace) {
-                            last_break = index;
-                        }
-                        let word_cols = word.width();
-                        let cols_left = line_width - cols;
-                        // Done if next word or space won't fit and
-                        // line isn't empty
-                        if cols_left < word_cols && !line[..index].is_empty() {
-                            break;
-                        }
-                        cols += word_cols;
-                        index += word.len();
-                    } else {
-                        last_break = line.len();
-                        break;
-                    }
-                }
-                last_break
-            };
+            let line_break = compute_line_break(&line, line_width, wrap);
 
             // Construct replacement line with prefix
             if !line.is_empty() {
@@ -1117,57 +1109,61 @@ impl Editor {
             justified_line
                 .push_str(self.buffer.eols().prevailing().str_value());
 
-            if justified_line != self.buffer[replacement_span.end - 1] {
-                // Add justified_line to replacements
-                replacements.push(justified_line.drain(..).collect::<String>());
-            } else {
+            if justified_line == self.buffer[replacement_span.end - 1] {
                 // replace justified span
                 if !replacements.is_empty() {
                     replacement_span.end -= 1;
-                    let before = replacement_span.end - replacement_span.start;
-                    let after = replacements.len();
-                    changes
-                        .extend(self.buffer.remove(replacement_span.clone()));
-                    changes.extend(self.buffer.insert(
-                        replacement_span.start,
-                        replacements.drain(..).collect(),
-                    ));
-                    if before < after {
-                        let adj = after - before;
-                        remaining_span.start += adj;
-                        remaining_span.end += adj;
-                    } else if after < before {
-                        let adj = before - after;
-                        remaining_span.start -= adj;
-                        remaining_span.end -= adj;
-                    }
+                    self.replace_span(
+                        replacement_span,
+                        &mut replacements,
+                        &mut remaining_span,
+                        &mut changes,
+                    );
                 }
 
                 justified_line.clear();
                 replacement_span = remaining_span.start..remaining_span.start;
+            } else {
+                // Add justified_line to replacements
+                replacements.push(mem::take(&mut justified_line));
             }
         }
 
         if !replacements.is_empty() {
-            let before = replacement_span.end - replacement_span.start;
-            let after = replacements.len();
-            changes.extend(self.buffer.remove(replacement_span.clone()));
-            changes.extend(
-                self.buffer.insert(replacement_span.start, replacements),
+            self.replace_span(
+                replacement_span,
+                &mut replacements,
+                &mut remaining_span,
+                &mut changes,
             );
-            if before < after {
-                let adj = after - before;
-                remaining_span.start += adj;
-                remaining_span.end += adj;
-            } else if after < before {
-                let adj = before - after;
-                remaining_span.start -= adj;
-                remaining_span.end -= adj;
-            }
         }
 
         self.buffer.set_current_index(remaining_span.end - 1);
         Ok((!changes.is_empty()).then_some(changes))
+    }
+
+    fn replace_span(
+        &mut self,
+        replacement_span: Range<usize>,
+        replacements: &mut Vec<String>,
+        remaining_span: &mut Range<usize>,
+        changes: &mut ChangeSet,
+    ) {
+        let before = replacement_span.end - replacement_span.start;
+        let after = replacements.len();
+        changes.extend(self.buffer.remove(replacement_span.clone()));
+        changes.extend(
+            self.buffer.insert(replacement_span.start, mem::take(replacements)),
+        );
+        if before < after {
+            let adj = after - before;
+            remaining_span.start += adj;
+            remaining_span.end += adj;
+        } else if after < before {
+            let adj = before - after;
+            remaining_span.start -= adj;
+            remaining_span.end -= adj;
+        }
     }
 
     fn line_number_cmd(
@@ -1382,6 +1378,43 @@ fn write_backtrace(
         writeln!(output, "  {n}: {source}").unwrap();
         err = source;
         n += 1;
+    }
+}
+
+fn first_printable_column(line: &str) -> Option<usize> {
+    line.grapheme_indices(true)
+        .find(|(_, gr)| gr.contains(|c: char| !c.is_whitespace()))
+        .map(|(i, _)| line[..i].width())
+}
+
+fn compute_line_break(line: &str, line_width: usize, wrap: Wrapping) -> usize {
+    if wrap == Wrapping::None {
+        line.len()
+    } else {
+        let mut cols = 0;
+        let mut index = 0;
+        let mut last_break = index;
+        let mut words = line.split_word_bounds();
+        loop {
+            if let Some(word) = words.next() {
+                if word.chars().all(char::is_whitespace) {
+                    last_break = index;
+                }
+                let word_cols = word.width();
+                let cols_left = line_width - cols;
+                // Done if next word or space won't fit and
+                // line isn't empty
+                if cols_left < word_cols && !line[..index].is_empty() {
+                    break;
+                }
+                cols += word_cols;
+                index += word.len();
+            } else {
+                last_break = line.len();
+                break;
+            }
+        }
+        last_break
     }
 }
 
@@ -2044,7 +2077,7 @@ mod tests {
     fn global_cmd_empty_buffer() {
         let mut editor = Editor::new(OutputTarget::Other);
         let mut output = String::new();
-        let commands = "n\n".to_owned();
+        let commands = vec!["n\n".to_owned()];
         let res = editor
             .global_cmd(
                 &mut output,
@@ -2062,7 +2095,7 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["one\n", "two", "three"]);
         let mut output = String::new();
         let pat = &Regex::new("four").unwrap();
-        let commands = "p\n".to_owned();
+        let commands = vec!["p\n".to_owned()];
         let res = editor
             .global_cmd(&mut output, None, pat, &commands)
             .expect_err("no match");
@@ -2077,7 +2110,7 @@ mod tests {
         editor.buffer.set_current_index(1);
         let mut output = String::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = "1,2g/ee/n\n".to_owned();
+        let commands = vec!["1,2g/ee/n\n".to_owned()];
         let res = editor.global_cmd(&mut output, None, pat, &commands);
         assert!(matches!(res, Err(Error::NestedGlobalCmd)));
     }
@@ -2090,7 +2123,7 @@ mod tests {
         editor.buffer.set_current_index(3);
         let mut output = String::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = "\n".to_owned();
+        let commands = vec!["\n".to_owned()];
         let res =
             editor.global_cmd(&mut output, Some(0..3), pat, &commands).unwrap();
         assert!(res.is_none(), "should be no changes");
@@ -2104,7 +2137,7 @@ mod tests {
         editor.buffer.set_current_index(1);
         let mut output = String::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = "p\r\n".to_owned();
+        let commands = vec!["p\r\n".to_owned()];
         let res = editor
             .global_cmd(&mut output, None, pat, &commands)
             .expect("no errors");
@@ -2119,7 +2152,7 @@ mod tests {
         editor.buffer.set_current_index(0);
         let mut output = String::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = "n\r\n".to_owned();
+        let commands = vec!["n\r\n".to_owned()];
         let res = editor
             .global_cmd(&mut output, Some(0..3), pat, &commands)
             .expect("no error");
@@ -2136,7 +2169,7 @@ mod tests {
         editor.buffer.set_current_index(5);
         let mut output = String::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = "-1,.n\r\n".to_owned();
+        let commands = vec!["-1,.n\r\n".to_owned()];
         let res = editor
             .global_cmd(&mut output, Some(1..5), pat, &commands)
             .expect("no error");
@@ -2151,7 +2184,7 @@ mod tests {
         editor.buffer.set_current_index(1);
         let mut output = String::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = "l\r\n".to_owned();
+        let commands = vec!["l\r\n".to_owned()];
         let res = editor
             .global_cmd(&mut output, Some(0..3), pat, &commands)
             .expect("no error");
@@ -2168,7 +2201,7 @@ mod tests {
         editor.buffer.set_current_index(5);
         let mut output = String::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = "-1,.l\r\n".to_owned();
+        let commands = vec!["-1,.l\r\n".to_owned()];
         let res = editor
             .global_cmd(&mut output, Some(1..5), pat, &commands)
             .expect("no error");
@@ -2187,7 +2220,7 @@ mod tests {
         ]);
         let mut output = String::new();
         let pat = Regex::new("^t").unwrap();
-        let commands = "c\n1iv\n".to_owned();
+        let commands = vec!["c\n".to_owned(), "1iv\n".to_owned()];
         let changes = editor
             .global_cmd(&mut output, Some(0..6), &pat, &commands)
             .expect("no error")
@@ -2221,7 +2254,7 @@ mod tests {
         ]);
         let mut output = String::new();
         let pat = Regex::new("^t").unwrap();
-        let commands = "x\n1iv\n".to_owned();
+        let commands = vec!["x\n".to_owned(), "1iv\n".to_owned()];
         let changes = editor
             .global_cmd(&mut output, Some(0..6), &pat, &commands)
             .expect("no error")
@@ -2256,7 +2289,7 @@ mod tests {
         ]);
         let mut output = String::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = "a\nappend\n.\n".to_owned();
+        let commands = vec!["a\nappend\n.\n".to_owned()];
         let changes = editor
             .global_cmd(&mut output, Some(0..6), pat, &commands)
             .expect("no error")
@@ -2304,7 +2337,7 @@ mod tests {
         let mut output = String::new();
         let pat = &Regex::new("([a-z]*e)$").unwrap();
         let commands =
-            ".,+o\noverwrite 1\noverwrite 2\noverwrite 3\n.\n".to_owned();
+            vec![".,+o\noverwrite 1\noverwrite 2\noverwrite 3\n.\n".to_owned()];
         let Ok(Some(changes)) =
             editor.global_cmd(&mut output, Some(0..6), pat, &commands)
         else {
@@ -2336,7 +2369,7 @@ mod tests {
         let expected = EditBuffer::with_lines(&["two\n", "four", "six"]);
         let mut output = String::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = "dn\n".to_owned();
+        let commands = vec!["dn\n".to_owned()];
         let Ok(Some(changes)) =
             editor.global_cmd(&mut output, Some(0..6), pat, &commands)
         else {
@@ -2379,7 +2412,7 @@ mod tests {
         ]);
         let mut output = String::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = "i\r\ninsert\r\n.\r\n".to_owned();
+        let commands = vec!["i\r\ninsert\r\n.\r\n".to_owned()];
         let Ok(Some(changes)) =
             editor.global_cmd(&mut output, Some(0..6), pat, &commands)
         else {
@@ -2413,7 +2446,7 @@ mod tests {
         expected.set_current_index(1);
         let mut output = String::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = "jn\n".to_owned();
+        let commands = vec!["jn\n".to_owned()];
         let res = editor.global_cmd(&mut output, Some(0..6), pat, &commands);
         let changes = match res {
             Err(e) => panic!("unexpected error {e:?}"),
@@ -2470,11 +2503,11 @@ mod tests {
             "9:one two three four\n",
         ]);
         expected.set_current_index(12);
-        let expected_output = " 7  'xteen\n11  'xteen\n";
+        let expected_output = " 2  2:five \n 3  'x \n 4  'ven eight\n 6  4:thirteen fourteen fifteen \n 7  'xteen\n 8  5:\n 9  'venteen eighteen nineteen twenty\n10  6:thirteen fourteen fifteen \n11  'xteen\n";
 
         let mut output = String::new();
         let pat = &Regex::new("s[aeiou]").unwrap();
-        let commands = ".,+2s//\\\n'/n".to_string();
+        let commands = vec![".,+2s//\\\n'/n".to_owned()];
         let Err(Error::GlobalCmdErrorStop { source, changes }) =
             editor.global_cmd(&mut output, None, pat, &commands)
         else {
@@ -2491,10 +2524,10 @@ mod tests {
         let Some(changes) = changes else {
             panic!("changes was None!");
         };
-        assert_eq!(output, expected_output);
         editor.buffer.push_undo(changes);
         assert_eq!(editor.buffer.current_index(), expected.current_index());
         assert_eq!(&editor.buffer[..], &expected[..]);
+        assert_eq!(output, expected_output);
         editor.buffer.undo().unwrap();
         assert_eq!(editor.buffer.current_index(), before.current_index());
         assert_eq!(&before[..], &editor.buffer[..]);
@@ -2538,22 +2571,22 @@ mod tests {
             "9:one two three four\n",
         ]);
         expected.set_current_index(14);
-        let expected_output = " 4  'ven eight\n 7  'xteen\n 9  'venteen eighteen nineteen twenty\n11  'xteen\n15  'ven eight\n";
+        let expected_output = " 2  2:five \n 3  'x \n 4  'ven eight\n 6  4:thirteen fourteen fifteen \n 7  'xteen\n 8  5:\n 9  'venteen eighteen nineteen twenty\n10  6:thirteen fourteen fifteen \n11  'xteen\n13  8:five \n14  'x \n15  'ven eight\n";
 
         let mut output = String::new();
         let pat = &Regex::new("s[aeiou]").unwrap();
-        let commands = "s//\\\n'/n".to_string();
+        let commands = vec!["s//\\\n'/n".to_owned()];
         let Some(changes) = editor
             .global_cmd(&mut output, None, pat, &commands)
             .expect("should have been Ok")
         else {
             panic!("should have been Some(changes)!");
         };
-        assert_eq!(output, expected_output);
         assert!(!changes.is_empty());
         editor.buffer.push_undo(changes);
         assert_eq!(editor.buffer.current_index(), expected.current_index());
         assert_eq!(&editor.buffer[..], &expected[..]);
+        assert_eq!(output, expected_output);
         editor.buffer.undo().unwrap();
         assert_eq!(editor.buffer.current_index(), before.current_index());
         assert_eq!(&before[..], &editor.buffer[..]);
@@ -2569,7 +2602,7 @@ mod tests {
         editor.buffer.set_current_index(1);
         let mut output = String::new();
         let pat = &Regex::new(r"t..").unwrap();
-        let commands = "e filename.txt\n".to_owned();
+        let commands = vec!["e filename.txt\n".to_owned()];
         let res = editor.global_cmd(&mut output, Some(0..3), pat, &commands);
         assert!(matches!(res, Err(Error::UnsupportedGlobalCmd)));
     }
@@ -3036,13 +3069,13 @@ mod tests {
     #[test]
     fn substitute_cmd_empty_buffer() {
         let mut editor = Editor::new(OutputTarget::Other);
+        let sub = Substitution {
+            pattern: Regex::new("won't match").unwrap(),
+            replacement: String::new(),
+            target_match: Some(1),
+        };
         let res = editor
-            .substitute_cmd(
-                None,
-                &Regex::new("won't match").unwrap(),
-                "",
-                Some(1),
-            )
+            .substitute_cmd(&mut String::new(), None, &sub, None)
             .expect_err("no match");
         assert!(matches!(res, Error::NoMatch));
     }
@@ -3060,9 +3093,13 @@ mod tests {
         editor.buffer.set_current_index(4);
         let res = editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(0..5),
-                &Regex::new("won't match").unwrap(),
-                "",
+                &Substitution {
+                    pattern: Regex::new("won't match").unwrap(),
+                    replacement: String::new(),
+                    target_match: None,
+                },
                 None,
             )
             .expect_err("should give error");
@@ -3081,7 +3118,16 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         editor
-            .substitute_cmd(None, &Regex::new("e+n").unwrap(), "'", None)
+            .substitute_cmd(
+                &mut String::new(),
+                None,
+                &Substitution {
+                    pattern: Regex::new("e+n").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: None,
+                },
+                None,
+            )
             .unwrap();
         assert_eq!(editor.buffer[4], "sev't' eight' ninet' tw'ty\r\n");
     }
@@ -3092,7 +3138,16 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["some text\n"]);
         let expected = EditBuffer::with_lines(&["some text!\n"]);
         editor
-            .substitute_cmd(None, &Regex::new("$").unwrap(), "!", Some(0))
+            .substitute_cmd(
+                &mut String::new(),
+                None,
+                &Substitution {
+                    pattern: Regex::new("$").unwrap(),
+                    replacement: "!".to_owned(),
+                    target_match: Some(0),
+                },
+                None,
+            )
             .unwrap();
         assert_eq!(&editor.buffer[..], &expected[..]);
     }
@@ -3109,7 +3164,16 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         editor
-            .substitute_cmd(None, &Regex::new("e+n").unwrap(), "'", Some(0))
+            .substitute_cmd(
+                &mut String::new(),
+                None,
+                &Substitution {
+                    pattern: Regex::new("e+n").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(0),
+                },
+                None,
+            )
             .unwrap();
         assert_eq!(editor.buffer[4], "sev'teen eighteen nineteen twenty\r\n");
     }
@@ -3126,7 +3190,16 @@ mod tests {
         ]);
         editor.buffer.set_current_index(4);
         editor
-            .substitute_cmd(None, &Regex::new("e+n").unwrap(), "'", Some(3))
+            .substitute_cmd(
+                &mut String::new(),
+                None,
+                &Substitution {
+                    pattern: Regex::new("e+n").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(3),
+                },
+                None,
+            )
             .unwrap();
         assert_eq!(editor.buffer[4], "seventeen eighteen ninet' twenty\r\n");
     }
@@ -3138,12 +3211,14 @@ mod tests {
         editor.buffer.set_current_index(0);
         let cmd_line = "s/, /\\\r\n/";
         let mut input = cmd_line.as_bytes();
-        let Some((Cmd::Substitute(address, pattern, replacement, scope), None)) =
+        let Some((Cmd::Substitute(address, substitution, None), None)) =
             Cmd::read(&mut input, &mut editor.buffer, &mut None).unwrap()
         else {
             panic!("{cmd_line} didn't parse as Cmd::Substitute");
         };
-        editor.substitute_cmd(address, &pattern, &replacement, scope).unwrap();
+        editor
+            .substitute_cmd(&mut String::new(), address, &substitution, None)
+            .unwrap();
         let mut expected = EditBuffer::with_lines(&["a line\r\n", "to split"]);
         expected.set_current_index(1);
         assert_eq!(&editor.buffer[..], &expected[..]);
@@ -3179,10 +3254,14 @@ mod tests {
         expected.set_current_index(7);
         editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(1..9),
-                &Regex::new("s[aeiou]").unwrap(),
-                "'",
-                Some(0),
+                &Substitution {
+                    pattern: Regex::new("s[aeiou]").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(0),
+                },
+                None,
             )
             .unwrap();
         assert_eq!(&editor.buffer[..], &expected[..]);
@@ -3219,10 +3298,14 @@ mod tests {
         expected.set_current_index(7);
         let Some(changes) = editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(1..9),
-                &Regex::new("s[aeiou]").unwrap(),
-                "'",
-                Some(0),
+                &Substitution {
+                    pattern: Regex::new("s[aeiou]").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(0),
+                },
+                None,
             )
             .unwrap()
         else {
@@ -3253,10 +3336,14 @@ mod tests {
         editor.buffer.set_current_index(4);
         editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(1..3),
-                &Regex::new("e+n").unwrap(),
-                "'",
-                Some(0),
+                &Substitution {
+                    pattern: Regex::new("e+n").unwrap(),
+                    replacement: "'".to_owned(),
+                    target_match: Some(0),
+                },
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3278,10 +3365,14 @@ mod tests {
         editor.buffer.set_current_index(4);
         editor
             .substitute_cmd(
+                &mut String::new(),
                 Some(1..4),
-                &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
-                "$1 ($0)",
-                Some(1),
+                &Substitution {
+                    pattern: Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
+                    replacement: "$1 ($0)".to_owned(),
+                    target_match: Some(1),
+                },
+                None,
             )
             .unwrap();
         assert_eq!(
@@ -3307,10 +3398,14 @@ mod tests {
         editor.buffer.set_current_index(4);
         let before = editor.buffer.clone();
         let Ok(Some(changes)) = editor.substitute_cmd(
+            &mut String::new(),
             Some(1..4),
-            &Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
-            "$1 ($0)",
-            Some(1),
+            &Substitution {
+                pattern: Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
+                replacement: "$1 ($0)".to_owned(),
+                target_match: Some(1),
+            },
+            None,
         ) else {
             panic!("expected Ok(Some(ChangeSet))!");
         };
