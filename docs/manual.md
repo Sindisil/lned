@@ -288,27 +288,28 @@ The current line is not affected by this command.
     (1,$)g/__RE__/__commands__
 
 The g command will first note every line matching the specified regex.
-Then, working from beginning to end, the command list will be exeed for
-each matching line, with the current line set to the address of that line.
-Any matched line modified by the command list will be removed from the
-list of matching lines. Any error will immediately stop execution. Any
-character other than ' ' (space) or '\n' (new line) may be used instead of
-'/' to delimit the regex, and within the regex the delimiter may be used
-as a literal character if escaped by a '\' character.
+Then, working from beginning to end, the command list will be executed
+for each matching line, with the current line set to the address of that
+line. Any matched line modified by the command list will be removed from
+the list of matching lines. Any error will immediately stop execution.
+Any character other than ' ' (space) or '\n' (new line) may be used
+instead of '/' to delimit the regex, and within the regex the delimiter
+may be used as a literal character if escaped by a '\' character.
 
 Unless errors are encountered, the current line will eventually be set to
 the value assigned by the last command in the command list. If there were
 no matching lines, the current line will not change.
 
 The first command in the command list must appear on the same line as the
-global command. All additional lines in the command list but the last must
-be backslash terminated to escape the line terminator.
+global command. If more than one command is specified in the global command
+list, each but the last must end with an ampersand ('&') character as a
+separator. Newlines within commands may be escaped with a backslash ('\').
 
 The list of permitted commands in a global command list includes any of:
-'a', 'A', 'd', 'i', 'I', 'j', 'n', 'o', 'O', 'p', and 's'. Input lines
-associated with the append, insert, and overwrite commands must be included
-in the command list. The terminating '.' may be omitted if it would be the
-last line in the command list.
+'a', 'A', 'c', 'd', 'i', 'I', 'j', 'n', 'o', 'O', 'p', 's', and 'x'.
+Input lines associated with the append, insert, and overwrite commands
+must be included in the command list. The terminating '.' may be omitted
+if it would be the last line in the command list.
 
 If no command is provided, it will be interpreted as if a 'p' command were
 given.
