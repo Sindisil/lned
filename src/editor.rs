@@ -534,14 +534,14 @@ impl Editor {
 
         // report info on load
         let mut buf = String::new();
-        self.format_file_info(&mut buf);
         write!(
             buf,
-            "\n{} lines ({} bytes) read",
+            "{} lines ({} bytes) read from ",
             format_number(lines_read),
             format_number(bytes_read)
         )
         .unwrap();
+        self.format_file_info(&mut buf);
         if eol_added {
             buf.push_str("\nmissing newline appended");
         }
@@ -597,14 +597,14 @@ impl Editor {
 
         // report info on load
         let mut buf = String::new();
-        self.format_file_info(&mut buf);
         write!(
             buf,
-            "\n{} lines ({} bytes) read",
+            "{} lines ({} bytes) read from ",
             format_number(lines_read),
             format_number(bytes_read)
         )
         .unwrap();
+        self.format_file_info(&mut buf);
         if eol_added {
             buf.push_str("\nmissing newline appended");
         }
@@ -737,15 +737,22 @@ impl Editor {
     }
 
     fn format_file_info(&mut self, buf: &mut String) {
-        if self.is_buffer_unsaved() {
+        let unsaved = self.is_buffer_unsaved();
+        let altered = self.is_file_altered();
+
+        if unsaved {
             buf.push('*');
         }
 
-        if self.is_file_altered() {
+        if altered {
             buf.push('!');
         }
 
-        buf.push_str(" <");
+        if unsaved || altered {
+            buf.push(' ');
+        }
+
+        buf.push('<');
 
         if let Some(f) = &self.current_file {
             write!(buf, "{}", f.display()).unwrap();
@@ -4727,7 +4734,7 @@ mod tests {
 
         let _ = editor.delete_cmd(Some(5..6)).expect("no error");
         let _ = editor.show_diff_cmd(&mut output.0, None).expect("no error");
-        let expected = " <test/assets/text_with_final_eol.txt> LF\n10 lines (312 bytes) read\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
+        let expected = "10 lines (312 bytes) read from <test/assets/text_with_final_eol.txt> LF\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
         let output = str::from_utf8(&output.0[..]).unwrap();
         assert_eq!(output, expected);
     }
