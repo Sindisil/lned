@@ -276,11 +276,21 @@ is printed to stdout.
 
 The current line is not affected by this command.
 
-### 'f' Filename
+### 'f' File
 
     f
 
-Prints the current filename and the prevailing newline.
+Prints current file metadata on one line:
+
+    *!<filename> EOL
+    
+where
+
+    * = buffer is unsaved
+    ! = file has been altered
+    <filename> = name of edited file, or <*no filename*>
+    EOL = prevailing newline (LF, mostly LF, CRLF, or mostly CRLF)
+
 The current line is not affected by this command.
 
 ### 'g' Global 
