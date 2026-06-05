@@ -91,8 +91,55 @@ impl Editor {
         }
     }
 
-    fn buffer_is_unsaved(&mut self) -> bool {
+    fn is_buffer_unsaved(&mut self) -> bool {
         self.buffer_sync_hash != self.buffer.content_hash()
+    }
+
+    fn is_file_altered(&self) -> bool {
+        let Some(filename) = self.current_file.as_deref() else {
+            return false;
+        };
+
+        let new_file_md = fs::metadata(filename).ok().map(|md| FileMetadata {
+            len: md.len(),
+            modified: md.modified().ok(),
+        });
+
+        if self.file_metadata.is_none() || self.file_metadata != new_file_md {
+            let (hash, _) = compute_file_hash(filename, new_file_md);
+            return hash != self.file_hash;
+        }
+        false
+    }
+
+    /// Updates file metadata and hash.
+    ///
+    /// Returns true if metadata has changed since last update,
+    /// false if not.
+    ///
+    fn update_file_metadata(&mut self) {
+        let Some(filename) = self.current_file.as_deref() else {
+            return;
+        };
+
+        let new_file_md = fs::metadata(filename).ok().map(|md| FileMetadata {
+            len: md.len(),
+            modified: md.modified().ok(),
+        });
+
+        if self.file_metadata.is_none() || self.file_metadata != new_file_md {
+            // metadata changed or unknown, compute new file hash
+            let (hash, metadata) = compute_file_hash(filename, new_file_md);
+            if hash != self.file_hash {
+                if hash.is_some() {
+                    self.file_hash = hash;
+                }
+                if metadata.is_some() {
+                    self.file_metadata = metadata;
+                }
+                return;
+            }
+        }
     }
 
     fn size_page_buffer(&mut self, rows: usize) {
@@ -101,7 +148,7 @@ impl Editor {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn dispatch_cmd(
         &mut self,
         cmd: Cmd,
@@ -214,17 +261,6 @@ impl Editor {
                 e
             }
         })
-    }
-
-    fn update_file_metadata(&mut self) {
-        self.file_metadata = self
-            .current_file
-            .as_ref()
-            .and_then(|cf| fs::metadata(cf).ok())
-            .map(|md| FileMetadata {
-                len: md.len(),
-                modified: md.modified().ok(),
-            });
     }
 
     // Read lines of input into buf, stopping when a '.' alone on a line
@@ -459,7 +495,7 @@ impl Editor {
         &mut self,
         output: &mut impl fmt::Write,
     ) -> Result<Option<ChangeSet>, Error> {
-        let unsaved = self.buffer_is_unsaved();
+        let unsaved = self.is_buffer_unsaved();
 
         // make sure current_file set
         let Some(filename) = self.current_file.as_ref() else {
@@ -497,17 +533,20 @@ impl Editor {
         self.buffer_sync_hash = self.buffer.content_hash();
 
         // report info on load
+        let mut buf = String::new();
+        self.format_file_info(&mut buf);
         write!(
-            output,
-            "{} lines ({} bytes) read",
+            buf,
+            "\n{} lines ({} bytes) read",
             format_number(lines_read),
             format_number(bytes_read)
         )
         .unwrap();
-        writeln!(output, " [{}]", self.buffer.eols()).unwrap();
         if eol_added {
-            writeln!(output, "missing newline appended").unwrap();
+            buf.push_str("\nmissing newline appended");
         }
+        buf.push('\n');
+        output.write_str(&buf).unwrap();
         Ok(None)
     }
 
@@ -519,7 +558,7 @@ impl Editor {
         // warn if there are unsaved changes
         let warning = Warning::EditUnsaved(filename.to_owned());
         if self.previous_warning.as_ref() != Some(&warning)
-            && self.buffer_is_unsaved()
+            && self.is_buffer_unsaved()
         {
             return Err(Error::Warning(warning));
         }
@@ -557,17 +596,20 @@ impl Editor {
         self.buffer_sync_hash = self.buffer.content_hash();
 
         // report info on load
+        let mut buf = String::new();
+        self.format_file_info(&mut buf);
         write!(
-            output,
-            "{} lines ({} bytes) read",
+            buf,
+            "\n{} lines ({} bytes) read",
             format_number(lines_read),
             format_number(bytes_read)
         )
         .unwrap();
-        writeln!(output, " [{}]", self.buffer.eols()).unwrap();
         if eol_added {
-            writeln!(output, "missing newline appended").unwrap();
+            buf.push_str("\nmissing newline appended");
         }
+        buf.push('\n');
+        output.write_str(&buf).unwrap();
 
         Ok(None)
     }
@@ -695,21 +737,25 @@ impl Editor {
     }
 
     fn format_file_info(&mut self, buf: &mut String) {
+        if self.is_buffer_unsaved() {
+            buf.push('*');
+        }
+
+        if self.is_file_altered() {
+            buf.push('!');
+        }
+
+        buf.push_str(" <");
+
         if let Some(f) = &self.current_file {
             write!(buf, "{}", f.display()).unwrap();
         } else {
-            buf.push_str("no filename set");
+            buf.push_str("*no filename*");
         }
 
-        if self.buffer_is_unsaved() {
-            buf.push_str(" [unsaved]");
-        }
+        buf.push_str("> ");
 
-        if self.buffer.is_empty() {
-            write!(buf, " [empty]").unwrap();
-        } else {
-            write!(buf, " [{}]", self.buffer.eols()).unwrap();
-        }
+        write!(buf, "{}", self.buffer.eols()).unwrap();
     }
 
     fn global_cmd(
@@ -1190,7 +1236,7 @@ impl Editor {
     /// buffer changes are detected.
     fn quit_cmd(&mut self) -> Result<Option<ChangeSet>, Error> {
         if self.previous_warning != Some(Warning::QuitUnsaved)
-            && self.buffer_is_unsaved()
+            && self.is_buffer_unsaved()
         {
             return Err(Error::Warning(Warning::QuitUnsaved));
         }
@@ -1200,7 +1246,7 @@ impl Editor {
     // New discards the buffer contents and unsets current file
     fn new_cmd(&mut self) -> Result<Option<ChangeSet>, Error> {
         if self.previous_warning == Some(Warning::NewUnsaved)
-            && self.buffer_is_unsaved()
+            && self.is_buffer_unsaved()
         {
             return Err(Error::Warning(Warning::NewUnsaved));
         }
@@ -1214,32 +1260,19 @@ impl Editor {
         &mut self,
         output: &mut impl fmt::Write,
     ) -> Result<Option<ChangeSet>, Error> {
-        let Some(filename) = self.current_file.as_deref() else {
+        if self.current_file.is_none() {
             return Err(Error::NoFilename);
         };
 
-        if self.previous_warning != Some(Warning::WriteOverwrite) {
-            let new_file_md = fs::metadata(filename).ok().map(|md| {
-                FileMetadata { len: md.len(), modified: md.modified().ok() }
-            });
-
-            if self.file_metadata.is_none() || self.file_metadata != new_file_md
-            {
-                // metadata changed or unknown, compute new file hash
-                let (hash, metadata) = compute_file_hash(filename, new_file_md);
-                if hash != self.file_hash {
-                    if hash.is_some() {
-                        self.file_hash = hash;
-                    }
-                    if metadata.is_some() {
-                        self.file_metadata = metadata;
-                    }
-                    return Err(Error::Warning(Warning::WriteOverwrite));
-                }
-            }
+        if self.previous_warning != Some(Warning::WriteOverwrite)
+            && self.is_file_altered()
+        {
+            return Err(Error::Warning(Warning::WriteOverwrite));
         }
 
-        let mut writer = EditedFile::open_or_create(filename)?;
+        let mut writer = EditedFile::open_or_create(
+            self.current_file.as_deref().expect("filename set"),
+        )?;
         let span = 0..self.buffer.len();
         write_file(&mut self.buffer, output, span, &mut writer)?;
 
@@ -2055,7 +2088,7 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(&["1\r\n", "2", "3"]);
         let mut output = String::new();
         editor.file_cmd(&mut output);
-        let expected = "no filename set [unsaved] [CRLF]\n";
+        let expected = "* <*no filename*> CRLF\n";
         assert_eq!(&output, expected);
         assert!(editor.current_file.is_none());
     }
@@ -2069,7 +2102,7 @@ mod tests {
         editor.file_cmd(&mut output);
         output.clear();
         editor.file_cmd(&mut output);
-        let expected = "a_new_filename.txt [unsaved] [LF]\n";
+        let expected = "* <a_new_filename.txt> LF\n";
         assert_eq!(&output, expected);
     }
 
@@ -2870,7 +2903,7 @@ mod tests {
         let args = CmdArgs { file: None };
         run(&input[..], &mut output, OutputTarget::Other, &args).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("no filename set"));
+        assert!(output.contains("*no filename*"));
     }
 
     #[test]
@@ -4694,7 +4727,7 @@ mod tests {
 
         let _ = editor.delete_cmd(Some(5..6)).expect("no error");
         let _ = editor.show_diff_cmd(&mut output.0, None).expect("no error");
-        let expected = "10 lines (312 bytes) read [LF]\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
+        let expected = " <test/assets/text_with_final_eol.txt> LF\n10 lines (312 bytes) read\n--- test/assets/text_with_final_eol.txt\n+++ current buffer\n@@ -3,7 +3,6 @@\n but it will suffice to test commands that\n read\n and\n-edit files. The lines\n are of various lengths, and\n end and begin with \n \"special\" characters (i.e., non-alpha characters).\n";
         let output = str::from_utf8(&output.0[..]).unwrap();
         assert_eq!(output, expected);
     }
