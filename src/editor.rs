@@ -446,7 +446,7 @@ impl Editor {
         let pr_sfx = pr_sfx.unwrap_or_default();
 
         let mut rows: usize = 0;
-        let mut pb_start = bounds.rows - 1;
+        let mut pb_start = self.page_buffer.len() - 1;
         for i in (start..end).rev() {
             self.page_buffer[pb_start].clear();
             let cols = write_line(
@@ -466,7 +466,7 @@ impl Editor {
             output.write_str(line).unwrap();
         }
         self.buffer
-            .set_current_index(end.saturating_sub(bounds.rows - pb_start));
+            .set_current_index(end.saturating_sub(self.page_buffer.len() - pb_start));
     }
 
     fn show_diff_cmd(
