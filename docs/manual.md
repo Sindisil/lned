@@ -1,4 +1,6 @@
-## Command line
+# lned - line oriented text editor
+
+## Command Line
 
     lned [filename]
 
@@ -17,7 +19,7 @@ and productive.
 As with most line editors, editing with _lned_ is done in two modes:
 _command mode_ and _input mode_.
 
-### Command mode
+### Command Mode
 
 Commands consist of zero or more line addresses, followed by a command,
 possibly folowed by additional parameters:
@@ -138,14 +140,14 @@ An address alone on a line will display the addressed lines. A newline
 alone on a line will display the next line (i.e., equivalent to +1p). The
 last line displayed becomes the current line.
 
-### '=' Line Number 
+### Line Number '='
 
     ($)=
 
 Writes the line number of the addressed line to stdout.
 The current line number will be unchanged.
 
-### 'a' Append
+### Append 'a'
 
 Text is read from the input source, and the resulting lines are inserted
 into the buffer after the addressed line. If lines are appended, the
@@ -185,7 +187,7 @@ indication if a missing final newline was appended.
 If there are errors opening or reading the specified file, the current
 line remains unchanged.
 
-### 'A' Append raw
+### Append raw 'A'
 
 Text is read from the input source, and the resulting lines are inserted
 into the buffer after the addressed line. If lines are appended, the
@@ -218,14 +220,14 @@ the terminal, as well as an indication if a missing final newline was appended.
 If there are errors opening or reading the specified file, the current
 line remains unchanged.
 
-### 'c' Copy
+### Copy 'c'
 
     (.)c
 
 The addressed lines replace any existing lines in the application
 clipboard. The current line remains unchanged.
 
-### 'd' Delete
+### Delete 'd'
 
     (.,.)d
 
@@ -236,7 +238,7 @@ deleted lines were at the end of the buffer, the new last line becomes the
 current line. If the buffer is empty after addressed lines are deleted,
 the current line becomes 0.
 
-### 'e' Reload
+### Reload 'e'
 
     e
 
@@ -250,7 +252,7 @@ read is displayed, as is the prevailing newline.
 If there are unsaved buffer changes, the user will be warned. Repeating
 the command will procede, discarding changes.
 
-### 'E' Edit  (a.k.a. Open)
+### Edit 'E'
 
     E file
 
@@ -265,7 +267,7 @@ is the prevailing newline.
 If there are unsaved buffer changes, the user will be warned. Repeating
 the command will procede, discarding changes.
 
-### 'L' Line Terminator (a.k.a. Newline)
+### Line Terminator 'L'
 
     L (LF|CRLF)
 
@@ -276,7 +278,7 @@ is printed to stdout.
 
 The current line is not affected by this command.
 
-### 'f' File
+### File 'f'
 
     f
 
@@ -293,7 +295,7 @@ where
 
 The current line is not affected by this command.
 
-### 'g' Global 
+### Global 'g'
 
     (1,$)g/__RE__/__commands__
 
@@ -327,7 +329,41 @@ given.
 Only those commands in the command list that successfully modify the edit
 buffer will be included when *undo*ing or *redo*ing a global command.
 
-### 'i' Insert
+### Help 'h'
+
+Views user manual.
+
+    h(initial command)
+    
+The h command switches lned into a read only mode viewing the user
+manual. The remainder of the help command line will be treated as an
+inital command to execute. If no initial command is supplied, Help will
+assume "/## Help/z" as in initial command (i.e., skip to this
+description of the help command by searching for "### Help", then
+display one "page" (default 1/2 screen) of that description).
+
+Examples:
+
+        Command: z
+        Action:  Displays the next "page" (default 1/2 screen) of text.
+
+        Command: 1zn
+        Action:  Jumps to the first line of text and displays the next
+                 page of text with line numbers.
+
+        Command: /Overwrite/n
+        Action:  Searches forward to the first line containing
+                 "Overwrite" and displays the line prefixed with its
+                 line number.
+
+When in help mode, only commands that do not alter buffer text are
+available: Null cmd, =, c, g (read-only commands), l, n, p, q, W, z, and
+Z. All other commands will display an error message.
+
+The Quit command exits help mode, returning to normal editing with the
+same context (current line, etc.) as before the Help command was issued.
+
+### Insert 'i'
 
 Text is read from the input source, and the resulting lines are inserted
 into the buffer before the addressed line. If lines are inserted, the
@@ -367,7 +403,7 @@ indication if a missing final newline was appended.
 If there are errors opening or reading the specified file, the current
 line remains unchanged.
 
-### 'I' Insert raw
+### Insert raw 'I'
 
 Text is read from the input source, and the resulting lines are inserted
 into the buffer before the addressed line. If lines are inserted, the
@@ -400,7 +436,7 @@ the terminal, as well as an indication if a missing final newline was appended.
 If there are errors opening or reading the specified file, the current
 line remains unchanged.
 
-### 'j' Join 
+### Join 'j'
 
     (.,.+1)j(/separator/)
 
@@ -420,7 +456,7 @@ If any lines are joined, the current line will be set to the address of
 the resulting joined line, otherwise the current line number will not
 be set.
 
-### 'J' Justify
+### Justify 'J'
 
     (.)J(wrapping_style)(left_margin)( line_width)
 
@@ -449,7 +485,7 @@ characters and it defaults to Fill if unspecified.
             if unbroken word is wider than the space between margins.
 '!' None    Do not wrap. Line width, if specified, is ignored.
  
-### 'l' List 
+### List 'l'
 
     (.)l
 
@@ -463,7 +499,7 @@ visually as follows:
 * EOL (end of line):      $
 * $ within text:         \$
 
-### 'n' Enumerate
+### Enumerate 'n'
 
     (.,.)n
 
@@ -474,14 +510,22 @@ the line content by two spaces.
 
 The last line written becomes the current line.
 
-### 'N' New
+### New 'N'
 
 Discard the buffer contents and unset current file.
 
 A waring will be given if there are unsaved buffer changes. Repeating
 the command will procede, discarding changes.
 
-### 'o' Overwrite
+### Newline
+
+See Line Terminator.
+
+### Open
+
+See Edit.
+
+### Overwrite 'o'
 
 Text is read from the input source, the addressed lines are deleted, and
 the input lines are inserted after the first line preceding the addressed
@@ -522,7 +566,7 @@ indication if a missing final newline was appended.
 If there are errors opening or reading the specified file, the current
 line remains unchanged.
 
-### 'O' Overwrite raw
+### Overwrite raw 'O'
 
 Text is read from the input source, the addressed lines are deleted, and
 the input lines are inserted after the first line preceding the addressed
@@ -557,21 +601,29 @@ the terminal, as well as an indication if a missing final newline was appended.
 If there are errors opening or reading the specified file, the current
 line remains unchanged.
 
-### 'p' Print 
+### Print 'p'
 
     (.,.)p
 
 The addressed lines are written to stdout. The last line written becomes
 the current line.
 
-### 'q' Quit 
+### Quit 'q'
 
     q
 
 Exits the editor. If there are unsaved changes, a warning will be
 printed. Repeating the command will discard the changes and exit.
 
-### 'S' Show diff 
+### Save
+
+See Write.
+
+### Save As
+
+See Write As.
+
+### Show diff 'S'
 
     S (filename)
 
@@ -583,7 +635,7 @@ is set, otherwise an error is given.
 
 The current current filename is not changed by this command.
 
-### 's' Substitute 
+### Substitute 's'
 
     (.,.)s/regex/replacement/(target_match)
 
@@ -610,21 +662,7 @@ See the regex crate's documentation for more details:
 [regex](https://docs.rs/regex/1.11.0/regex/index.html#syntax).
 [replace()](https://docs.rs/regex/1.11.0/regex/struct.Regex.html#method.replace) method.
 
-### 't' Transfer (a.k.a. Copy)
-
-    (., .)t(destination)
-
-Copy the addressed lines to just after the last line specified by
-destination.
-
-If '0' is specified as the destination address, the addressed lines are
-copied to the beginning of the buffer. The destination may not fall
-within the span of copied lines.
-
-The current line number will be set to the resulting address of the last
-line copied.
-
-### 'u' Undo 
+### Undo 'u'
 
     u
 
@@ -652,7 +690,7 @@ reverse order, then in forward order but with inverted effect (i.e.,
 deletes become inserts, transfers become deletes, etc.). This is so
 that no history of edit actions are lost, including 'undo' commands.
 
-### 'U' Redo 
+### Redo 'U'
 
     U
 
@@ -663,7 +701,7 @@ direct commands, the redone command is then pushed to the undo stack.
 
 For more details about the undo/redo system, see the 'u' (Undo) command.
 
-### 'w' Write (a.k.a. Save)
+### Write 'w'
 
     w
 
@@ -673,7 +711,7 @@ A warning will be displayed if the current file contents has changed
 since last loaded or saved. Repeating the command will overwrite the
 current file.
 
-### 'W' Write As (a.k.a. Save As)
+### Write As 'W'
 
     (1,$)w (filename)
 
@@ -692,7 +730,7 @@ The current line number will not be changed in any case.
 
 The number of lines and bytes written is printed to stdout if successful.
 
-### 'x' Cut
+### Cut 'x'
 
     (.)x
 
@@ -701,7 +739,7 @@ and are deleted from the buffer. The first line after the addressed lines
 becomes the current line. If the last addressed lines were at the end of
 the buffer, the last remaining buffer line becomes the current line.
 
-### 'z' PageDown
+### PageDown 'z'
 
     (.+1)z(page_length)
 
@@ -720,7 +758,7 @@ After printing, the current_line is set equal to the last line printed.
 It is not an error if there are less lines to print than will fit the
 page_length.
 
-### 'Z' PageUp
+### PageUp 'Z'
 
     (.-1)Z(page_length)
 

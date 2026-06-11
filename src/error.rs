@@ -25,6 +25,7 @@ pub enum Error {
     },
     InvalidCmdSuffix,
     InvalidDelimiter,
+    InvalidHelpModeCmd,
     InvalidLeftMargin,
     InvalidNewline,
     InvalidOffset,
@@ -98,6 +99,7 @@ impl std::error::Error for Error {
             | Error::InvalidAddress
             | Error::InvalidCmdSuffix
             | Error::InvalidDelimiter
+            | Error::InvalidHelpModeCmd
             | Error::InvalidLeftMargin
             | Error::InvalidNewline
             | Error::InvalidOffset
@@ -163,6 +165,12 @@ impl Display for Error {
             Error::InvalidCmdSuffix => write!(f, "invalid command suffix"),
             Error::InvalidDelimiter => {
                 write!(f, "invalid delimiter")
+            }
+            Error::InvalidHelpModeCmd => {
+                write!(
+                    f,
+                    "invalid help mode command; use 'q' command to return to normal editing"
+                )
             }
             Error::InvalidLeftMargin => {
                 write!(f, "left margin must be < line width")
