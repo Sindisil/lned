@@ -417,7 +417,7 @@ impl Editor {
             )
             .unwrap();
             pb_end += 1;
-            rows = rows.saturating_add(cols.div_ceil(bounds.cols));
+            rows = rows.saturating_add(cols.div_ceil(bounds.cols).max(1));
             if rows >= bounds.rows {
                 break;
             }
@@ -456,7 +456,7 @@ impl Editor {
                 pr_sfx,
             )
             .unwrap();
-            rows = rows.saturating_add(cols.div_ceil(bounds.cols));
+            rows = rows.saturating_add(cols.div_ceil(bounds.cols).max(1));
             if rows >= bounds.rows {
                 break;
             }
@@ -4641,6 +4641,36 @@ mod tests {
     }
 
     #[test]
+    fn page_down_cmd_no_print_sfx() {
+        let mut editor = Editor::new(OutputTarget::Other);
+        let lines: Vec<String> = (1..=64).map(|n| format!("{n}\n")).collect();
+        editor.buffer = EditBuffer::from(lines);
+        let mut output = Vec::new();
+        let mut input = b"" as &[u8];
+        editor
+            .dispatch_normal_cmd(
+                Cmd::PageDown(Some(0), Some(2), None),
+                &mut output,
+                &mut input,
+            )
+            .expect("page down");
+        assert_eq!(editor.buffer.current_index(), 1);
+        let out_str = str::from_utf8(&output[..]).unwrap();
+        assert_eq!(out_str, "1\n2\n");
+        output.clear();
+        editor
+            .dispatch_normal_cmd(
+                Cmd::PageDown(None, None, None),
+                &mut output,
+                &mut input,
+            )
+            .expect("page down");
+        assert_eq!(editor.buffer.current_index(), 3);
+        let out_str = str::from_utf8(&output[..]).unwrap();
+        assert_eq!(out_str, "3\n4\n");
+    }
+
+    #[test]
     fn page_down_cmd_with_print_sfx() {
         let mut editor = Editor::new(OutputTarget::Other);
         let lines: Vec<String> = (1..=64).map(|n| format!("{n}\n")).collect();
@@ -4650,18 +4680,18 @@ mod tests {
         editor
             .dispatch_cmd(
                 Cmd::PageDown(
-                    Some(9),
-                    Some(3),
+                    Some(0),
+                    Some(2),
                     Some(PrintSuffix { enumerate: true, ..Default::default() }),
                 ),
                 &mut output,
                 &mut input,
             )
-            .expect("scroll 10..12");
-        assert_eq!(editor.buffer.current_index(), 11);
+            .expect("page down");
+        assert_eq!(editor.buffer.current_index(), 1);
         let out_str = str::from_utf8(&output[..]).unwrap();
-        assert!(out_str.contains("10  10\n11  11\n12  12\n"));
-        assert!(!out_str.contains("13"));
+        assert_eq!(out_str, " 1  1\n 2  2\n");
+        output.clear();
         editor
             .dispatch_cmd(
                 Cmd::PageDown(
@@ -4675,11 +4705,10 @@ mod tests {
                 &mut output,
                 &mut input,
             )
-            .expect("scroll 13..15");
-        assert_eq!(editor.buffer.current_index(), 14);
+            .expect("page down");
+        assert_eq!(editor.buffer.current_index(), 3);
         let out_str = str::from_utf8(&output[..]).unwrap();
-        assert!(out_str.contains("13\\n$\n14\\n$\n15\\n$\n"));
-        assert!(!out_str.contains("16"));
+        assert_eq!(out_str, "3\\n$\n4\\n$\n");
     }
 
     #[test]
