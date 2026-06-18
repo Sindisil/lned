@@ -5,18 +5,14 @@ use std::str::FromStr;
 
 use crate::error::ParseEolError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Eol {
+    #[default]
     Lf,
     Crlf,
 }
 
 impl Eol {
-    #[must_use]
-    pub fn native() -> Eol {
-        if std::env::consts::FAMILY == "windows" { Eol::Crlf } else { Eol::Lf }
-    }
-
     #[inline]
     #[must_use]
     pub fn str_value(self) -> &'static str {
@@ -86,7 +82,7 @@ impl FromStr for Eol {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct Eols {
     pub default_eol: Eol,
     pub lfs: usize,
@@ -94,7 +90,13 @@ pub struct Eols {
 }
 
 impl Eols {
-    pub fn new(default_eol: Eol) -> Eols {
+    #[must_use]
+    pub fn new() -> Eols {
+        Eols { ..Default::default() }
+    }
+
+    #[must_use]
+    pub fn with_default(default_eol: Eol) -> Eols {
         Eols { default_eol, ..Default::default() }
     }
 
@@ -142,12 +144,6 @@ impl Eols {
         }
 
         eols
-    }
-}
-
-impl Default for Eols {
-    fn default() -> Eols {
-        Eols { default_eol: Eol::Lf, lfs: 0, crlfs: 0 }
     }
 }
 

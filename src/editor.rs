@@ -1785,7 +1785,7 @@ fn read_lines(
     let mut line = String::new();
     let mut bytes_read = 0;
     let mut eol_added = false;
-    let mut eols = Eols::new(eol.unwrap_or(Eol::Lf));
+    let mut eols = Eols::with_default(eol.unwrap_or(Eol::Lf));
     loop {
         let len = source
             .read_line(&mut line)

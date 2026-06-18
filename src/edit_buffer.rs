@@ -112,7 +112,7 @@ impl EditBuffer {
     pub fn new() -> EditBuffer {
         EditBuffer {
             current_index: 0,
-            eols: Eols::new(Eol::Lf),
+            eols: Eols::new(),
             undo_stack: UndoStack::new(),
             content_hash: None,
             lines: Vec::new(),
@@ -133,7 +133,7 @@ impl EditBuffer {
     pub fn with_capacity(capacity: usize) -> EditBuffer {
         EditBuffer {
             current_index: 0,
-            eols: Eols::new(Eol::Lf),
+            eols: Eols::new(),
             undo_stack: UndoStack::new(),
             content_hash: None,
             lines: Vec::with_capacity(capacity),
@@ -354,7 +354,7 @@ impl EditBuffer {
         self.lines.clear();
         self.current_index = 0;
         self.content_hash = None;
-        self.eols = Eols::new(Eol::Lf);
+        self.eols = Eols::new();
     }
 
     #[must_use]
