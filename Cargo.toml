@@ -11,7 +11,7 @@ regex = "1.12.2"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
 wild = "2.2.1"
-line_edit = { version = "0.5.2", git = "https://github.com/Sindisil/line_edit.git" }
+line_edit = { version = "0.6.0", git = "https://github.com/Sindisil/line_edit.git" }
 similar = { version = "3.0.0", features = ["unicode"] }
 crossterm = "0.29.0"
 

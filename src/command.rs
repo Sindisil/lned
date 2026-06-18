@@ -113,7 +113,7 @@ impl Cmd {
         };
         let mut line = String::with_capacity(120);
         input
-            .read_line(&mut line, Some(&cmd_input_options))
+            .accept_line(&mut line, Some(&cmd_input_options))
             .map_err(|e| Error::ReadCommand { source: Some(Box::new(e)) })?;
         if line.is_empty() {
             return Ok(None);
@@ -529,7 +529,7 @@ pub(crate) fn parse_substitute_cmd(
     let mut line = String::new();
     let (cmd, sfx) = loop {
         input
-            .read_line(&mut line, Some(&line_read_options))
+            .accept_line(&mut line, Some(&line_read_options))
             .map_err(|e| Error::ReadCommand { source: Some(Box::new(e)) })?;
         let mut graphemes = line.graphemes(true).peekable();
         let more_lines = parse_replacement_line(
@@ -671,7 +671,7 @@ fn parse_global_command_list(
             }
         }
         input
-            .read_line(&mut cmd, Some(&line_read_options))
+            .accept_line(&mut cmd, Some(&line_read_options))
             .map_err(|e| Error::ReadCommand { source: Some(Box::new(e)) })?;
     }
 

@@ -1709,7 +1709,7 @@ fn read_input_lines(
     loop {
         let mut line = String::new();
         let n = input
-            .read_line(&mut line, Some(&text_read_options))
+            .accept_line(&mut line, Some(&text_read_options))
             .map_err(|e| Error::ReadLines { source: Some(Box::new(e)) })?;
         if n == 0 || line == ".\n" || line == ".\r\n" {
             return Ok(());
@@ -2099,7 +2099,7 @@ mod tests {
     }
 
     impl LineEdit for IndentReader {
-        fn read_line(
+        fn accept_line(
             &mut self,
             buffer: &mut String,
             options: Option<&EditorOptions>,
