@@ -121,9 +121,6 @@ impl Cmd {
         input
             .accept_line(&mut line, Some(&cmd_input_options))
             .map_err(|e| Error::ReadCommand { source: Some(Box::new(e)) })?;
-        if line.is_empty() {
-            return Ok(None);
-        }
         let mut graphemes = line.as_str().graphemes(true).peekable();
         let address = eval_address(&mut graphemes, buffer, previous_pattern)?;
         match graphemes.next() {
