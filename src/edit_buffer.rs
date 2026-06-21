@@ -230,7 +230,7 @@ impl EditBuffer {
 
         assert!(
             index <= self.len(),
-            "insertion index (is {index}) should be <= len (is {})",
+            "insertion index (is {index}) must be <= len (is {})",
             self.len()
         );
 
@@ -264,11 +264,17 @@ impl EditBuffer {
     ///
     /// # Panics
     ///
-    /// Will panic if `range` extends beyon the buffer's end.
+    /// Will panic if `range` is outside buffer extent.
     ///
     pub fn remove(&mut self, range: Range<usize>) -> ChangeSet {
         assert!(
-            !range.contains(&self.len()),
+            range.start <= range.end,
+            "range end (is {}) must be <= range start (is {})",
+            range.end,
+            range.start
+        );
+        assert!(
+            range.end <= self.len(),
             "range (is {range:?}) must be within buffer (is 0..{})",
             self.len()
         );
@@ -421,6 +427,8 @@ impl EditBuffer {
 mod tests {
     use super::*;
 
+    use std::assert_matches;
+
     use similar_asserts::assert_eq;
 
     /////
@@ -502,6 +510,40 @@ mod tests {
         assert_eq!(buffer.current_index, 2);
         assert_eq!(3, buffer.len());
         assert_eq!(buffer[..], expected[..]);
+    }
+
+    #[test]
+    fn remove_empty_span() {
+        let mut buffer =
+            EditBuffer::with_lines(["1\r\n", "2", "3", "4", "5", "6"]);
+        let changes = buffer.remove(0..0);
+        assert!(changes.is_empty());
+        assert_eq!(buffer.current_index(), 5);
+    }
+
+    #[test]
+    #[should_panic = "range (is 5..7) must be within buffer (is 0..6)"]
+    fn remove_panics_when_range_extends_beyond_len() {
+        let mut buffer =
+            EditBuffer::with_lines(["1\r\n", "2", "3", "4", "5", "6"]);
+        let _ = buffer.remove(5..7);
+    }
+
+    #[test]
+    #[should_panic = "range (is 7..9) must be within buffer (is 0..6)"]
+    fn remove_panics_when_range_outside_buffer() {
+        let mut buffer =
+            EditBuffer::with_lines(["1\r\n", "2", "3", "4", "5", "6"]);
+        let _ = buffer.remove(7..9);
+    }
+
+    #[test]
+    #[should_panic = "range end (is 1) must be <= range start (is 3)"]
+    #[allow(clippy::reversed_empty_ranges)]
+    fn remove_panics_when_range_reversed() {
+        let mut buffer =
+            EditBuffer::with_lines(["1\r\n", "2", "3", "4", "5", "6"]);
+        let _ = buffer.remove(3..1);
     }
 
     #[test]
@@ -648,7 +690,7 @@ mod tests {
         assert_eq!(buffer[..], expected_final[..]);
 
         let _ret = buffer.undo().expect_err("nothing to undo");
-        assert!(matches!(Error::NothingToUndo, _ret));
+        assert_matches!(Error::NothingToUndo, _ret);
         // Undo stack should be empty here, so buffer shouldn't change
         assert_eq!(buffer[..], expected_final[..]);
     }
@@ -680,7 +722,7 @@ mod tests {
         buffer.undo().unwrap();
         assert_eq!(buffer[..], buffer_orig[..]);
         let _ret = buffer.undo().expect_err("nothing to undo");
-        assert!(matches!(Error::NothingToUndo, _ret));
+        assert_matches!(Error::NothingToUndo, _ret);
         assert_eq!(buffer[..], buffer_orig[..]); // buffer unchanged
 
         buffer.redo().unwrap();
@@ -690,7 +732,56 @@ mod tests {
         assert_eq!(buffer[..], expected_final[..]);
 
         let _ret = buffer.redo().expect_err("nothing to redo");
-        assert!(matches!(Error::NothingToRedo, _ret));
+        assert_matches!(Error::NothingToRedo, _ret);
         assert_eq!(buffer[..], expected_final[..]); // buffer unchanged
+    }
+
+    #[test]
+    fn edit_buffer_may_be_indexed_into() {
+        let buffer = EditBuffer::with_lines(["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(buffer[2], "3\n".to_owned());
+        assert_eq!(&buffer[2..4], &["3\n", "4\n"]);
+        assert_eq!(
+            &buffer[2..=4],
+            &["3\n".to_owned(), "4\n".to_owned(), "5\n".to_owned()]
+        );
+        assert_eq!(&buffer[..2], &["1\n".to_owned(), "2\n".to_owned()]);
+        assert_eq!(
+            &buffer[..=2],
+            &["1\n".to_owned(), "2\n".to_owned(), "3\n".to_owned()]
+        );
+        assert_eq!(&buffer[4..], &["5\n".to_owned(), "6\n".to_owned()]);
+        assert_eq!(
+            &buffer[..],
+            &[
+                "1\n".to_owned(),
+                "2\n".to_owned(),
+                "3\n".to_owned(),
+                "4\n".to_owned(),
+                "5\n".to_owned(),
+                "6\n".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn current_index_as_range_when_empty() {
+        let buffer = EditBuffer::new();
+        assert_eq!(buffer.current_index_as_range(), 0..0);
+    }
+
+    #[test]
+    fn current_index_as_range_with_content() {
+        let mut buffer = EditBuffer::with_lines(["1\n", "2", "3"]);
+        buffer.set_current_index(0);
+        assert_eq!(buffer.current_index_as_range(), 0..1);
+        buffer.set_current_index(2);
+        assert_eq!(buffer.current_index_as_range(), 2..3);
+    }
+    #[test]
+    #[should_panic = "insertion index (is 4) must be <= len (is 3)"]
+    fn insert_panics_with_bad_index() {
+        let mut buffer = EditBuffer::with_lines(["1\n", "2", "3"]);
+        let _ = buffer.insert(4, vec!["new text".to_owned()]);
     }
 }
