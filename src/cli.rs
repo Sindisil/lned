@@ -69,6 +69,7 @@ pub fn parse_args(
 mod tests {
     use super::*;
 
+    use std::assert_matches;
     use std::path::Path;
 
     use similar_asserts::assert_eq;
@@ -110,7 +111,7 @@ mod tests {
         let mut output = Vec::new();
         let args = &["test", "--unexpected-arg"];
         let res = parse_args(&mut output, args);
-        assert!(matches!(res, Err(Error::InvalidCmdLine { .. })));
+        assert_matches!(res, Err(Error::InvalidCmdLine { .. }));
     }
 
     #[test]
@@ -128,6 +129,6 @@ mod tests {
         let args = &["test", r"src\cli.rs", r"src\main.rs"];
         let mut output = Vec::new();
         let res = parse_args(&mut output, args).expect_err("unexpected arg");
-        assert!(matches!(res, Error::InvalidCmdLine { .. }));
+        assert_matches!(res, Error::InvalidCmdLine { .. });
     }
 }

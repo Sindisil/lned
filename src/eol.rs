@@ -112,10 +112,6 @@ impl Eols {
         self.lfs != 0 && self.crlfs != 0
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.crlfs + self.lfs == 0
-    }
-
     /// Create an Eols object from text lines.
     ///
     /// [`Eols`].default will be the first EOL found, or `Eol::Lf` if
@@ -349,7 +345,6 @@ mod tests {
         assert_eq!(eols.lfs, 0);
         assert_eq!(eols.crlfs, 0);
         assert_eq!(eols.default_eol, Eol::Lf);
-        assert!(eols.is_empty());
         assert!(!eols.is_mixed());
         assert_eq!(eols.prevailing(), Eol::Lf);
     }
