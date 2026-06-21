@@ -180,9 +180,6 @@ impl AddAssign<Eol> for Eols {
 
 impl AddAssign<Eols> for Eols {
     fn add_assign(&mut self, rhs: Eols) {
-        if self.is_empty() {
-            self.default_eol = rhs.default_eol;
-        }
         self.crlfs += rhs.crlfs;
         self.lfs += rhs.lfs;
     }
@@ -221,34 +218,44 @@ mod tests {
     fn eols_when_all_crlf() {
         let lines =
             vec!["L1\r\n".to_owned(), "L2\r\n".to_owned(), "L3\r\n".to_owned()];
-        let expected = Eols { default_eol: Eol::Crlf, crlfs: 3, lfs: 0 };
-        assert_eq!(Eols::from_lines(&lines), expected);
+        let eols = Eols::from_lines(&lines);
+        assert_eq!(eols, Eols { default_eol: Eol::Crlf, crlfs: 3, lfs: 0 });
+        assert_eq!(&(eols.to_string()), "CRLF");
+        assert_eq!(eols.prevailing(), Eol::Crlf);
+        assert!(!eols.is_mixed());
     }
 
     #[test]
     fn eols_when_all_lf() {
         let lines =
             vec!["L1\n".to_owned(), "L2\n".to_owned(), "L3\n".to_owned()];
-        let expected = Eols { default_eol: Eol::Lf, lfs: 3, crlfs: 0 };
-        assert_eq!(Eols::from_lines(&lines), expected);
+        let eols = Eols::from_lines(&lines);
+        assert_eq!(eols, Eols { default_eol: Eol::Lf, crlfs: 0, lfs: 3 });
+        assert_eq!(&(eols.to_string()), "LF");
+        assert_eq!(eols.prevailing(), Eol::Lf);
+        assert!(!eols.is_mixed());
     }
 
     #[test]
     fn eols_when_most_crlf() {
         let lines =
             vec!["L1\r\n".to_owned(), "L2\n".to_owned(), "L3\r\n".to_owned()];
-        let expected = Eols { default_eol: Eol::Crlf, crlfs: 2, lfs: 1 };
-        let actual = Eols::from_lines(&lines);
-        assert_eq!(actual, expected);
+        let eols = Eols::from_lines(&lines);
+        assert_eq!(eols, Eols { default_eol: Eol::Crlf, crlfs: 2, lfs: 1 });
+        assert_eq!(&(eols.to_string()), "mostly CRLF");
+        assert_eq!(eols.prevailing(), Eol::Crlf);
+        assert!(eols.is_mixed());
     }
 
     #[test]
     fn eols_when_most_lf() {
         let lines =
             vec!["L1\n".to_owned(), "L2\n".to_owned(), "L3\r\n".to_owned()];
-        let expected = Eols { default_eol: Eol::Lf, lfs: 2, crlfs: 1 };
-        let actual = Eols::from_lines(&lines);
-        assert_eq!(actual, expected);
+        let eols = Eols::from_lines(&lines);
+        assert_eq!(eols, Eols { default_eol: Eol::Lf, crlfs: 1, lfs: 2 });
+        assert_eq!(&(eols.to_string()), "mostly LF");
+        assert_eq!(eols.prevailing(), Eol::Lf);
+        assert!(eols.is_mixed());
     }
 
     #[test]
@@ -259,10 +266,11 @@ mod tests {
             "L3\r\n".to_owned(),
             "L4\n".to_owned(),
         ];
-        let expected = Eols { default_eol: Eol::Lf, crlfs: 2, lfs: 2 };
-        let actual = Eols::from_lines(&lines);
-        assert!(actual.is_mixed());
-        assert_eq!(actual, expected);
+        let eols = Eols::from_lines(&lines);
+        assert_eq!(eols, Eols { default_eol: Eol::Lf, crlfs: 2, lfs: 2 });
+        assert_eq!(&(eols.to_string()), "mostly LF");
+        assert_eq!(eols.prevailing(), Eol::Lf);
+        assert!(eols.is_mixed());
     }
 
     #[test]
@@ -280,8 +288,6 @@ mod tests {
         assert!(!empty.is_mixed());
     }
 
-    // Eol tests
-
     #[test]
     fn eol_from_str() {
         assert_eq!("CRLF".parse::<Eol>().unwrap(), Eol::Crlf);
@@ -293,5 +299,66 @@ mod tests {
     fn eol_display_str() {
         assert_eq!(&Eol::Lf.to_string(), "LF");
         assert_eq!(&Eol::Crlf.to_string(), "CRLF");
+    }
+
+    #[test]
+    fn eols_can_be_added_to_eols() {
+        let mut eols = Eols::new();
+
+        eols += Eols { lfs: 3, ..Default::default() };
+        assert_eq!(eols.lfs, 3);
+        assert_eq!(eols.crlfs, 0);
+
+        eols += Eols { default_eol: Eol::Crlf, lfs: 3, crlfs: 8 };
+        assert_eq!(eols.lfs, 6);
+        assert_eq!(eols.crlfs, 8);
+    }
+
+    #[test]
+    fn eols_can_be_subtracted_from_eols() {
+        let mut eols = Eols { default_eol: Eol::Crlf, crlfs: 6, lfs: 4 };
+        eols -= Eols { crlfs: 3, lfs: 2, ..Default::default() };
+        assert_eq!(eols, Eols { default_eol: Eol::Crlf, crlfs: 3, lfs: 2 });
+    }
+
+    #[test]
+    fn an_eol_can_be_added_to_eols() {
+        let mut eols = Eols::new();
+
+        eols += Eol::Crlf;
+        assert_eq!(eols, Eols { crlfs: 1, lfs: 0, ..Default::default() });
+
+        eols += Eol::Lf;
+        assert_eq!(eols, Eols { crlfs: 1, lfs: 1, ..Default::default() });
+    }
+
+    #[test]
+    fn an_eol_can_be_subtracted_from_eols() {
+        let mut eols = Eols { crlfs: 4, lfs: 5, ..Default::default() };
+
+        eols -= Eol::Lf;
+        assert_eq!(eols, Eols { crlfs: 4, lfs: 4, ..Default::default() });
+
+        eols -= Eol::Crlf;
+        assert_eq!(eols, Eols { crlfs: 3, lfs: 4, ..Default::default() });
+    }
+
+    #[test]
+    fn new_eol_is_empty_defaulting_to_lf() {
+        let eols = Eols::new();
+        assert_eq!(eols.lfs, 0);
+        assert_eq!(eols.crlfs, 0);
+        assert_eq!(eols.default_eol, Eol::Lf);
+        assert!(eols.is_empty());
+        assert!(!eols.is_mixed());
+        assert_eq!(eols.prevailing(), Eol::Lf);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic = "attempt to subtract with overflow"]
+    fn overflowing_eols_sub_assign_panics_in_debug() {
+        let mut eols = Eols::new();
+        eols -= Eols { lfs: 1, crlfs: 2, ..Default::default() };
     }
 }
