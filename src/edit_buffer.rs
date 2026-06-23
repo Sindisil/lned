@@ -562,8 +562,6 @@ mod tests {
         let mut buffer =
             EditBuffer::with_lines(["1\r\n", "2", "3", "4", "5", "6"]);
         let expected = EditBuffer::with_lines(["4\r\n", "5", "6"]);
-        dbg!(&buffer);
-        dbg!(&expected);
         buffer.remove(0..3);
         assert_eq!(buffer[..], expected[..]);
         assert_eq!(buffer.current_index(), 0);

@@ -252,14 +252,6 @@ fn parse_append_cmd(
                 InputSource::File(PathBuf::from(filename))
             }
         }
-        Some(&"\\") => {
-            // handle escaped newline to support use in global
-            graphemes.next();
-            match graphemes.next() {
-                Some("\n" | "\r\n") => InputSource::StdIn,
-                _ => return Err(Error::InvalidCmdSuffix),
-            }
-        }
         _ => InputSource::StdIn,
     };
 
@@ -312,14 +304,6 @@ fn parse_insert_cmd(
                 InputSource::File(PathBuf::from(filename))
             }
         }
-        Some(&"\\") => {
-            // handle escaped newline to support use in global
-            graphemes.next();
-            match graphemes.next() {
-                Some("\n" | "\r\n") => InputSource::StdIn,
-                _ => return Err(Error::InvalidCmdSuffix),
-            }
-        }
         _ => InputSource::StdIn,
     };
 
@@ -347,14 +331,6 @@ fn parse_overwrite_cmd(
                 InputSource::StdIn
             } else {
                 InputSource::File(PathBuf::from(filename))
-            }
-        }
-        Some(&"\\") => {
-            // handle escaped newline to support use in global
-            graphemes.next();
-            match graphemes.next() {
-                Some("\n" | "\r\n") => InputSource::StdIn,
-                _ => return Err(Error::InvalidCmdSuffix),
             }
         }
         _ => InputSource::StdIn,
@@ -505,6 +481,7 @@ pub(crate) fn parse_substitute_cmd(
             &mut replacement,
             delimiter.as_str(),
         )?;
+
         if !more_lines {
             let target = parse_target_match(&mut graphemes)?;
             let pr_sfx = parse_print_suffix(&mut graphemes)?;
@@ -712,17 +689,14 @@ fn parse_join_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<Range<usize>>,
 ) -> Result<Option<(Cmd, Option<PrintSuffix>)>, Error> {
-    let Some(next_gr) = graphemes.peek() else {
-        return Ok(Some((Cmd::Join(address, None), None)));
-    };
-    let (cmd, sfx) = match *next_gr {
-        "l" | "n" | "p" => {
+    let (cmd, sfx) = match graphemes.peek() {
+        Some(&"l" | &"n" | &"p") => {
             let sfx = parse_print_suffix(graphemes)?;
             (Cmd::Join(address, None), sfx)
         }
-        "\r\n" | "\r" => (Cmd::Join(address, None), None),
-        d => {
-            graphemes.next();
+        None | Some(&"\r\n" | &"\r") => (Cmd::Join(address, None), None),
+        Some(_) => {
+            let d = graphemes.next().unwrap();
             let (separator, _) = parse_pattern(graphemes, Some(d), false)?;
             let sfx = parse_print_suffix(graphemes)?;
             (Cmd::Join(address, Some(separator)), sfx)
@@ -1144,6 +1118,18 @@ mod tests {
     }
 
     #[test]
+    fn eval_dot_addr_empty_buffer() {
+        let mut buffer = EditBuffer::new();
+        let err = eval_address(
+            &mut ".d\n".graphemes(true).peekable(),
+            &mut buffer,
+            &mut None,
+        )
+        .expect_err("invalid address");
+        assert_matches!(err, Error::InvalidAddress);
+    }
+
+    #[test]
     fn eval_dollar_addr() {
         let mut cmd_line = "$d\r\n".graphemes(true).peekable();
         let mut buffer = EditBuffer::with_lines(["1\r\n", "2", "3"]);
@@ -1293,7 +1279,7 @@ mod tests {
         let mut buffer = EditBuffer::with_lines([
             "one\r\n", "two", "three", "four", "five", "six",
         ]);
-        buffer.set_current_index(4);
+        buffer.set_current_index(2);
         let res = eval_address(&mut input, &mut buffer, &mut previous_pattern)
             .unwrap();
         assert_eq!(res, Some(3..4));
@@ -1730,6 +1716,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_append_cmd_no_addr_trailing_space() {
+        let mut input = "a \r\n".as_bytes();
+        let (cmd, pr_sfx) =
+            Cmd::read(&mut input, &mut EditBuffer::new(), &mut None)
+                .expect("should be Ok")
+                .expect("should be (cmd, pr_sfx)");
+        assert_matches!(
+            cmd,
+            Cmd::Append {
+                index: None,
+                source: InputSource::StdIn,
+                mode: InputMode::Cooked
+            }
+        );
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
     fn parse_append_cmd_with_addr() {
         let mut buffer = EditBuffer::with_lines(["1\n", "2", "3"]);
         let mut input = "2a\r\n".as_bytes();
@@ -1794,7 +1798,8 @@ mod tests {
 
     #[test]
     fn parse_insert_cmd_no_addr() {
-        let mut input = "i\r\n".as_bytes();
+        // note trailing space to test parsing
+        let mut input = "i \r\n".as_bytes();
         let (cmd, pr_sfx) =
             Cmd::read(&mut input, &mut EditBuffer::new(), &mut None)
                 .expect("no error")
@@ -1860,7 +1865,8 @@ mod tests {
 
     #[test]
     fn parse_overwrite_cmd_no_addr() {
-        let mut input = "o\r\n".as_bytes();
+        // note trailing space to test parsing path
+        let mut input = "o \r\n".as_bytes();
         let (cmd, pr_sfx) =
             Cmd::read(&mut input, &mut EditBuffer::new(), &mut None)
                 .expect("no error")
@@ -2111,7 +2117,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_default_substitute() {
+    fn parse_substitute_default() {
         let mut cmd_line = "/[^01]*/./n\r\n".graphemes(true).peekable();
         let buffer = EditBuffer::with_lines(["1\n", "2", "3", "4", "5", "6"]);
         let address = Some(0..5);
@@ -2134,30 +2140,42 @@ mod tests {
     }
 
     #[test]
-    fn parse_substitute_default() {
-        let mut cmd_line = "/[^01]*/./\r\n".graphemes(true).peekable();
-        let buffer = EditBuffer::with_lines(["1\n", "2", "3", "4", "5", "6"]);
-        let address = Some(0..5);
-        let mut prev_pattern = None;
-        let res = parse_substitute_cmd(
-            &mut cmd_line,
+    fn parse_substitute_missing_delimiter() {
+        let buffer = EditBuffer::with_lines(["1\n", "2", "3"]);
+        let err = parse_substitute_cmd(
+            &mut "/, */, foo\n".graphemes(true).peekable(),
             &mut "".as_bytes(),
             &buffer,
-            &mut prev_pattern,
-            address.clone(),
+            &mut None,
+            None,
         )
-        .unwrap();
-        let Some((Cmd::Substitute(a, sub, None), None)) = res else {
-            panic!("Not Global!");
-        };
-        assert_eq!(a, address);
-        assert_eq!(sub.pattern.as_str(), "[^01]*");
-        assert_eq!(sub.replacement, ".");
+        .expect_err("missing delimiter");
+        assert_matches!(err, Error::MissingPatternDelimiter);
+
+        let err = parse_substitute_cmd(
+            &mut "/, */, foo\\\n".graphemes(true).peekable(),
+            &mut "bar\n".as_bytes(),
+            &buffer,
+            &mut None,
+            None,
+        )
+        .expect_err("missing delimiter");
+        assert_matches!(err, Error::MissingPatternDelimiter);
+
+        let err = parse_substitute_cmd(
+            &mut "/, */, foo".graphemes(true).peekable(),
+            &mut "".as_bytes(),
+            &buffer,
+            &mut None,
+            None,
+        )
+        .expect_err("missing delimiter");
+        assert_matches!(err, Error::MissingPatternDelimiter);
     }
 
     #[test]
     fn parse_substitute_escaped_lf() {
-        let mut cmd_line = "/, */,\\\n".graphemes(true).peekable();
+        let mut cmd_line = "/, */,\\$\\\n".graphemes(true).peekable();
         let buffer = EditBuffer::with_lines(["1\n", "2", "3", "4", "5", "6"]);
         let address = Some(0..5);
         let mut prev_pattern = None;
@@ -2175,7 +2193,7 @@ mod tests {
         assert_eq!(sub.target, TargetMatch::Single(0));
         assert_eq!(a, address);
         assert_eq!(sub.pattern.as_str(), ", *");
-        assert_eq!(sub.replacement, ",\n");
+        assert_eq!(sub.replacement, ",\\$\n");
     }
 
     #[test]
@@ -2220,6 +2238,20 @@ mod tests {
         assert_eq!(sub.pattern.as_str(), "[^01]*");
         assert_eq!(sub.replacement, ".");
         assert_eq!(sub.target, TargetMatch::All);
+    }
+
+    #[test]
+    fn parse_substitute_invalid_target_match() {
+        let buffer = EditBuffer::with_lines(["1\n", "2", "3"]);
+        let err = parse_substitute_cmd(
+            &mut "/[^01]*/.\\\n".graphemes(true).peekable(),
+            &mut "blah\\\n./0\n".as_bytes(),
+            &buffer,
+            &mut None,
+            Some(0..3),
+        )
+        .expect_err("invalid target match");
+        assert_matches!(err, Error::InvalidTargetMatch);
     }
 
     #[test]
@@ -2429,8 +2461,9 @@ mod tests {
 
     #[test]
     fn parse_newline_cmd_no_newline() {
-        let mut cmd_line = "\n".graphemes(true);
-        let res = parse_newline_cmd(&mut cmd_line, None).unwrap();
+        let res = parse_newline_cmd(&mut "\n".graphemes(true), None).unwrap();
+        assert_matches!(res, Some((Cmd::Newline(None), None)));
+        let res = parse_newline_cmd(&mut "  \n".graphemes(true), None).unwrap();
         assert_matches!(res, Some((Cmd::Newline(None), None)));
     }
 
@@ -2499,6 +2532,28 @@ mod tests {
         assert_eq!(wrap, Wrapping::None);
         assert_eq!(left_margin, Some(10));
         assert!(line_width.is_none());
+        assert_eq!(pr_sfx, Some(expected_sfx));
+    }
+
+    #[test]
+    fn parse_justify_cmd_line_width_no_fill() {
+        let expected_addr = 1..5;
+        let expected_sfx =
+            PrintSuffix { enumerate: true, ..Default::default() };
+
+        let mut input = "/ 72n\n".graphemes(true).peekable();
+
+        let (cmd, pr_sfx) =
+            parse_justify_cmd(&mut input, Some(expected_addr.clone()))
+                .expect("no error")
+                .expect("should parse");
+        let Cmd::Justify { span, wrap, left_margin, line_width } = cmd else {
+            panic!("expected Cmd::Justify, got {cmd:?}");
+        };
+        assert_eq!(span, Some(expected_addr));
+        assert_eq!(wrap, Wrapping::NoFill);
+        assert!(left_margin.is_none());
+        assert_eq!(line_width, Some(72));
         assert_eq!(pr_sfx, Some(expected_sfx));
     }
 
