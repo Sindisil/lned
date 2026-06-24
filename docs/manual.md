@@ -637,13 +637,23 @@ The current current filename is not changed by this command.
 
 ### Substitute 's'
 
-    (.,.)s/regex/replacement/(target_match)
+    (.,.)s/regex/replacement/(a|target_match)
 
-Matches each line in the addressed range with the specified regular
-expression pattern, replacing all non-overlapping occurances with the
-specified replacement pattern, or a single occurance indicated by an
-integer indicating which match should be replaced. An error will be
-reported if no matches are found.
+Matches each line in the addressed range against the specified regular
+expression pattern, replacing one or more occurances with the specified
+replacement string depending upon any optional flags specified.
+
+By default, only the first occurance of the search pattern in each
+addressed linen will be replaced.
+
+An 'a' immediately after the closing delimiter will cause all non-
+overlapping occurances of the search pattern in each addressed line
+to be replaced.
+
+A non-zero integer immediately after the closing delmiter will specify a
+single target match to replace.
+
+An error will be reported if no matches are found.
 
 Any character other than ' ' (space) or '\n' (new line) may be used
 instead of '/' (slash) to delimit the regex, and within the regex the

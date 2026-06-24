@@ -19,7 +19,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::cli;
 use crate::command::{
-    Cmd, InputMode, InputSource, PrintSuffix, Substitution, Wrapping,
+    Cmd, InputMode, InputSource, PrintSuffix, Substitution, TargetMatch,
+    Wrapping,
 };
 use crate::edit_buffer::EditBuffer;
 use crate::eol::{Eol, Eols};
@@ -744,8 +745,10 @@ impl Editor {
         let prevailing_eol = self.buffer.eols().prevailing();
 
         let mut index = span.start;
-        let (target_match, limit) =
-            sub.target_match.map_or((0, 0), |tm| (tm, 1));
+        let (target_match, limit) = match sub.target {
+            TargetMatch::All => (0, 0),
+            TargetMatch::Single(n) => (n, 1),
+        };
 
         let mut changes =
             ChangeSet::new(self.buffer.current_index(), self.buffer.eols());
@@ -2698,7 +2701,7 @@ mod tests {
 
         let mut output = Vec::new();
         let pat = &Regex::new("s[aeiou]").unwrap();
-        let commands = vec![".,+2s//\\\n'/n".to_owned()];
+        let commands = vec![".,+2s//\\\n'/an".to_owned()];
         let Err(Error::GlobalCmdErrorStop { source, changes }) =
             editor.global_cmd(&mut output, None, pat, &commands)
         else {
@@ -2766,7 +2769,7 @@ mod tests {
 
         let mut output = Vec::new();
         let pat = &Regex::new("s[aeiou]").unwrap();
-        let commands = vec!["s//\\\n'/n".to_owned()];
+        let commands = vec!["s//\\\n'/an".to_owned()];
         let Some(changes) = editor
             .global_cmd(&mut output, None, pat, &commands)
             .expect("should have been Ok")
@@ -3266,7 +3269,7 @@ mod tests {
 
     #[test]
     fn substitute_cmd_dispatch() {
-        let input = b"a\n11231145611\n.\n1s/[^01]+/./\n1p\nq\nq\n";
+        let input = b"a\n11231145611\n.\n1s/[^01]+/./a\n1p\nq\nq\n";
         let mut output = Vec::new();
         run(&input[..], &mut output, OutputTarget::Other, &CmdArgs::default())
             .unwrap();
@@ -3279,7 +3282,7 @@ mod tests {
         let sub = Substitution {
             pattern: Regex::new("won't match").unwrap(),
             replacement: String::new(),
-            target_match: Some(1),
+            target: TargetMatch::Single(1),
         };
         let res = editor
             .substitute_cmd(&mut Vec::new(), None, &sub, None)
@@ -3305,7 +3308,7 @@ mod tests {
                 &Substitution {
                     pattern: Regex::new("won't match").unwrap(),
                     replacement: String::new(),
-                    target_match: None,
+                    target: TargetMatch::All,
                 },
                 None,
             )
@@ -3331,7 +3334,7 @@ mod tests {
                 &Substitution {
                     pattern: Regex::new("e+n").unwrap(),
                     replacement: "'".to_owned(),
-                    target_match: None,
+                    target: TargetMatch::All,
                 },
                 None,
             )
@@ -3351,7 +3354,7 @@ mod tests {
                 &Substitution {
                     pattern: Regex::new("$").unwrap(),
                     replacement: "!".to_owned(),
-                    target_match: Some(0),
+                    target: TargetMatch::Single(0),
                 },
                 None,
             )
@@ -3377,7 +3380,7 @@ mod tests {
                 &Substitution {
                     pattern: Regex::new("e+n").unwrap(),
                     replacement: "'".to_owned(),
-                    target_match: Some(0),
+                    target: TargetMatch::Single(0),
                 },
                 None,
             )
@@ -3403,7 +3406,7 @@ mod tests {
                 &Substitution {
                     pattern: Regex::new("e+n").unwrap(),
                     replacement: "'".to_owned(),
-                    target_match: Some(3),
+                    target: TargetMatch::Single(3),
                 },
                 None,
             )
@@ -3466,7 +3469,7 @@ mod tests {
                 &Substitution {
                     pattern: Regex::new("s[aeiou]").unwrap(),
                     replacement: "'".to_owned(),
-                    target_match: Some(0),
+                    target: TargetMatch::Single(0),
                 },
                 None,
             )
@@ -3510,7 +3513,7 @@ mod tests {
                 &Substitution {
                     pattern: Regex::new("s[aeiou]").unwrap(),
                     replacement: "'".to_owned(),
-                    target_match: Some(0),
+                    target: TargetMatch::Single(0),
                 },
                 None,
             )
@@ -3548,7 +3551,7 @@ mod tests {
                 &Substitution {
                     pattern: Regex::new("e+n").unwrap(),
                     replacement: "'".to_owned(),
-                    target_match: Some(0),
+                    target: TargetMatch::Single(0),
                 },
                 None,
             )
@@ -3577,7 +3580,7 @@ mod tests {
                 &Substitution {
                     pattern: Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
                     replacement: "$1 ($0)".to_owned(),
-                    target_match: Some(1),
+                    target: TargetMatch::Single(1),
                 },
                 None,
             )
@@ -3610,7 +3613,7 @@ mod tests {
             &Substitution {
                 pattern: Regex::new("[a-z]+?(e+n)[^ ]*").unwrap(),
                 replacement: "$1 ($0)".to_owned(),
-                target_match: Some(1),
+                target: TargetMatch::Single(1),
             },
             None,
         ) else {
