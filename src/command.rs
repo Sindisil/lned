@@ -832,7 +832,7 @@ fn eval_address(
             Some(&";") => {
                 graphemes.next();
                 left = Some(match right {
-                    Some(r) if r > buffer.len() => {
+                    Some(r) if r > buffer.len() || r == 0 => {
                         return Err(Error::InvalidAddress);
                     }
                     Some(r) => {
