@@ -114,7 +114,7 @@ impl Cmd {
     ) -> Result<(Cmd, Option<PrintSuffix>), Error> {
         let cmd_input_options = EditorOptions {
             prompt: Some(':'),
-            history: true,
+            enable_history: true,
             ..Default::default()
         };
         let mut line = String::with_capacity(120);
@@ -467,8 +467,11 @@ pub(crate) fn parse_substitute_cmd(
         ));
     }
 
-    let line_read_options =
-        EditorOptions { prompt: None, history: false, ..Default::default() };
+    let line_read_options = EditorOptions {
+        prompt: None,
+        enable_history: false,
+        ..Default::default()
+    };
     let mut line = String::new();
     let (cmd, sfx) = loop {
         input
@@ -631,8 +634,11 @@ fn parse_global_command_list(
     cmd_line: &mut Peekable<Graphemes<'_>>,
     input: &mut impl LineEdit,
 ) -> Result<Vec<String>, Error> {
-    let line_read_options =
-        EditorOptions { prompt: None, history: false, ..Default::default() };
+    let line_read_options = EditorOptions {
+        prompt: None,
+        enable_history: false,
+        ..Default::default()
+    };
     let mut commands = Vec::new();
 
     // Init cmd with remainder of global cmd line

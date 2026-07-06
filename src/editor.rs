@@ -1679,7 +1679,7 @@ fn read_input_lines(
     prevailing_eol: Option<Eol>,
 ) -> Result<(), Error> {
     let mut text_read_options =
-        EditorOptions { prompt: None, history: false, prefill: indent };
+        EditorOptions { prompt: None, enable_history: false, prefill: indent };
     buf.clear();
     loop {
         let mut line = String::new();
