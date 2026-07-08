@@ -854,7 +854,7 @@ impl Editor {
             unsaved,
             altered,
             stat_sep,
-            &self.current_file.display(),
+            self.current_file.display(),
             self.buffer.eols(),
         )
     }
@@ -873,7 +873,7 @@ impl Editor {
             unsaved,
             altered,
             stat_sep,
-            &self.current_file.display(),
+            self.current_file.display(),
             self.buffer.eols(),
         )
     }
@@ -884,7 +884,7 @@ impl Editor {
         span: Option<Range<usize>>,
 
         pattern: &Regex,
-        commands: &Vec<String>,
+        commands: &str,
     ) -> Result<Option<ChangeSet>, Error> {
         self.previous_pattern = Some(pattern.clone());
         // Compile indices of lines that match pattern
@@ -924,25 +924,23 @@ impl Editor {
     fn do_global_cmds(
         &mut self,
         output: &mut impl Write,
-        commands: &Vec<String>,
+        commands: &str,
         mut matched_lines: VecDeque<usize>,
         changes: &mut ChangeSet,
     ) -> Result<(), Error> {
         // iterate over list
         while let Some(index) = matched_lines.pop_front() {
             self.buffer.set_current_index(index);
+            let mut input = commands.as_bytes();
 
             // parse and execute command list for line
-            for cmd in commands {
-                let mut input = cmd.as_bytes();
-                let (cmd, sfx) = Cmd::read(
-                    &mut input,
-                    &mut self.buffer,
-                    &mut self.previous_pattern,
-                )
-                .map_err(|e| Error::ReadGlobalCmd {
-                    source: Some(Box::new(e)),
-                })?;
+            while let Some((cmd, sfx)) = Cmd::read(
+                &mut input,
+                &mut self.buffer,
+                &mut self.previous_pattern,
+            )
+            .map_err(|e| Error::ReadGlobalCmd { source: Some(Box::new(e)) })?
+            {
                 let cs = match cmd {
                     Cmd::Append { index, source, mode } => {
                         self.append_cmd(&mut input, output, index, source, mode)
@@ -1453,16 +1451,18 @@ impl Editor {
             &mut self.buffer,
             &mut self.previous_pattern,
         )
-        .and_then(|(cmd, pr_sfx)| {
-            self.dispatch_help_cmd(cmd, output)?;
-            if let Some(pr_sfx) = pr_sfx {
-                write_line(
-                    output,
-                    &self.buffer,
-                    self.buffer.current_index(),
-                    pr_sfx,
-                )
-                .expect("reliable stdout");
+        .and_then(|v| {
+            if let Some((cmd, pr_sfx)) = v {
+                self.dispatch_help_cmd(cmd, output)?;
+                if let Some(pr_sfx) = pr_sfx {
+                    write_line(
+                        output,
+                        &self.buffer,
+                        self.buffer.current_index(),
+                        pr_sfx,
+                    )
+                    .expect("reliable stdout");
+                }
             }
             Ok(())
         })
@@ -1488,9 +1488,8 @@ pub fn run(
     }
 
     // Accept and process commands until fatal error or exit
-    let mut done = false;
     let mut title = Vec::new();
-    while !done {
+    loop {
         if let OutputTarget::Terminal = output_target {
             title.clear();
             title.extend_from_slice(b"lned - ");
@@ -1502,39 +1501,45 @@ pub fn run(
                 .unwrap();
         }
 
-        Cmd::read(&mut input, &mut editor.buffer, &mut editor.previous_pattern)
-            .and_then(|(cmd, pr_sfx)| {
-                let res = editor.dispatch_cmd(cmd, &mut output, &mut input);
-                res.map(|cs| {
-                    if let Some(cs) = cs {
-                        editor.buffer.push_undo(cs);
+        match Cmd::read(
+            &mut input,
+            &mut editor.buffer,
+            &mut editor.previous_pattern,
+        ) {
+            Ok(Some((cmd, pr_sfx))) => {
+                match editor.dispatch_cmd(cmd, &mut output, &mut input) {
+                    Ok(changes) => {
+                        if let Some(changes) = changes {
+                            editor.buffer.push_undo(changes);
+                        }
+                        editor.previous_warning = None;
+                        if let Some(pr_sfx) = pr_sfx {
+                            write_line(
+                                &mut output,
+                                &editor.buffer,
+                                editor.buffer.current_index(),
+                                pr_sfx,
+                            )
+                            .expect("reliable stdout");
+                        }
                     }
-                    editor.previous_warning = None;
-                    if let Some(pr_sfx) = pr_sfx {
-                        write_line(
-                            &mut output,
-                            &editor.buffer,
-                            editor.buffer.current_index(),
-                            pr_sfx,
-                        )
-                        .unwrap();
+                    Err(Error::Quit) => return Ok(()),
+                    Err(err) => {
+                        writeln!(output, "{err}").expect("reliable stdout");
+                        write_backtrace(&mut output, &err);
+                        if let Error::Warning(warning) = err {
+                            editor.previous_warning = Some(warning);
+                        }
                     }
-                })
-            })
-            .or_else(|e| {
-                writeln!(output, "{e}").unwrap();
-                write_backtrace(&mut output, &e);
-                match e {
-                    Error::Warning(warning) => {
-                        editor.previous_warning = Some(warning);
-                    }
-                    Error::Quit => done = true,
-                    _ => (),
                 }
-                Ok(())
-            })?;
+            }
+            Err(e) => {
+                writeln!(output, "{e}").expect("reliable stdout");
+                write_backtrace(&mut output, &e);
+            }
+            Ok(None) => (),
+        }
     }
-    Ok(())
 }
 
 fn write_backtrace(output: &mut impl Write, mut err: &dyn std::error::Error) {
@@ -2319,7 +2324,7 @@ mod tests {
     fn global_cmd_empty_buffer() {
         let mut editor = Editor::new(OutputTarget::Other);
         let mut output = Vec::new();
-        let commands = vec!["n\n".to_owned()];
+        let commands = "n\n".to_owned();
         let res = editor
             .global_cmd(
                 &mut output,
@@ -2337,7 +2342,7 @@ mod tests {
         editor.buffer = EditBuffer::with_lines(["one\n", "two", "three"]);
         let mut output = Vec::new();
         let pat = &Regex::new("four").unwrap();
-        let commands = vec!["p\n".to_owned()];
+        let commands = "p\n".to_owned();
         let res = editor
             .global_cmd(&mut output, None, pat, &commands)
             .expect_err("no match");
@@ -2352,7 +2357,7 @@ mod tests {
         editor.buffer.set_current_index(1);
         let mut output = Vec::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = vec!["1,2g/ee/n\n".to_owned()];
+        let commands = "1,2g/ee/n\n".to_owned();
         let res = editor.global_cmd(&mut output, None, pat, &commands);
         assert_matches!(res, Err(Error::NestedGlobalCmd));
     }
@@ -2365,7 +2370,7 @@ mod tests {
         editor.buffer.set_current_index(3);
         let mut output = Vec::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = vec!["\n".to_owned()];
+        let commands = "\n".to_owned();
         let res =
             editor.global_cmd(&mut output, Some(0..3), pat, &commands).unwrap();
         assert!(res.is_none(), "should be no changes");
@@ -2379,7 +2384,7 @@ mod tests {
         editor.buffer.set_current_index(1);
         let mut output = Vec::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = vec!["p\r\n".to_owned()];
+        let commands = "p\r\n".to_owned();
         let res = editor
             .global_cmd(&mut output, None, pat, &commands)
             .expect("no errors");
@@ -2394,7 +2399,7 @@ mod tests {
         editor.buffer.set_current_index(0);
         let mut output = Vec::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = vec!["n\r\n".to_owned()];
+        let commands = "n\r\n".to_owned();
         let res = editor
             .global_cmd(&mut output, Some(0..3), pat, &commands)
             .expect("no error");
@@ -2411,7 +2416,7 @@ mod tests {
         editor.buffer.set_current_index(5);
         let mut output = Vec::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = vec!["-1,.n\r\n".to_owned()];
+        let commands = "-1,.n\r\n".to_owned();
         let res = editor
             .global_cmd(&mut output, Some(1..5), pat, &commands)
             .expect("no error");
@@ -2426,7 +2431,7 @@ mod tests {
         editor.buffer.set_current_index(1);
         let mut output = Vec::new();
         let pat = &Regex::new("t..").unwrap();
-        let commands = vec!["l\r\n".to_owned()];
+        let commands = "l\r\n".to_owned();
         let res = editor
             .global_cmd(&mut output, Some(0..3), pat, &commands)
             .expect("no error");
@@ -2443,7 +2448,7 @@ mod tests {
         editor.buffer.set_current_index(5);
         let mut output = Vec::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = vec!["-1,.l\r\n".to_owned()];
+        let commands = "-1,.l\r\n".to_owned();
         let res = editor
             .global_cmd(&mut output, Some(1..5), pat, &commands)
             .expect("no error");
@@ -2462,7 +2467,7 @@ mod tests {
         ]);
         let mut output = Vec::new();
         let pat = Regex::new("^t").unwrap();
-        let commands = vec!["c\n".to_owned(), "1iv\n".to_owned()];
+        let commands = "c\n1iv\n".to_owned();
         let changes = editor
             .global_cmd(&mut output, Some(0..6), &pat, &commands)
             .expect("no error")
@@ -2496,7 +2501,7 @@ mod tests {
         ]);
         let mut output = Vec::new();
         let pat = Regex::new("^t").unwrap();
-        let commands = vec!["x\n".to_owned(), "1iv\n".to_owned()];
+        let commands = "x\n1iv\n".to_owned();
         let changes = editor
             .global_cmd(&mut output, Some(0..6), &pat, &commands)
             .expect("no error")
@@ -2531,7 +2536,7 @@ mod tests {
         ]);
         let mut output = Vec::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = vec!["a\nappend\n.\n".to_owned()];
+        let commands = "a\nappend\n.\n".to_owned();
         let changes = editor
             .global_cmd(&mut output, Some(0..6), pat, &commands)
             .expect("no error")
@@ -2579,7 +2584,7 @@ mod tests {
         let mut output = Vec::new();
         let pat = &Regex::new("([a-z]*e)$").unwrap();
         let commands =
-            vec![".,+o\noverwrite 1\noverwrite 2\noverwrite 3\n.\n".to_owned()];
+            ".,+o\noverwrite 1\noverwrite 2\noverwrite 3\n.\n".to_owned();
         let changes = editor
             .global_cmd(&mut output, Some(0..6), pat, &commands)
             .expect("no error")
@@ -2610,7 +2615,7 @@ mod tests {
         let expected = EditBuffer::with_lines(["two\n", "four", "six"]);
         let mut output = Vec::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = vec!["dn\n".to_owned()];
+        let commands = "dn\n".to_owned();
         let changes = editor
             .global_cmd(&mut output, Some(0..6), pat, &commands)
             .expect("no error")
@@ -2652,7 +2657,7 @@ mod tests {
         ]);
         let mut output = Vec::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = vec!["i\r\ninsert\r\n.\r\n".to_owned()];
+        let commands = "i\r\ninsert\r\n.\r\n".to_owned();
         let changes = editor
             .global_cmd(&mut output, Some(0..6), pat, &commands)
             .expect("no error")
@@ -2685,7 +2690,7 @@ mod tests {
         expected.set_current_index(1);
         let mut output = Vec::new();
         let pat = &Regex::new("e$").unwrap();
-        let commands = vec!["jn\n".to_owned()];
+        let commands = "jn\n".to_owned();
         let changes = editor
             .global_cmd(&mut output, Some(0..6), pat, &commands)
             .expect("no error")
@@ -2744,7 +2749,7 @@ mod tests {
 
         let mut output = Vec::new();
         let pat = Regex::new("s[aeiou]").unwrap();
-        let commands = vec![".,+2s//\\\n'/an".to_owned()];
+        let commands = ".,+2s//\\\n'/an".to_owned();
         let err = editor
             .dispatch_cmd(
                 Cmd::Global(None, pat, commands),
@@ -2811,7 +2816,7 @@ mod tests {
 
         let mut output = Vec::new();
         let pat = &Regex::new("s[aeiou]").unwrap();
-        let commands = vec!["s//\\\n'/an".to_owned()];
+        let commands = "s//\\\n'/an".to_owned();
         let Some(changes) = editor
             .global_cmd(&mut output, None, pat, &commands)
             .expect("should have been Ok")
@@ -2838,7 +2843,7 @@ mod tests {
         editor.buffer.set_current_index(1);
         let mut output = Vec::new();
         let pat = &Regex::new(r"t..").unwrap();
-        let commands = vec!["e filename.txt\n".to_owned()];
+        let commands = "e filename.txt\n".to_owned();
         let res = editor.global_cmd(&mut output, Some(0..3), pat, &commands);
         assert_matches!(res, Err(Error::UnsupportedGlobalCmd));
     }
@@ -2898,7 +2903,6 @@ mod tests {
                 "unsaved changes - repeat command to discard changes"
             )
         );
-        assert!(str::from_utf8(&output[..]).unwrap().contains("exiting ..."));
     }
 
     #[test]
@@ -3480,8 +3484,9 @@ mod tests {
         editor.buffer.set_current_index(0);
         let cmd_line = "s/, /\\\r\n/";
         let mut input = cmd_line.as_bytes();
-        let (Cmd::Substitute(address, substitution, None), None) =
-            Cmd::read(&mut input, &mut editor.buffer, &mut None).unwrap()
+        let Some((Cmd::Substitute(address, substitution, None), None)) =
+            Cmd::read(&mut input, &mut editor.buffer, &mut None)
+                .expect("no error")
         else {
             panic!("{cmd_line} didn't parse as Cmd::Substitute");
         };
@@ -5692,7 +5697,7 @@ mod tests {
                 Cmd::Global(
                     None,
                     Regex::new("# lned").unwrap(),
-                    vec!["\n".to_owned()],
+                    "\n".to_owned(),
                 ),
                 &mut output,
                 &mut &input[..],
@@ -6143,7 +6148,7 @@ mod tests {
         ]);
         let mut output = Vec::new();
         let pat = Regex::new("[aeiou]$").unwrap();
-        let commands = vec![".;+2n\n".to_owned()];
+        let commands = ".;+2n\n".to_owned();
         editor
             .dispatch_cmd(Cmd::Help(None), &mut output, &mut "".as_bytes())
             .expect("no error");
