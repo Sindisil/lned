@@ -165,9 +165,9 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "line_edit"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a922be4fe4c4c1eb6dfe37537fe7928171911b399e851a5365b56779b378041c"
+checksum = "9f77de3212a83ca0f3429701647d3feb36c617978f08b1b8a5f59cf3d0f877de"
 dependencies = [
  "crossterm",
  "regex",

@@ -61,6 +61,7 @@ pub enum Error {
     },
     TrailingBackslash,
     UnexpectedAddress,
+    UnexpectedEndOfInput,
     UnknownCmd(String),
     UnsupportedGlobalCmd,
     Warning(Warning),
@@ -119,6 +120,7 @@ impl std::error::Error for Error {
             | Error::Quit
             | Error::TrailingBackslash
             | Error::UnexpectedAddress
+            | Error::UnexpectedEndOfInput
             | Error::UnknownCmd(_)
             | Error::UnsupportedGlobalCmd
             | Error::Warning(_)
@@ -215,6 +217,9 @@ impl Display for Error {
             Error::TrailingBackslash => write!(f, "invalid trailing backslash"),
             Error::UnexpectedAddress => {
                 write!(f, "unexpected line address")
+            }
+            Error::UnexpectedEndOfInput => {
+                write!(f, "unexpected end of input")
             }
             Error::UnknownCmd(c) => write!(f, "unknown command '{c}'"),
             Error::UnsupportedGlobalCmd => {
