@@ -11,13 +11,24 @@ edit buffer will be presented.
 ## Description
 
 _lned_ is a line-oriented text editor in the spirit of _ed_, the
-standard Unix editor. It implements much of _ed_'s featuers, and is
-intended to be expanded to provide functional parity. In addition, there
-are additional features planned for _lned_ to make using it more enjoyable
-and productive.
+standard Unix editor, with additional functionality to make it a more
+comfortable and unseful interactive editor.
 
-As with most line editors, editing with _lned_ is done in two modes:
-_command mode_ and _input mode_.
+## Contents
+
+[Modes](#modes)
+[Regular Expressions](#regular-expressions)
+[Line Addressing](#line-addressing)
+[Commands](#commands)
+[Line Editing](#line-editing)
+
+## Modes
+
+As with most line editors, editing with _lned_ is done in two main
+modes: [command](#command-mode) and [input](#input-mode). Within
+_lned's_ line editing function, there are two additional "modes":
+[unicode character input](#unicode-character-input) and
+[history](#history).
 
 ### Command Mode
 
@@ -27,53 +38,63 @@ possibly folowed by additional parameters:
 	[address[,address]]command[parameters]
 
 The specific syntax of _lned_'s commands are listed in the
-[_Commands_](#commands) section, below.
+[Commands](#commands) section, below.
 
 In command mode, a ':' prompt is presented, and a single command is
 accepted. If the command accepts lines of text, those are entered in
-_input mode_.
+input mode.
 
 ### Input Mode
 
-In _input mode_, lines of text are accepted until a line containing a
+In input mode, lines of text are accepted until a line containing a
 single '.' character is entered. The terminating line is not considered
 part of the input text. No commands or character escapes are recognized
 while in _input mode_.
 
+There are two sub-modes of Input Mode: Raw and Cooked. Each of the input
+commands (Append, Insert, and Overwrite) has a varient for raw and
+cooked input.
+
+In Cooked Input Mode, each line of input is auto-indented to match the
+context. The whitespace supplied may be deleted when editing the input
+if it is unwanted.
+
+In Raw Input Mode, no auto-indent is applied. When pasting multiple
+lines from the system clipboard (e.g., with ctrl+shift+v), raw mode is
+preferred, since cooked input mode's auto-indent interracts poorly with
+already formatted lines, causing the indent to multiply and "walk off
+the right margin".
+
+## Regular Expressions
+
+The regular expression syntax used by lned is that supplied by the Rust
+regex crate, and the replacement pattern syntax is that supported by
+that crate's replace() method. See the regex crate's documentation for
+more details:
+
+[regex](https://docs.rs/regex/1.12.2/regex/index.html#syntax).
+[replace()](https://docs.rs/regex/1.12.2/regex/struct.Regex.html#method.replace) method.
+
 ## Line Addressing
 
-All lned commands act on whole lines or spans of lines.
+All lned commands act on whole lines or spans of lines specified by
+addresses, composed of one or more line address expressions. Default
+addresses apply if fewer addresses are specified than the command can
+accept. Those defaults are specified within each command description.
 
-The addresses specify the line or span of lines the command will affect.
-Default addresses apply if fewer addresses are specified than the command
-can accept.
+The current line is kept track of by _lned_. It is ofen used as the
+default address when none is specified. The current line is usually set
+to the last line affected by a command (e.g., the last line of a file
+when a file is edited, the last line inserted by an insert command, the
+first line after a deleted span of lines).
 
-Regular expressions may be used to specify some line addresses. Several
-commands also accept regular expressions as parameters.
+An address consists of one or more line addresses, separated by ','
+(comma) or ';' (semicolon). Comma is a simple separator, but semi-colon
+causes the _current line_ to take the value of the preceding address
+before evaluating the next. This has several uses, such as determining
+the starting line for regex specified line addresses.
 
-An address specifies the number of a line in an edit buffer. The
-_current address_ is kept track of by _lned_. It is ofen used as the
-default address when none is specified.
-
-The current address is usually set to the last line affected by a command
-(e.g., the last line of a file when a file is first read, the last line
-typed after an insert command, the first line after a deleted span of
-lines).
-
-The address 0 (zero) points before the first line and is only valid with
-certain commands. This is specified in those commands' detailed
-descriptions below.
-
-An address may be a literal number, one of the address symbols defined
-below, or an address symbol followed by a numeric offset expression.
-
-An address range, or span, consists of two addresses separated by a comma
-or semicolon. It is an error for a line address to be smaller than one
-that precedes it on the command line.
-
-### Address symbols
-
-Several symbols have special meaning within a line address.
+Line addresses may be specified in several ways:
 
 * '.' is iterpreted as the address of the _current line_
 * '$' is interpreted as the address of the last line in the buffer
@@ -90,42 +111,42 @@ Several symbols have special meaning within a line address.
 
 In addition, line addresses can be followed by zero or more address
 offsets, which may optionally be separated by blanks ('\t' or ' '
-characters). Address offsets consist of '+' or '-', followed by a decimal
-number, to add or subtract that number from the address. If no number is
-specified, it is assumed to be 1, and if no '+' or '-' is specified,
-addition will be assumed.
+characters). Address offsets consist of '+' or '-', followed by a
+decimal number, to add or subtract that number from the address. If no
+number is specified, it is assumed to be 1, and if no '+' or '-' is
+specified, addition will be assumed.
 
-Addresses are separated by ',' (comma) or ';' (semicolon). Comma is a
-simple separator, but semi-colon causes the _current line_ to take the
-value of the preceding address before evaluating the next. This has
-several uses, such as determining the starting line for regex specified
-line addresses.
+It is an error for a line address to be smaller than one that precedes
+it on the command line.
 
-Any blank characters ('\t' or ' ') between addresses, address separators,
-or address offsets are ignored.
+Any blank characters ('\t' or ' ') between addresses, address
+separators, or address offsets are ignored.
 
 If more addresses are specified than a command accepts, they are still
 evaluated, but if 'n' addresses are required, only the final 'n' will be
-passed to the command. For example, if a command takes a single line, and
-the address '1,5' is passed, the line '5' will be passed to the command.
+passed to the command. For example, if a command takes a single line,
+and the address '1,5' is passed, the line '5' will be passed to the
+command.
 
-Addresses omitted on either side of an address separator are evaluated as
-follows:
+Addresses omitted on either side of an address separator are evaluated
+as follows:
 
-,	: 1,$
-,addr	: 1,addr
-addr,	: addr,addr
-;	: .;$
-;addr	: .;addr
-addr;	: addr;addr
+| Address       | Effective Address |
+|---------------|-------------------|
+| ,             | 1,#               |
+| ,addr         | 1,addr            |
+| addr,         | addr,addr         |
+| ;             | .;$               |
+| ;addr         | .;addr            |
+| addr;         | addr;addr         |
 
 ## Print Suffixes
 
 Most commands may have an 'l', 'n', or 'p' added to their end. This is
-called a "print suffix". If this is the case, the command will be
-executed and then the new current line will be written as described
-under the 'l' (list), 'n' (enumerate), or p (print) commands. Only one
-print suffix is supported per command.
+called a "print suffix". A command with a print suffix will be executed
+and then the new current line will be written as described under the 'l'
+(list), 'n' (enumerate), or p (print) commands. Only one print suffix is
+supported per command.
 
 Note that, although the 'g' (global) command cannot itself have a print
 suffix applied, commands supplied to the global command can.
@@ -137,15 +158,15 @@ suffix applied, commands supplied to the global command can.
     (+1)
 
 An address alone on a line will display the addressed lines. A newline
-alone on a line will display the next line (i.e., equivalent to +1p). The
-last line displayed becomes the current line.
+alone on a line will display the next line (i.e., equivalent to +1p).
+The last line displayed becomes the current line.
 
 ### Line Number '='
 
     ($)=
 
-Writes the line number of the addressed line to stdout.
-The current line number will be unchanged.
+Writes the line number of the addressed line to stdout. The current line
+number will be unchanged.
 
 ### Append 'a'
 
@@ -153,8 +174,8 @@ Text is read from the input source, and the resulting lines are inserted
 into the buffer after the addressed line. If lines are appended, the
 current line is set to the last line appended, otherwise the addressed
 line. Newline sequences for the input lines are normalized to match the
-buffer's prevailing style. Other details specific to the input source are
-detailed below.
+buffer's prevailing style. Other details specific to the input source
+are detailed below.
 
 #### Append from terminal
 
@@ -162,10 +183,10 @@ detailed below.
 
 Lines input at the terminal are the input source.
 
-In addition to the base append behavior, input text is prompted for with an
-auto-indent prefilled. The indent prefill is set to match the first non-
-blank line at or before the addressed line, and each additional input
-prompt is auto-indented to match the previously entered line.
+In addition to the base append behavior, input text is prompted for with
+an auto-indent prefilled. The indent prefill is set to match the first
+non- blank line at or before the addressed line, and each additional
+input prompt is auto-indented to match the previously entered line.
 
 #### Append from clipboard
 
@@ -213,9 +234,11 @@ Lines from the application clipboard are used as the input source.
 
 Lines read from the file specified are used as the input source.
 
-If the final line read is unterminated, a newline sequence is appended to
-it. The appended newline will match the prevailing style for the lines read. A message detailing the number of lines and bytes read is printed to
-the terminal, as well as an indication if a missing final newline was appended.
+If the final line read is unterminated, a newline sequence is appended
+to it. The appended newline will match the prevailing style for the
+lines read. A message detailing the number of lines and bytes read is
+printed to the terminal, as well as an indication if a missing final
+newline was appended.
 
 If there are errors opening or reading the specified file, the current
 line remains unchanged.
@@ -234,9 +257,9 @@ clipboard. The current line remains unchanged.
 The addressed lines are deleted from the buffer.
 
 The current line is set to the first line after the deleted span. If the
-deleted lines were at the end of the buffer, the new last line becomes the
-current line. If the buffer is empty after addressed lines are deleted,
-the current line becomes 0.
+deleted lines were at the end of the buffer, the new last line becomes
+the current line. If the buffer is empty after addressed lines are
+deleted, the current line becomes 0.
 
 ### Reload 'e'
 
@@ -260,9 +283,9 @@ Load the specified file, replacing the current buffer contents.
 
 Line terminators are normalized to the prevailing newline, and a final
 newline is appended if missing. The specified file becomes the new
-current filename. The current line number is set to the address of the last
-line in the buffer. The number of lines and bytes read is displayed, as
-is the prevailing newline.
+current filename. The current line number is set to the address of the
+last line in the buffer. The number of lines and bytes read is
+displayed, as is the prevailing newline.
 
 If there are unsaved buffer changes, the user will be warned. Repeating
 the command will procede, discarding changes.
@@ -308,9 +331,12 @@ Any character other than ' ' (space) or '\n' (new line) may be used
 instead of '/' to delimit the regex.
 
 Within the line selection regex, the delimiter character may be included
-by escaping it with a backslash. Newlines within the command list must
-also be escaped with backslashes. A literal backslash may be included by
-escaping it with another backslash.
+by escaping it with a backslash.
+
+The first command in the command list must appear on the same line as
+the global command. Newlines within the command list must be escaped
+with backslashes. A literal backslash may be included by escaping it
+with another backslash.
 
 Note that this means that including escaped characters, including
 newlines, in commands within the command list then requires two levels
@@ -360,17 +386,16 @@ display one "page" (default 1/2 screen) of that description).
 
 Examples:
 
-        Command: z
-        Action:  Displays the next "page" (default 1/2 screen) of text.
+    Command: z
+    Action:  Displays the next "page" (default 1/2 screen) of text.
 
-        Command: 1zn
-        Action:  Jumps to the first line of text and displays the next
-                 page of text with line numbers.
+    Command: 1zn
+    Action:  Jumps to the first line of text and displays the next
+             page of text with line numbers.
 
-        Command: /Overwrite/n
-        Action:  Searches forward to the first line containing
-                 "Overwrite" and displays the line prefixed with its
-                 line number.
+    Command: /Overwrite/n
+    Action:  Searches forward to the first line containing "Overwrite"
+             and displays the line prefixed with its line number.
 
 When in help mode, only commands that do not alter buffer text are
 available: Null cmd, =, c, g (read-only commands), l, n, p, q, W, z, and
@@ -385,8 +410,8 @@ Text is read from the input source, and the resulting lines are inserted
 into the buffer before the addressed line. If lines are inserted, the
 current line is set to the last one, otherwise to the addressed line.
 Newline sequences for the input lines are normalized to match the
-buffer's prevailing style. Other details specific to the input source are
-detailed below.
+buffer's prevailing style. Other details specific to the input source
+are detailed below.
 
 #### Insert from terminal
 
@@ -394,10 +419,10 @@ detailed below.
 
 Lines input at the terminal are the input source.
 
-In addition to the base insert behavior, input text is prompted for with an
-auto-indent prefilled. The indent prefill is set to match the first non-
-blank line at or before the addressed line, and each additional input
-prompt is auto-indented to match the previously entered line.
+In addition to the base insert behavior, input text is prompted for with
+an auto-indent prefilled. The indent prefill is set to match the first
+non- blank line at or before the addressed line, and each additional
+input prompt is auto-indented to match the previously entered line.
 
 #### Insert from clipboard
 
@@ -425,7 +450,8 @@ Text is read from the input source, and the resulting lines are inserted
 into the buffer before the addressed line. If lines are inserted, the
 current line is set to the last line appended, otherwise the addressed
 line. No other modifications (e.g. normalization of newline style) are
-performed. Other details specific to the input source are detailed below.
+performed. Other details specific to the input source are detailed
+below.
 
 #### Insert raw from terminal
 
@@ -445,9 +471,11 @@ Lines from the application clipboard are used as the input source.
 
 Lines read from the file specified are used as the input source.
 
-If the final line read is unterminated, a newline sequence is appended to
-it. The appended newline will match the prevailing style for the lines read. A message detailing the number of lines and bytes read is printed to
-the terminal, as well as an indication if a missing final newline was appended.
+If the final line read is unterminated, a newline sequence is appended
+to it. The appended newline will match the prevailing style for the
+lines read. A message detailing the number of lines and bytes read is
+printed to the terminal, as well as an indication if a missing final
+newline was appended.
 
 If there are errors opening or reading the specified file, the current
 line remains unchanged.
@@ -457,20 +485,20 @@ line remains unchanged.
     (.,.+1)j(/separator/)
 
 Join addressed contiguous lines by removing the intervening line
-terminators, optionally inserting a separator string between each.
-If a single address is specified, that line is joined with the next.
+terminators, optionally inserting a separator string between each. If a
+single address is specified, that line is joined with the next.
 
-If a separator string is given, it replaces any leading whitespace
-in each joined line past the first. Any character other than ' '
-(space), '\n' (newline), 'n', 'l', or 'p' may be used instead of '/'
-(slash) to delimit the separator string, and within the separator
-string the delimiter may be used as a literal character if escaped
-by a '\\' (backslash) character. The terminating delimiter is optional,
-but eliding it precludes the use of a print suffix.
+If a separator string is given, it replaces any leading whitespace in
+each joined line past the first. Any character other than ' ' (space),
+'\n' (newline), 'n', 'l', or 'p' may be used instead of '/' (slash) to
+delimit the separator string, and within the separator string the
+delimiter may be used as a literal character if escaped by a '\\'
+(backslash) character. The terminating delimiter is optional, but
+eliding it precludes the use of a print suffix.
 
 If any lines are joined, the current line will be set to the address of
-the resulting joined line, otherwise the current line number will not
-be set.
+the resulting joined line, otherwise the current line number will not be
+set.
 
 ### Justify 'J'
 
@@ -505,9 +533,8 @@ characters and it defaults to Fill if unspecified.
 
     (.)l
 
-The addressed lines are written to stdout with the
-some special characters, and the end of line, displayed
-visually as follows:
+The addressed lines are written to stdout with the some special
+characters, and the end of line, displayed visually as follows:
 
 * HT (horizontal tab):   \t
 * CR (carriage return):  \r
@@ -520,9 +547,9 @@ visually as follows:
     (.,.)n
 
 Write the addressed lines to stdout, prefixing each line with its line
-number. The line number will be right justified within a field wide enough
-to hold the largest line number in the file, and will be separated from
-the line content by two spaces.
+number. The line number will be right justified within a field wide
+enough to hold the largest line number in the file, and will be
+separated from the line content by two spaces.
 
 The last line written becomes the current line.
 
@@ -544,12 +571,13 @@ See Edit.
 ### Overwrite 'o'
 
 Text is read from the input source, the addressed lines are deleted, and
-the input lines are inserted after the first line preceding the addressed
-span. If lines are inserted, the current line is set to the last one,
-otherwise to the first line after the deleted span, or the last buffer
-line if the span was at the end of the buffer. Newline sequences for the
-input lines are normalized to match the buffer's prevailing style. Other
-details specific to the input source are detailed below.
+the input lines are inserted after the first line preceding the
+addressed span. If lines are inserted, the current line is set to the
+last one, otherwise to the first line after the deleted span, or the
+last buffer line if the span was at the end of the buffer. Newline
+sequences for the input lines are normalized to match the buffer's
+prevailing style. Other details specific to the input source are
+detailed below.
 
 #### Overwrite from terminal
 
@@ -557,10 +585,11 @@ details specific to the input source are detailed below.
 
 Lines input at the terminal are the input source.
 
-In addition to the base overwrite behavior, input text is prompted for with
-an auto-indent prefilled. The indent prefill is set to match the first non-
-blank line at or before the addressed line, and each additional input
-prompt is auto-indented to match the previously entered line.
+In addition to the base overwrite behavior, input text is prompted for
+with an auto-indent prefilled. The indent prefill is set to match the
+first non- blank line at or before the addressed line, and each
+additional input prompt is auto-indented to match the previously entered
+line.
 
 #### Overwrite from clipboard
 
@@ -585,12 +614,12 @@ line remains unchanged.
 ### Overwrite raw 'O'
 
 Text is read from the input source, the addressed lines are deleted, and
-the input lines are inserted after the first line preceding the addressed
-span. If lines are inserted, the current line is set to the last one,
-otherwise to the first line after the deleted span, or the last buffer
-line if the span was at the end of the buffer. No other modifications
-(e.g. normalization of newline style) are performed. Other details specific
-to the input source are detailed below.
+the input lines are inserted after the first line preceding the
+addressed span. If lines are inserted, the current line is set to the
+last one, otherwise to the first line after the deleted span, or the
+last buffer line if the span was at the end of the buffer. No other
+modifications (e.g. normalization of newline style) are performed. Other
+details specific to the input source are detailed below.
 
 #### Overwrite raw from terminal
 
@@ -610,9 +639,11 @@ Lines from the application clipboard are used as the input source.
 
 Lines read from the file specified are used as the input source.
 
-If the final line read is unterminated, a newline sequence is appended to
-it. The appended newline will match the prevailing style for the lines read. A message detailing the number of lines and bytes read is printed to
-the terminal, as well as an indication if a missing final newline was appended.
+If the final line read is unterminated, a newline sequence is appended
+to it. The appended newline will match the prevailing style for the
+lines read. A message detailing the number of lines and bytes read is
+printed to the terminal, as well as an indication if a missing final
+newline was appended.
 
 If there are errors opening or reading the specified file, the current
 line remains unchanged.
@@ -679,25 +710,16 @@ delimiter may be used as a literal character if escaped by a '\'
 The current line will be set to the line on which the last replacement
 was made.
 
-The regex syntax is that supported by the Rust regex crate, and the
-replacement pattern syntax is that supported by that crate's replace()
-method.
-
-See the regex crate's documentation for more details:
-
-[regex](https://docs.rs/regex/1.11.0/regex/index.html#syntax).
-[replace()](https://docs.rs/regex/1.11.0/regex/struct.Regex.html#method.replace) method.
-
 ### Undo 'u'
 
     u
 
 The most recent command is reverted.
 
-Revertible actions are kept on an undo stack. The 'u' command pops the top
-item and uses that information to revert the associated action (e.g.,
-undoing a 'd' command causes the deleted lines to be re-inserted into the
-buffer).
+Revertible actions are kept on an undo stack. The 'u' command pops the
+top item and uses that information to revert the associated action
+(e.g., undoing a 'd' command causes the deleted lines to be re-inserted
+into the buffer).
 
 The current line is reset to its value before the reverted command was
 executed.
@@ -707,14 +729,14 @@ action.
 
 The clipboard is unaffected by undo/redo commands.
 
-Undone actions are themselves remembered on a redo stack, so that
-they can be redone (effectively "undoing the undo").
+Undone actions are themselves remembered on a redo stack, so that they
+can be redone (effectively "undoing the undo").
 
 If the redo stack was non-empty when a direct command is saved to the
 undo stack, those commands are moved back to the undo stack, first in
 reverse order, then in forward order but with inverted effect (i.e.,
-deletes become inserts, transfers become deletes, etc.). This is so
-that no history of edit actions are lost, including 'undo' commands.
+deletes become inserts, transfers become deletes, etc.). This is so that
+no history of edit actions are lost, including 'undo' commands.
 
 ### Redo 'U'
 
@@ -754,30 +776,32 @@ buffer is considered to be saved.
 
 The current line number will not be changed in any case.
 
-The number of lines and bytes written is printed to stdout if successful.
+The number of lines and bytes written is printed to stdout if
+successful.
 
 ### Cut 'x'
 
     (.)x
 
-The addressed lines replace any existing lines in the application clipboard
-and are deleted from the buffer. The first line after the addressed lines
-becomes the current line. If the last addressed lines were at the end of
-the buffer, the last remaining buffer line becomes the current line.
+The addressed lines replace any existing lines in the application
+clipboard and are deleted from the buffer. The first line after the
+addressed lines becomes the current line. If the last addressed lines
+were at the end of the buffer, the last remaining buffer line becomes
+the current line.
 
 ### PageDown 'z'
 
     (.+1)z(page_length)
 
 Print lines filling the specified number of display rows, up to one less
-than the display height, beginning with the addressed line. Any specified
-print_suffixes will be applied to each line printed. If no address is
-specified, the line following the current_line is used. If no page_length
-is specified, the previously remembered page_length is used, or, if none
-is remembered, the default of display height - 3 rows is used. If a
-page_length > 0 is
-specified, it is remembered. If a page_length of 0 is specified, the
-remembered page number, if any, is forgotten and the default is used.
+than the display height, beginning with the addressed line. Any
+specified print_suffixes will be applied to each line printed. If no
+address is specified, the line following the current_line is used. If no
+page_length is specified, the previously remembered page_length is used,
+or, if none is remembered, the default of display height - 3 rows is
+used. If a page_length > 0 is specified, it is remembered. If a
+page_length of 0 is specified, the remembered page number, if any, is
+forgotten and the default is used.
 
 After printing, the current_line is set equal to the last line printed.
 
@@ -789,16 +813,77 @@ page_length.
     (.-1)Z(page_length)
 
 Print lines filling the specified number of display rows, up to one less
-than the display height, such that the addressed line is the last printed.
-Any specified print_suffixes will be applied to each line printed. If no
-address is specified, the line preceding the current line is used. If no
-page_length is specified, the previously remembered page_length is used,
-or, if none is remembered, the default of display height - 3 rows is used.
-If a page_length > 0 is specified, it is remembered. If a page_length of 0
-is specified, the remembered page number, if any, is forgotten and the
-default is used.
+than the display height, such that the addressed line is the last
+printed. Any specified print_suffixes will be applied to each line
+printed. If no address is specified, the line preceding the current line
+is used. If no page_length is specified, the previously remembered
+page_length is used, or, if none is remembered, the default of display
+height - 3 rows is used. If a page_length > 0 is specified, it is
+remembered. If a page_length of 0 is specified, the remembered page
+number, if any, is forgotten and the default is used.
 
 After printing, the current_line is set equal to the first line printed.
 
 It is not an error if there are less lines to print than will fit the
 page_length.
+
+## Line Editing
+
+Several line editing functions are available when editing command or
+input lines in lned. Lned uses the
+[line_input](https://crates.io/crates/line_edit) to provide this
+functionality, which provides the following features:
+
+### Navigation
+| Key Binding              | Action              |
+|--------------------------|---------------------|
+| Left         or Ctrl + b | Cursor back         | 
+| Right        or Ctrl + f | Cursor forward      |
+| Home         or Ctrl + a | Cursor to start     | 
+| End          or Ctrl + e | Cursor to end       |
+| Ctrl + Left  or Alt + b  | Cursor back word    |
+| Ctrl + Right or Alt + f  | Cursor forward word |
+
+### Editing
+| Key Binding                      | Action                              |
+|----------------------------------|-------------------------------------|
+| Backspace                        | Delete char before cursor           |
+| Ctrl + Home                      | Delete before cursor to start       |
+| Delete           or Ctrl + d     | Delete to next non zero width char  |
+| Ctrl + End       or Ctrl + k     | Delete from cursor to end           |
+| Ctrl + Backspace or Alt + Delete | Delete to previous word start       |
+| Ctrl + Delete    or Alt + d      | Delete to next word start           |
+| Ctrl + i                         | Insert one tab ('\t') at cursor     |
+| Ctrl + u                         | Insert Unicode code point at cursor |
+| Tab                              | Indent line one tab stop            |
+| Shift + Tab                      | Dedent line one tab stop            |
+
+### Unicode input
+The Unicode input feature accepts a Unicode code point as up to six
+hexidecimal digits. Pressing Enter inserts the character specified by
+the code point a the cursor position. If the code point is invalid, or
+input is canceled with Exc or Ctrl + g, no character is inserted and
+line_edit returns to normal editing. Most edit commands are usable
+during Unicode input, with the exception of history commands, word
+oriented commands, and indent/dedent. As mentioned, Unicode input may be
+canceled with Esc or Ctrl + g.
+
+### Indent/Dedent
+Indent means insert enough spaces to move the first printable character on
+the line to the next tab stop. Dedent means delete enough spaces to move
+the first printable character to the previous tab stop.
+
+When indenting or dedenting, if the line begins with a tab ('\t'), a single
+tab will be inserted or deleted from the start of line, rather than some
+number of spaces.
+
+Tab stops are currently defined as 4 spaces or one tab character ('\t').
+
+### Command Line History
+| Key Binding                  | Action                                  |
+|------------------------------|-----------------------------------------|
+| Up         or Ctrl + p       | Display next older command              |
+| Down       or Ctrl + n       | Display next newer command              | 
+| Esc        or Ctrl + g       | Cancel history editing, restoring draft |
+| F8         or Ctrl + r       | Find next older command matching buffer |
+| Shift + F8 or Ctrl + p       | Find next newer command matching buffer |
