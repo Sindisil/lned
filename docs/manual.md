@@ -17,9 +17,13 @@ comfortable and useful interactive editor.
 ## Contents
 
 [Modes](#modes)
+
 [Regular Expressions](#regular-expressions)
+
 [Line Addressing](#line-addressing)
+
 [Commands](#commands)
+
 [Line Editing](#line-editing)
 
 ## Modes
