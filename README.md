@@ -1,5 +1,5 @@
 # lned
-Acutally useful line editor, similar to an extended _ed_, though
+Actually useful line editor, similar to an extended _ed_, though
 lned does not exactly duplicate _ed_ functionality.
 
 lned should run in any terminal that supports ANSI escape sequences,
@@ -32,7 +32,7 @@ editor.
 Because of this, I have indeed begun work on a screen editor. I am
 still using lned as my primary editor for that work, since I legitimately
 find it comfortable, though I not infrequently go back to vim when
-I need to edit any quanitity of text so we'll see if that remains the case.
+I need to edit any quantity of text so we'll see if that remains the case.
 In any case, I will certainly dog food the new editor once it's at a basic
 level of functionality.
 
@@ -43,7 +43,7 @@ project.
 ## Project History
 
 This project is primarily an experiment. My intent is to use the project
-to acomplish several goals:
+to accomplish several goals:
 
 1. Use Rust on a non-trivial project.
 2. Recapture some of the enjoyment I've had in the past developing
@@ -66,7 +66,7 @@ to acomplish several goals:
 
 To that end, the plan was to use good ol' _ed_ to write the MVP of a
 line based programmer's text editor. Once the MVP was operational, I
-then planned to extend it via stepwise refinement, bootstrapping lned
+then planned to extend it via step wise refinement, bootstrapping lned
 into rough feature parity, and eventual superiority, to _ed_.
 
 My hope at the start of the project was that lned will actually become
@@ -74,7 +74,7 @@ a useful development tool, though I suspect that the line-based nature
 will put an upper bound on how productive it will feel.
 
 I expect I will then move on to writing a screen based editor as the
-next step in this experiment, though if my editor implemtation itch
+next step in this experiment, though if my editor implementation itch
 has been scratched, I may instead go back to using vim or some other
 editor (or perhaps even an IDE, though that seems less likely at this
 point).
@@ -96,7 +96,7 @@ changes in the future, I will update this README.
 
 ## Generative AI Policy
 
-No Generative AI has ben used in the developement of lned.
+No Generative AI has been used in the development of lned.
 
 Issues generated with AI agents will be rejected. If lned eventually
 opens up to external pull requests, any pull requests generated with

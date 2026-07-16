@@ -12,7 +12,7 @@ edit buffer will be presented.
 
 _lned_ is a line-oriented text editor in the spirit of _ed_, the
 standard Unix editor, with additional functionality to make it a more
-comfortable and unseful interactive editor.
+comfortable and useful interactive editor.
 
 ## Contents
 
@@ -27,13 +27,13 @@ comfortable and unseful interactive editor.
 As with most line editors, editing with _lned_ is done in two main
 modes: [command](#command-mode) and [input](#input-mode). Within
 _lned's_ line editing function, there are two additional "modes":
-[unicode character input](#unicode-character-input) and
+[Unicode character input](#unicode-character-input) and
 [history](#history).
 
 ### Command Mode
 
 Commands consist of zero or more line addresses, followed by a command,
-possibly folowed by additional parameters:
+possibly followed by additional parameters:
 
 	[address[,address]]command[parameters]
 
@@ -52,16 +52,16 @@ part of the input text. No commands or character escapes are recognized
 while in _input mode_.
 
 There are two sub-modes of Input Mode: Raw and Cooked. Each of the input
-commands (Append, Insert, and Overwrite) has a varient for raw and
+commands (Append, Insert, and Overwrite) has a variant for raw and
 cooked input.
 
 In Cooked Input Mode, each line of input is auto-indented to match the
-context. The whitespace supplied may be deleted when editing the input
+context. The white space supplied may be deleted when editing the input
 if it is unwanted.
 
 In Raw Input Mode, no auto-indent is applied. When pasting multiple
 lines from the system clipboard (e.g., with ctrl+shift+v), raw mode is
-preferred, since cooked input mode's auto-indent interracts poorly with
+preferred, since cooked input mode's auto-indent interacts poorly with
 already formatted lines, causing the indent to multiply and "walk off
 the right margin".
 
@@ -82,7 +82,7 @@ addresses, composed of one or more line address expressions. Default
 addresses apply if fewer addresses are specified than the command can
 accept. Those defaults are specified within each command description.
 
-The current line is kept track of by _lned_. It is ofen used as the
+The current line is kept track of by _lned_. It is often used as the
 default address when none is specified. The current line is usually set
 to the last line affected by a command (e.g., the last line of a file
 when a file is edited, the last line inserted by an insert command, the
@@ -96,9 +96,9 @@ the starting line for regex specified line addresses.
 
 Line addresses may be specified in several ways:
 
-* '.' is iterpreted as the address of the _current line_
+* '.' is interpreted as the address of the _current line_
 * '$' is interpreted as the address of the last line in the buffer
-* '%' is interpreted as all lines in the buffer (i.e., equivalant to .,$)
+* '%' is interpreted as all lines in the buffer (i.e., equivalent to .,$)
 * '/' characters delimiting a regex address the first line found to match
 	the _current line_
 * '?' characters delimiting a regex address the first line found matching
@@ -273,7 +273,7 @@ address of the last line in the buffer. The number of lines and bytes
 read is displayed, as is the prevailing newline.
 
 If there are unsaved buffer changes, the user will be warned. Repeating
-the command will procede, discarding changes.
+the command will proceed, discarding changes.
 
 ### Edit 'E'
 
@@ -288,7 +288,7 @@ last line in the buffer. The number of lines and bytes read is
 displayed, as is the prevailing newline.
 
 If there are unsaved buffer changes, the user will be warned. Repeating
-the command will procede, discarding changes.
+the command will proceed, discarding changes.
 
 ### Line Terminator 'L'
 
@@ -379,7 +379,7 @@ Views user manual.
     
 The h command switches lned into a read only mode viewing the user
 manual. The remainder of the help command line will be treated as an
-inital command to execute. If no initial command is supplied, Help will
+initial command to execute. If no initial command is supplied, Help will
 assume "/## Help/z" as in initial command (i.e., skip to this
 description of the help command by searching for "### Help", then
 display one "page" (default 1/2 screen) of that description).
@@ -488,7 +488,7 @@ Join addressed contiguous lines by removing the intervening line
 terminators, optionally inserting a separator string between each. If a
 single address is specified, that line is joined with the next.
 
-If a separator string is given, it replaces any leading whitespace in
+If a separator string is given, it replaces any leading white space in
 each joined line past the first. Any character other than ' ' (space),
 '\n' (newline), 'n', 'l', or 'p' may be used instead of '/' (slash) to
 delimit the separator string, and within the separator string the
@@ -505,7 +505,7 @@ set.
     (.)J(wrapping_style)(left_margin)( line_width)
 
 Justifies text lines according to the specified parameters by replacing
-leading whitespace with the appropriate number of spaces (' '), leaving
+leading white space with the appropriate number of spaces (' '), leaving
 the right margin ragged and setting current line to last line in newly
 justified span of lines.
 
@@ -557,8 +557,8 @@ The last line written becomes the current line.
 
 Discard the buffer contents and unset current file.
 
-A waring will be given if there are unsaved buffer changes. Repeating
-the command will procede, discarding changes.
+A warning will be given if there are unsaved buffer changes. Repeating
+the command will proceed, discarding changes.
 
 ### Newline
 
@@ -687,17 +687,17 @@ The current current filename is not changed by this command.
     (.,.)s/regex/replacement/(a|target_match)
 
 Matches each line in the addressed range against the specified regular
-expression pattern, replacing one or more occurances with the specified
+expression pattern, replacing one or more occurrences with the specified
 replacement string depending upon any optional flags specified.
 
-By default, only the first occurance of the search pattern in each
+By default, only the first occurrence of the search pattern in each
 addressed linen will be replaced.
 
 An 'a' immediately after the closing delimiter will cause all non-
-overlapping occurances of the search pattern in each addressed line
+overlapping occurrences of the search pattern in each addressed line
 to be replaced.
 
-A non-zero integer immediately after the closing delmiter will specify a
+A non-zero integer immediately after the closing delimiter will specify a
 single target match to replace.
 
 An error will be reported if no matches are found.
@@ -860,9 +860,9 @@ functionality, which provides the following features:
 
 ### Unicode input
 The Unicode input feature accepts a Unicode code point as up to six
-hexidecimal digits. Pressing Enter inserts the character specified by
+hexadecimal digits. Pressing Enter inserts the character specified by
 the code point a the cursor position. If the code point is invalid, or
-input is canceled with Exc or Ctrl + g, no character is inserted and
+input is canceled with Esc or Ctrl + g, no character is inserted and
 line_edit returns to normal editing. Most edit commands are usable
 during Unicode input, with the exception of history commands, word
 oriented commands, and indent/dedent. As mentioned, Unicode input may be
