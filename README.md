@@ -22,17 +22,19 @@ Beyond functionality similar to _ed_, lned adds some features that make
 it actually pretty comfortable to use for editing source code:
 
 * Basic auto-indent for input commands (Append, Insert, and Overwrite)
-* Application clipboard with Copy and Cut commands.
+* Application clipboard with Copy and Cut commands, rather than the less
+  common Transfer/Move command implemented by many line editors
 * Raw mode input commands can take input from the application clipboard
   (a.k.a., paste), a file, or the terminal.
 * Justify command to word wrap lines
 * Enhanced Join command
 * PageUp/PageDown commands (similar to GNU ed's scroll command)
 * Displays filename & metadata (buffer unsaved, external changes, and
-  prevailing EOL)
-* Line Terminator command to view or set a buffer's newline type (CR or
+  prevailing newline style) in the title bar when support by the
+  terminal
+* Line Terminator command to view or set a buffer's newline style (CR or
   CRLF)
-* Undo/Redo stack
+* Undo/Redo
 * Command History with search
 * Command line editing (Emacs and Windows style key bindings)
 * Help command to allow viewing of manual in a read only buffer
