@@ -237,7 +237,7 @@ impl Editor {
                 }
                 let rows = self
                     .page_length
-                    .map_or(term_rows.saturating_sub(3) / 2, usize::from);
+                    .map_or(term_rows.saturating_sub(2), usize::from);
                 self.page_down_cmd(
                     output,
                     index,
@@ -253,7 +253,7 @@ impl Editor {
                 }
                 let rows = self
                     .page_length
-                    .map_or(term_rows.saturating_sub(3) / 2, usize::from);
+                    .map_or(term_rows.saturating_sub(2), usize::from);
                 self.page_up_cmd(
                     output,
                     index,
@@ -323,7 +323,7 @@ impl Editor {
                 }
                 let rows = self
                     .page_length
-                    .map_or(term_rows.saturating_sub(3) / 2, usize::from);
+                    .map_or(term_rows.saturating_sub(2), usize::from);
                 self.page_down_cmd(
                     output,
                     index,
@@ -339,7 +339,7 @@ impl Editor {
                 }
                 let rows = self
                     .page_length
-                    .map_or(term_rows.saturating_sub(3) / 2, usize::from);
+                    .map_or(term_rows.saturating_sub(2), usize::from);
                 self.page_up_cmd(
                     output,
                     index,
