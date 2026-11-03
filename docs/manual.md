@@ -381,17 +381,22 @@ Views user manual.
 
     h(initial command)
     
-The h command switches lned into a read only mode viewing the user
-manual. The remainder of the help command line will be treated as an
-initial command to execute. If no initial command is supplied, Help will
-assume "/## Help/z" as in initial command (i.e., skip to this
-description of the help command by searching for "### Help", then
-display one "page" (default 1/2 screen) of that description).
+The h command enters a read only mode viewing the user manual. The
+remainder of the help command line will be treated as an initial command
+to execute. If no initial command is supplied, display this description
+of the help command itself.
 
-Examples:
+Example Commands:
 
     Command: z
-    Action:  Displays the next "page" (default 1/2 screen) of text.
+    Action:  Displays the next page of text.
+        
+    Command: Z
+    Action:  Displays the previous page of text.
+
+    Command: /^## Commands/z
+    Action:  Displays one page of text from the user manual beginning with
+             the section describing available commands.
 
     Command: 1zn
     Action:  Jumps to the first line of text and displays the next
@@ -402,8 +407,7 @@ Examples:
              and displays the line prefixed with its line number.
 
 When in help mode, only commands that do not alter buffer text are
-available: Null cmd, =, c, g (read-only commands), l, n, p, q, W, z, and
-Z. All other commands will display an error message.
+available. All other commands will display an error message.
 
 The Quit command exits help mode, returning to normal editing with the
 same context (current line, etc.) as before the Help command was issued.
