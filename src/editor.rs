@@ -1445,7 +1445,7 @@ impl Editor {
         )
         .expect("write enter help msg");
 
-        let cmd = cmd.unwrap_or("/### Help/z");
+        let cmd = cmd.unwrap_or("/^### Help/z");
         Cmd::read(
             &mut cmd.as_bytes(),
             &mut self.buffer,
