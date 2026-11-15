@@ -163,8 +163,14 @@ impl Display for Error {
                 write!(f, "error executing global command")
             }
             Error::InvalidAddress => write!(f, "invalid address"),
-            Error::InvalidCmdLine { .. } => write!(f, "invalid command line"),
-            Error::InvalidCmdSuffix => write!(f, "invalid command suffix"),
+            Error::InvalidCmdLine { .. } => write!(
+                f,
+                "invalid command line ('-h' option displays usage information)"
+            ),
+            Error::InvalidCmdSuffix => write!(
+                f,
+                "invalid command suffix ('h' command displays user manual)"
+            ),
             Error::InvalidDelimiter => {
                 write!(f, "invalid delimiter")
             }
@@ -221,7 +227,10 @@ impl Display for Error {
             Error::UnexpectedEndOfInput => {
                 write!(f, "unexpected end of input")
             }
-            Error::UnknownCmd(c) => write!(f, "unknown command '{c}'"),
+            Error::UnknownCmd(c) => write!(
+                f,
+                "unknown command '{c}' ('h' command displays user manual)"
+            ),
             Error::UnsupportedGlobalCmd => {
                 write!(f, "unsupported global command")
             }
