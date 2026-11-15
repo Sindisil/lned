@@ -6147,7 +6147,7 @@ mod tests {
             "one\n", "two", "three", "four", "five", "six",
         ]);
         let mut output = Vec::new();
-        let pat = Regex::new("[aeiou]$").unwrap();
+        let pat = Regex::new("^.+$").unwrap();
         let commands = ".;+2n\n".to_owned();
         editor
             .dispatch_cmd(Cmd::Help(None), &mut output, &mut "".as_bytes())
