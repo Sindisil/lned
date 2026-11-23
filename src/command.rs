@@ -52,6 +52,7 @@ pub enum Cmd {
         mode: InputMode,
     },
     PageDown(Option<usize>, Option<usize>, Option<PrintSuffix>),
+    PageLen,
     PageUp(Option<usize>, Option<usize>, Option<PrintSuffix>),
     Print(Option<Range<usize>>),
     Reload,
@@ -196,6 +197,18 @@ impl Cmd {
             Some("W") => parse_write_as_cmd(&mut graphemes, address),
             Some("x") => parse_no_args(&mut graphemes, Cmd::Cut(address)),
             Some("z") => {
+                if graphemes.next_if_eq(&"?").is_some() {
+                    let res = parse_simple_cmd(
+                        &mut graphemes,
+                        address.as_ref(),
+                        Cmd::PageLen,
+                    )?;
+                    if let Some((_, None)) = res {
+                        return Ok(res);
+                    }
+                    return Err(Error::InvalidCmdSuffix);
+                }
+
                 parse_page_down_cmd(&mut graphemes, address.map(|a| a.end - 1))
             }
             Some("Z") => {
@@ -2690,6 +2703,17 @@ mod tests {
             .expect("no error")
             .expect("parsed cmd");
         assert_matches!(cmd, Cmd::Help(Some(c)) if c == "g/address/n\n");
+        assert!(pr_sfx.is_none());
+    }
+
+    #[test]
+    fn parse_page_len_cmd() {
+        let mut input = "z?\r\n".as_bytes();
+        let mut buffer = EditBuffer::new();
+        let (cmd, pr_sfx) = Cmd::read(&mut input, &mut buffer, &mut None)
+            .expect("no error")
+            .expect("Some Cmd");
+        assert_matches!(cmd, Cmd::PageLen);
         assert!(pr_sfx.is_none());
     }
 }

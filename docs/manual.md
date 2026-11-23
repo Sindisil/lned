@@ -816,6 +816,18 @@ After printing, the current_line is set equal to the last line printed.
 It is not an error if there are less lines to print than will fit the
 page_length.
 
+### PageLen 'z?'
+
+    z?
+
+Print number of lines that will be printed by the PageUp and PageDown
+commands. This is intended to make it easier to chose less than full
+page values (e.g., 1/2 terminal height), since the default value is
+enough to fill the current terminal - 2 (to leave room for the previous
+and current prompt lines).
+
+Page_length is unchanged by this command.
+
 ### PageUp 'Z'
 
     (.-1)Z(page_length)

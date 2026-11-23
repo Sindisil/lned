@@ -246,6 +246,10 @@ impl Editor {
                 );
                 Ok(None)
             }
+            Cmd::PageLen => {
+                self.page_len_cmd(output);
+                Ok(None)
+            }
             Cmd::PageUp(index, page_length, pr_sfx) => {
                 let (cols, term_rows) = self.terminal_size();
                 if let Some(n) = page_length {
@@ -330,6 +334,10 @@ impl Editor {
                     pr_sfx,
                     PageBounds { cols, rows },
                 );
+                Ok(None)
+            }
+            Cmd::PageLen => {
+                self.page_len_cmd(output);
                 Ok(None)
             }
             Cmd::PageUp(index, page_length, pr_sfx) => {
@@ -542,6 +550,13 @@ impl Editor {
             output.write_all(line).unwrap();
         }
         self.buffer.set_current_index(start + pb_end.saturating_sub(1));
+    }
+
+    fn page_len_cmd(&mut self, output: &mut impl Write) {
+        let rows = self
+            .page_length
+            .map_or(self.terminal_size().1.saturating_sub(2), usize::from);
+        writeln!(output, "{rows}").expect("reliable stdout");
     }
 
     fn page_up_cmd(
@@ -6220,5 +6235,31 @@ mod tests {
             filename,
             PathBuf::from("test/assets/text_with_final_eol.txt")
         );
+    }
+    #[test]
+    fn page_len_cmd() {
+        let mut output = Vec::new();
+        let mut input = b"" as &[u8];
+        let mut editor = Editor::new(OutputTarget::Other);
+        editor.buffer = EditBuffer::with_lines([
+            "1\n", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+        ]);
+        editor.buffer.set_current_index(2);
+        editor
+            .dispatch_normal_cmd(Cmd::PageLen, &mut output, &mut input)
+            .expect("no error");
+        assert_eq!(str::from_utf8(&output).unwrap(), "23\n");
+        editor
+            .dispatch_normal_cmd(
+                Cmd::PageDown(Some(1), Some(5), None),
+                &mut output,
+                &mut input,
+            )
+            .expect("no error");
+        output.clear();
+        editor
+            .dispatch_normal_cmd(Cmd::PageLen, &mut output, &mut input)
+            .expect("no error");
+        assert_eq!(str::from_utf8(&output).unwrap(), "5\n");
     }
 }
